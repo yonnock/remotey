@@ -10,9 +10,11 @@
 </p>
 
 <p align="center">
-  <img src="docs/live.png" width="260" alt="Trackpad with the live view of the Mac screen around the pointer">
-  &nbsp;&nbsp;
-  <img src="docs/typing.png" width="260" alt="Typing with a modifier armed">
+  <img src="docs/remote.png" width="250" alt="Remote with the live view of the Mac screen above the trackpad">
+  &nbsp;
+  <img src="docs/full.png" width="250" alt="Pointer mode: the live view fills the phone">
+  &nbsp;
+  <img src="docs/typing.png" width="250" alt="Typing with a modifier armed">
 </p>
 
 ## How it works
@@ -60,7 +62,9 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 | Two-finger tap | Right click |
 | Hold "Links" and swipe with a second finger | Drag |
 | ⌘ ⌥ ⌃ ⇧ | Applies to the next key, e.g. ⌘ then `w` |
-| "Bild" | Live view: shows the screen around the pointer inside the trackpad, with a zoom button (0.5× to 2×) |
+| "Bild" | Live view: a display above the trackpad shows the screen around the pointer; the key next to it zooms (0.5× to 2×) |
+| Tap the display | Pointer mode: the live view fills the phone and the whole screen is the trackpad; "Tasten" goes back |
+| Dial | Volume up and down, previous, play/pause, next |
 
 Text typed on the iOS keyboard is replayed on the Mac key by key.
 

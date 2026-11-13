@@ -7,47 +7,87 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Remotey">
-<meta name="theme-color" content="#111214">
+<meta name="theme-color" content="#34373d">
 <link rel="apple-touch-icon" href="/icon.png">
 <title>Remotey</title>
 <style>
+  /* A hardware remote: graphite body, key caps with a visible edge that sink when pressed. */
   :root {
-    --bg: #111214; --surface: #1c1e22; --surface-active: #2e3138; --line: #2a2d33;
-    --text: #e8e9eb; --muted: #8b8f98; --accent: #f2b84b; --bad: #ef6b5e;
+    --body-top: #34373d; --body-bottom: #1b1d21; --deep: #111214; --surface: #1c1e22; --cap: #2a2d33;
+    --edge: #0a0b0c; --line: #33373e; --text: #eceef0; --muted: #8b8f98;
+    --accent: #f2b84b; --accent-ink: #231803; --bad: #ef6b5e; --glass: rgba(17, 18, 20, .72);
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
-    font: 15px/1.2 -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: var(--body-bottom); color: var(--text); overflow: hidden;
+    font: 500 15px/1.2 -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
   body { position: fixed; inset: 0; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   #app { position: absolute; top: 0; left: 0; right: 0; height: var(--vh, 100dvh); display: flex;
-    flex-direction: column; gap: 8px;
-    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
-             max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
-  #top { display: flex; gap: 8px; align-items: center; }
-  #field { flex: 1; min-width: 0; height: 44px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line);
-    background: var(--surface); color: var(--text); font-size: 16px; outline: none;
+    flex-direction: column; gap: 10px; background: linear-gradient(180deg, var(--body-top), var(--body-bottom));
+    padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+             max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+
+  #top { display: flex; gap: 10px; align-items: center; }
+  #field { flex: 1; min-width: 0; height: 42px; padding: 0 12px; border-radius: 9px; border: 1px solid var(--edge);
+    background: var(--deep); color: var(--text); font-size: 16px; outline: none; box-shadow: inset 0 2px 5px var(--edge);
     -webkit-user-select: text; user-select: text; }
   #field:focus { border-color: var(--accent); }
   #status { font-size: 12px; color: var(--muted); white-space: nowrap; }
   #status.bad { color: var(--bad); }
-  [hidden] { display: none !important; }
-  #padwrap { flex: 1; min-height: 60px; position: relative; overflow: hidden; border-radius: 12px;
-    background: var(--surface); border: 1px solid var(--line); }
+
+  /* Display: the live view. Small above the trackpad, or the whole phone in pointer mode. */
+  #screen { flex: 0 0 27%; position: relative; overflow: hidden; border-radius: 10px; background: var(--deep);
+    border: 3px solid var(--edge); box-shadow: inset 0 0 12px var(--edge); }
   #view { position: absolute; inset: 0; width: 100%; height: 100%; }
   #marker { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
     border: 2px solid var(--accent); pointer-events: none; }
-  #pad { position: absolute; inset: 0; touch-action: none; display: flex; align-items: center;
-    justify-content: center; text-align: center; color: var(--muted); font-size: 13px; padding: 24px; }
-  #viewctl { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; }
-  #viewctl button { flex: none; height: 36px; padding: 0 12px; font-size: 13px; background: rgba(17, 18, 20, .78); }
-  .row { display: flex; gap: 6px; }
-  button { flex: 1; min-width: 0; height: 46px; border: 1px solid var(--line); border-radius: 8px;
-    background: var(--surface); color: var(--text); font: inherit; padding: 0; touch-action: none; }
-  button.pressed { background: var(--surface-active); }
-  button.on { border-color: var(--accent); color: var(--accent); }
-  .mouse button { height: 54px; }
-  .media button { font-size: 13px; }
+  #grow { position: absolute; right: 6px; bottom: 6px; padding: 4px 8px; border-radius: 7px; font-size: 11px;
+    background: var(--glass); color: var(--text); pointer-events: none; }
+
+  #pad { flex: 1; min-height: 60px; border-radius: 14px; touch-action: none; display: flex; align-items: center;
+    justify-content: center; text-align: center; color: var(--muted); font-size: 13px; padding: 24px;
+    background-color: var(--surface); background-image: radial-gradient(var(--line) 1px, transparent 1.4px);
+    background-size: 12px 12px; box-shadow: inset 0 2px 6px var(--edge); }
+
+  .row { display: flex; gap: 8px; padding-bottom: 4px; }
+  button { font: inherit; color: var(--text); border: 0; padding: 0; margin: 0; touch-action: none; }
+  .cap { flex: 1; min-width: 0; height: 40px; border-radius: 9px; background: var(--cap);
+    box-shadow: 0 4px 0 var(--edge); transition: transform .05s, box-shadow .05s; }
+  .cap.pressed, .cap:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--edge); }
+  .cap.on { color: var(--accent); box-shadow: 0 4px 0 var(--accent); }
+  .cap.on.pressed { box-shadow: 0 1px 0 var(--accent); }
+  .cap.accent { background: var(--accent); color: var(--accent-ink); }
+  .cap.small { font-size: 13px; }
+  .mouse .cap { height: 50px; }
+
+  .deck { gap: 12px; align-items: flex-start; }
+  .dial { flex: none; width: 132px; height: 132px; border-radius: 50%; background: var(--cap);
+    box-shadow: 0 4px 0 var(--edge); display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr); }
+  .dial button { background: none; color: var(--muted); font-size: 22px; display: grid; place-items: center; }
+  .dial button.pressed, .dial button:active { color: var(--accent); }
+  .dial svg { width: 20px; height: 20px; fill: currentColor; pointer-events: none; }
+  .dial .ok { border-radius: 50%; background: var(--deep); color: var(--text); }
+  .dial .ok.pressed, .dial .ok:active { background: var(--accent); color: var(--accent-ink); }
+  .keys { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 8px; }
+  .keys .cap { height: 36px; }
+
+  .kb-only { display: none; }
+  body.kb .kb-only { display: flex; }
   body.kb .hide-kb { display: none; }
+
+  /* Pointer mode: the display fills the phone, the whole screen is the trackpad, keys float in a dock. */
+  #dock { display: none; }
+  body.full #top, body.full .row { display: none; }
+  body.full #screen { position: fixed; inset: 0; border: 0; border-radius: 0; box-shadow: none; }
+  body.full #grow { display: none; }
+  body.full #pad { position: fixed; inset: 0; z-index: 2; border-radius: 0; background: none; box-shadow: none; }
+  body.full #dock { display: flex; gap: 6px; position: fixed; z-index: 3; padding: 8px; border-radius: 20px;
+    left: max(10px, env(safe-area-inset-left)); right: max(10px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom)); background: var(--glass);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+  #dock button { flex: 1; min-width: 0; height: 46px; border-radius: 12px; background: var(--cap); font-size: 14px; }
+  #dock button.pressed, #dock button:active { background: var(--line); }
+  @media (prefers-reduced-motion: reduce) { .cap { transition: none; } }
 </style>
 </head>
 <body>
@@ -57,43 +97,60 @@
            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Text an den Mac senden">
     <span id="status" role="status">Verbinde…</span>
   </div>
-  <div id="padwrap">
-    <canvas id="view" hidden></canvas>
+  <div id="screen" role="button" aria-label="Live-Bild, antippen für Vollbild" hidden>
+    <canvas id="view"></canvas>
     <div id="marker" hidden></div>
-    <div id="pad" aria-label="Trackpad"></div>
-    <div id="viewctl">
-      <button id="zoomBtn" data-act="zoom" aria-label="Zoom der Live-Ansicht" hidden>0,5×</button>
-      <button id="viewBtn" data-act="view" aria-label="Live-Ansicht des Mac-Bildschirms">Bild</button>
+    <div id="grow">Vollbild</div>
+  </div>
+  <div id="pad" aria-label="Trackpad"></div>
+  <div class="row mouse hide-kb">
+    <button class="cap" data-hold="left" style="flex:2">Links</button>
+    <button class="cap" data-click="right">Rechts</button>
+  </div>
+  <div class="row deck hide-kb">
+    <div class="dial" role="group" aria-label="Medien">
+      <span></span>
+      <button data-media="volup" data-repeat aria-label="Lauter">+</button>
+      <span></span>
+      <button data-media="prev" aria-label="Vorheriger Titel"><svg viewBox="0 0 24 24"><path d="M5 5h3v14H5zM20 5v14l-10-7z"/></svg></button>
+      <button class="ok" data-media="play" aria-label="Play/Pause"><svg viewBox="0 0 24 24"><path d="M3 5l9 7-9 7zM14 5h3v14h-3zM19 5h3v14h-3z"/></svg></button>
+      <button data-media="next" aria-label="Nächster Titel"><svg viewBox="0 0 24 24"><path d="M16 5h3v14h-3zM4 5l10 7-10 7z"/></svg></button>
+      <span></span>
+      <button data-media="voldown" data-repeat aria-label="Leiser">−</button>
+      <span></span>
+    </div>
+    <div class="keys">
+      <button class="cap small" data-key="escape">Esc</button>
+      <button class="cap small" data-key="tab">Tab</button>
+      <button class="cap" data-key="backspace" data-repeat aria-label="Löschen">⌫</button>
+      <button class="cap small" data-key="space">Leer</button>
+      <button class="cap" data-key="return" aria-label="Enter">↵</button>
+      <button class="cap small accent" data-act="type">Tippen</button>
+      <button class="cap small" data-media="mute">Stumm</button>
+      <button class="cap small" id="viewBtn" data-act="view" aria-label="Live-Bild ein oder aus">Bild</button>
+      <button class="cap small" data-act="zoom" aria-label="Zoom des Live-Bilds">0,5×</button>
     </div>
   </div>
-  <div class="row mouse">
+  <div class="row kb-only">
+    <button class="cap small" data-key="escape">Esc</button>
+    <button class="cap small" data-key="tab">Tab</button>
+    <button class="cap small accent" data-act="done">Fertig</button>
+  </div>
+  <div class="row mods">
+    <button class="cap" data-mod="cmd" aria-label="Command">⌘</button>
+    <button class="cap" data-mod="alt" aria-label="Option">⌥</button>
+    <button class="cap" data-mod="ctrl" aria-label="Control">⌃</button>
+    <button class="cap" data-mod="shift" aria-label="Shift">⇧</button>
+    <button class="cap" data-key="left" data-repeat aria-label="Links">←</button>
+    <button class="cap" data-key="down" data-repeat aria-label="Runter">↓</button>
+    <button class="cap" data-key="up" data-repeat aria-label="Hoch">↑</button>
+    <button class="cap" data-key="right" data-repeat aria-label="Rechts">→</button>
+  </div>
+  <div id="dock">
     <button data-hold="left" style="flex:2">Links</button>
-    <button data-click="right">Rechts</button>
-  </div>
-  <div class="row">
-    <button data-key="escape">Esc</button>
-    <button data-key="tab">Tab</button>
-    <button data-key="space">Leer</button>
-    <button data-key="backspace" data-repeat aria-label="Löschen">⌫</button>
-    <button data-key="return" aria-label="Enter">↵</button>
-  </div>
-  <div class="row">
-    <button data-mod="cmd" aria-label="Command">⌘</button>
-    <button data-mod="alt" aria-label="Option">⌥</button>
-    <button data-mod="ctrl" aria-label="Control">⌃</button>
-    <button data-mod="shift" aria-label="Shift">⇧</button>
-    <button data-key="left" data-repeat aria-label="Links">←</button>
-    <button data-key="down" data-repeat aria-label="Runter">↓</button>
-    <button data-key="up" data-repeat aria-label="Hoch">↑</button>
-    <button data-key="right" data-repeat aria-label="Rechts">→</button>
-  </div>
-  <div class="row media hide-kb">
-    <button data-media="prev">Zurück</button>
-    <button data-media="play" style="flex:1.4">Play/Pause</button>
-    <button data-media="next">Weiter</button>
-    <button data-media="mute">Stumm</button>
-    <button data-media="voldown" data-repeat aria-label="Leiser">Vol −</button>
-    <button data-media="volup" data-repeat aria-label="Lauter">Vol +</button>
+    <button data-click="right" style="flex:1.5">Rechts</button>
+    <button data-act="zoom" aria-label="Zoom des Live-Bilds">0,5×</button>
+    <button data-act="full" aria-label="Zurück zur Fernbedienung">Tasten</button>
   </div>
 </div>
 <script>
@@ -222,22 +279,30 @@ function padEnd(e) {
 pad.addEventListener('touchend', padEnd, { passive: false });
 pad.addEventListener('touchcancel', padEnd, { passive: false });
 
-// ---- Live view: the Mac streams the screen region around the cursor into the trackpad area.
-const view = $('#view'), marker = $('#marker'), wrap = $('#padwrap'), viewCtx = view.getContext('2d');
+// ---- Live view: the Mac streams the screen region around the cursor into the display.
+// The display sits above the trackpad; in pointer mode ("full") it fills the phone.
+const screenEl = $('#screen'), view = $('#view'), marker = $('#marker'), viewCtx = view.getContext('2d');
 const ZOOMS = [0.5, 1, 1.5, 2];
-let viewOn = false, zoom = 0.5, frameSeq = 0, drawnSeq = 0;
+let viewOn = false, full = false, zoom = 0.5, frameSeq = 0, drawnSeq = 0;
 try {
   viewOn = localStorage.getItem('remotey-view') === '1';
   zoom = ZOOMS.includes(+localStorage.getItem('remotey-zoom')) ? +localStorage.getItem('remotey-zoom') : 0.5;
 } catch {}
 function syncView() {
+  if (!viewOn) full = false;
+  document.body.classList.toggle('full', full);
+  screenEl.hidden = !viewOn;
+  if (!viewOn) marker.hidden = true;
   $('#viewBtn').classList.toggle('on', viewOn);
-  $('#zoomBtn').hidden = !viewOn;
-  $('#zoomBtn').textContent = String(zoom).replace('.', ',') + '×';
-  if (!viewOn) view.hidden = marker.hidden = true;
+  document.querySelectorAll('[data-act=zoom]').forEach((b) => { b.textContent = String(zoom).replace('.', ',') + '×'; });
   try { localStorage.setItem('remotey-view', viewOn ? '1' : '0'); localStorage.setItem('remotey-zoom', zoom); } catch {}
-  const r = wrap.getBoundingClientRect();
+  const r = screenEl.getBoundingClientRect(); // measured after the layout change above
   send({ t: 'view', on: viewOn, w: r.width, h: r.height, zoom, dpr: window.devicePixelRatio || 2 });
+}
+function setFull(on) {
+  full = on;
+  if (on) { viewOn = true; field.blur(); }
+  syncView();
 }
 async function drawFrame(buffer) {
   if (!viewOn) return;
@@ -251,17 +316,22 @@ async function drawFrame(buffer) {
     viewCtx.drawImage(bitmap, 0, 0);
     marker.style.left = cx * 100 + '%';
     marker.style.top = cy * 100 + '%';
-    view.hidden = marker.hidden = false;
-    pad.textContent = '';
+    marker.hidden = false;
   }
   bitmap.close();
 }
+// Tapping the small display opens pointer mode. In pointer mode the trackpad covers the display.
+screenEl.addEventListener('touchend', (e) => { e.preventDefault(); setFull(true); }, { passive: false });
+screenEl.addEventListener('click', () => setFull(true));
 
 // ---- Buttons. preventDefault on touchstart keeps the iOS keyboard open.
 function fire(b) {
   const d = b.dataset;
   if (d.act === 'view') { viewOn = !viewOn; syncView(); }
-  else if (d.act === 'zoom') { zoom = ZOOMS[(ZOOMS.indexOf(zoom) + 1) % ZOOMS.length]; syncView(); }
+  else if (d.act === 'zoom') { zoom = ZOOMS[(ZOOMS.indexOf(zoom) + 1) % ZOOMS.length]; viewOn = true; syncView(); }
+  else if (d.act === 'full') setFull(!full);
+  else if (d.act === 'done') field.blur();
+  else if (d.act === 'type') field.focus();
   else if (d.key) sendKey(d.key);
   else if (d.media) send({ t: 'media', k: d.media });
   else if (d.click) send({ t: 'c', b: d.click });
@@ -275,6 +345,7 @@ document.querySelectorAll('button').forEach((b) => {
     keepAwake();
     b.classList.add('pressed');
     if (b.dataset.hold) return send({ t: 'b', b: b.dataset.hold, d: true });
+    if (b.dataset.act === 'type') return; // iOS opens the keyboard only for a focus made on touchend
     fire(b);
     if ('repeat' in b.dataset) delay = setTimeout(() => { repeat = setInterval(() => fire(b), 70); }, 400);
   }, { passive: false });
@@ -283,6 +354,7 @@ document.querySelectorAll('button').forEach((b) => {
     stop();
     b.classList.remove('pressed');
     if (b.dataset.hold) send({ t: 'b', b: b.dataset.hold, d: false });
+    if (b.dataset.act === 'type' && e.type === 'touchend') field.focus();
   };
   b.addEventListener('touchend', end, { passive: false });
   b.addEventListener('touchcancel', end, { passive: false });
@@ -328,7 +400,7 @@ function fit() {
   const h = window.visualViewport ? visualViewport.height : innerHeight;
   document.documentElement.style.setProperty('--vh', h + 'px');
   scrollTo(0, 0);
-  if (viewOn) syncView(); // the pad changed size, so the captured region must follow
+  if (viewOn) syncView(); // the display changed size, so the captured region must follow
 }
 if (window.visualViewport) { visualViewport.addEventListener('resize', fit); visualViewport.addEventListener('scroll', fit); }
 addEventListener('resize', fit);
