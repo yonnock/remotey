@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Remotey">
+  <rect width="512" height="512" rx="112" fill="#111214"/>
+  <g transform="translate(34 38)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M120.9 116.3A56 56 0 0 1 166.3 70.9M77.5 108.6A100 100 0 0 1 158.6 27.5"
+          fill="none" stroke="#e8e9eb" stroke-width="18"/>
+    <path d="M176 126V347L234.5 295L273.5 386L306 373L267 282H345Z"
+          fill="#f2b84b" stroke="#f2b84b" stroke-width="16"/>
+  </g>
+</svg>

@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Remotey">
+<meta name="theme-color" content="#111214">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>Remotey</title>
+<style>
+  :root {
+    --bg: #111214; --surface: #1c1e22; --surface-active: #2e3138; --line: #2a2d33;
+    --text: #e8e9eb; --muted: #8b8f98; --accent: #f2b84b; --bad: #ef6b5e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 15px/1.2 -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
+  body { position: fixed; inset: 0; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  #app { position: absolute; top: 0; left: 0; right: 0; height: var(--vh, 100dvh); display: flex;
+    flex-direction: column; gap: 8px;
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+             max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
+  #top { display: flex; gap: 8px; align-items: center; }
+  #field { flex: 1; min-width: 0; height: 44px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--text); font-size: 16px; outline: none;
+    -webkit-user-select: text; user-select: text; }
+  #field:focus { border-color: var(--accent); }
+  #status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  #status.bad { color: var(--bad); }
+  #pad { flex: 1; min-height: 60px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line);
+    touch-action: none; display: flex; align-items: center; justify-content: center; text-align: center;
+    color: var(--muted); font-size: 13px; padding: 24px; }
+  .row { display: flex; gap: 6px; }
+  button { flex: 1; min-width: 0; height: 46px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--surface); color: var(--text); font: inherit; padding: 0; touch-action: none; }
+  button.pressed { background: var(--surface-active); }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  .mouse button { height: 54px; }
+  .media button { font-size: 13px; }
+  body.kb .hide-kb { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <input id="field" type="text" inputmode="text" enterkeyhint="send" placeholder="Tippen…"
+           autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Text an den Mac senden">
+    <span id="status" role="status">Verbinde…</span>
+  </div>
+  <div id="pad" aria-label="Trackpad"></div>
+  <div class="row mouse">
+    <button data-hold="left" style="flex:2">Links</button>
+    <button data-click="right">Rechts</button>
+  </div>
+  <div class="row">
+    <button data-key="escape">Esc</button>
+    <button data-key="tab">Tab</button>
+    <button data-key="space">Leer</button>
+    <button data-key="backspace" data-repeat aria-label="Löschen">⌫</button>
+    <button data-key="return" aria-label="Enter">↵</button>
+  </div>
+  <div class="row">
+    <button data-mod="cmd" aria-label="Command">⌘</button>
+    <button data-mod="alt" aria-label="Option">⌥</button>
+    <button data-mod="ctrl" aria-label="Control">⌃</button>
+    <button data-mod="shift" aria-label="Shift">⇧</button>
+    <button data-key="left" data-repeat aria-label="Links">←</button>
+    <button data-key="down" data-repeat aria-label="Runter">↓</button>
+    <button data-key="up" data-repeat aria-label="Hoch">↑</button>
+    <button data-key="right" data-repeat aria-label="Rechts">→</button>
+  </div>
+  <div class="row media hide-kb">
+    <button data-media="prev">Zurück</button>
+    <button data-media="play" style="flex:1.4">Play/Pause</button>
+    <button data-media="next">Weiter</button>
+    <button data-media="mute">Stumm</button>
+    <button data-media="voldown" data-repeat aria-label="Leiser">Vol −</button>
+    <button data-media="volup" data-repeat aria-label="Lauter">Vol +</button>
+  </div>
+</div>
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const statusEl = $('#status'), pad = $('#pad'), field = $('#field');
+
+// ---- Token: arrives in the URL fragment (never sent to the server). The fragment stays in the URL
+// so "Zum Home-Bildschirm" keeps it; localStorage is the fallback for plain Safari tabs.
+let token = decodeURIComponent(location.hash.slice(1));
+try {
+  if (token) localStorage.setItem('remotey-token', token);
+  else token = localStorage.getItem('remotey-token') || '';
+} catch {}
+
+// ---- Connection
+let ws = null, ready = false, denied = false, retryTimer = 0;
+function setStatus(text, bad) { statusEl.textContent = text; statusEl.classList.toggle('bad', !!bad); }
+
+function connect() {
+  clearTimeout(retryTimer);
+  if (!token) { pad.textContent = 'Kein Zugangsschlüssel. Am Mac im Remotey-Menü „iPhone koppeln“ wählen und den QR-Code scannen.'; return setStatus('Nicht gekoppelt', true); }
+  if (denied) return;
+  if (ws) { ws.onclose = null; ws.close(); }
+  ready = false;
+  const url = location.protocol === 'https:' ? `wss://${location.host}/ws` : `ws://${location.hostname}:47801`;
+  const socket = ws = new WebSocket(url);
+  socket.onopen = () => socket.send(JSON.stringify({ t: 'auth', token }));
+  socket.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.t === 'ok') {
+      ready = true;
+      pad.textContent = m.ax ? '' : 'Am Mac fehlt die Bedienungshilfen-Freigabe für Remotey (Systemeinstellungen, Datenschutz & Sicherheit).';
+      setStatus(m.ax ? 'Verbunden' : 'Freigabe fehlt', !m.ax);
+    } else if (m.t === 'denied') {
+      denied = true;
+      pad.textContent = 'Zugangsschlüssel ungültig. Am Mac neu koppeln und den QR-Code scannen.';
+      setStatus('Abgelehnt', true);
+    }
+  };
+  socket.onclose = () => {
+    if (socket !== ws) return;
+    ready = false;
+    if (denied) return;
+    setStatus('Getrennt', true);
+    if (document.visibilityState === 'visible') retryTimer = setTimeout(connect, 1000);
+  };
+}
+function send(msg) { if (ready && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+
+// iOS suspends sockets in the background without closing them, so reconnect on every return.
+let wakeLock = null;
+async function keepAwake() {
+  try { if (!wakeLock || wakeLock.released) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { connect(); keepAwake(); }
+});
+
+// ---- Sticky modifiers (apply to the next key, then release)
+const mods = new Set();
+function takeMods() {
+  const list = [...mods];
+  mods.clear();
+  document.querySelectorAll('[data-mod]').forEach((b) => b.classList.remove('on'));
+  return list;
+}
+function sendKey(k, n) { send({ t: 'key', k, mods: takeMods(), n: n || 1 }); }
+
+// ---- Trackpad: 1 finger moves, 2 fingers scroll, tap = click, 2-finger tap = right click
+const TAP_MS = 250, TAP_SLOP = 8;
+const points = new Map();
+let gesture = null, moveX = 0, moveY = 0, scrollX = 0, scrollY = 0, frame = 0;
+
+function flush() {
+  frame = 0;
+  if (moveX || moveY) { send({ t: 'm', dx: moveX, dy: moveY }); moveX = moveY = 0; }
+  if (scrollX || scrollY) { send({ t: 's', dx: scrollX, dy: scrollY }); scrollX = scrollY = 0; }
+}
+pad.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  keepAwake();
+  if (!points.size) gesture = { start: e.timeStamp, travel: 0, fingers: 0 };
+  for (const t of e.changedTouches) points.set(t.identifier, { x: t.clientX, y: t.clientY, time: e.timeStamp });
+  gesture.fingers = Math.max(gesture.fingers, points.size);
+}, { passive: false });
+pad.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  let dx = 0, dy = 0, dt = 16;
+  for (const t of e.changedTouches) {
+    const p = points.get(t.identifier);
+    if (!p) continue;
+    dx += t.clientX - p.x; dy += t.clientY - p.y;
+    dt = Math.max(1, e.timeStamp - p.time);
+    p.x = t.clientX; p.y = t.clientY; p.time = e.timeStamp;
+  }
+  const dist = Math.hypot(dx, dy);
+  if (!gesture || !dist) return;
+  const wasTap = gesture.travel < TAP_SLOP;
+  gesture.travel += dist;
+  if (wasTap && gesture.travel < TAP_SLOP) return; // dead zone so a tap does not nudge the cursor
+  if (points.size === 1) {
+    const gain = 1 + Math.min(3.5, (dist / dt) * 2.2); // slow = precise, fast = far
+    moveX += dx * gain; moveY += dy * gain;
+  } else {
+    scrollX += (dx / points.size) * 1.6; scrollY += (dy / points.size) * 1.6;
+  }
+  if (!frame) frame = requestAnimationFrame(flush);
+}, { passive: false });
+function padEnd(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) points.delete(t.identifier);
+  if (points.size || !gesture) return;
+  if (e.type === 'touchend' && gesture.travel < TAP_SLOP && e.timeStamp - gesture.start < TAP_MS) {
+    send({ t: 'c', b: gesture.fingers >= 2 ? 'right' : 'left' });
+  }
+  gesture = null;
+}
+pad.addEventListener('touchend', padEnd, { passive: false });
+pad.addEventListener('touchcancel', padEnd, { passive: false });
+
+// ---- Buttons. preventDefault on touchstart keeps the iOS keyboard open.
+function fire(b) {
+  const d = b.dataset;
+  if (d.key) sendKey(d.key);
+  else if (d.media) send({ t: 'media', k: d.media });
+  else if (d.click) send({ t: 'c', b: d.click });
+  else if (d.mod) { mods.has(d.mod) ? mods.delete(d.mod) : mods.add(d.mod); b.classList.toggle('on', mods.has(d.mod)); }
+}
+document.querySelectorAll('button').forEach((b) => {
+  let delay = 0, repeat = 0;
+  const stop = () => { clearTimeout(delay); clearInterval(repeat); };
+  b.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    keepAwake();
+    b.classList.add('pressed');
+    if (b.dataset.hold) return send({ t: 'b', b: b.dataset.hold, d: true });
+    fire(b);
+    if ('repeat' in b.dataset) delay = setTimeout(() => { repeat = setInterval(() => fire(b), 70); }, 400);
+  }, { passive: false });
+  const end = (e) => {
+    e.preventDefault();
+    stop();
+    b.classList.remove('pressed');
+    if (b.dataset.hold) send({ t: 'b', b: b.dataset.hold, d: false });
+  };
+  b.addEventListener('touchend', end, { passive: false });
+  b.addEventListener('touchcancel', end, { passive: false });
+  // Mouse/keyboard fallback for desktop browsers and assistive tech.
+  b.addEventListener('click', () => { if (b.dataset.hold) send({ t: 'c', b: b.dataset.hold }); else fire(b); });
+});
+
+// ---- Keyboard: the field mirrors what was typed; every change is diffed and replayed on the Mac.
+// A zero-width sentinel keeps the field non-empty so backspace still produces an input event.
+const SENTINEL = '​';
+const segmenter = window.Intl && Intl.Segmenter ? new Intl.Segmenter() : null;
+const graphemes = (s) => (segmenter ? [...segmenter.segment(s)].length : Array.from(s).length);
+let prev = SENTINEL;
+function resetField() { field.value = prev = SENTINEL; }
+resetField();
+
+field.addEventListener('input', (e) => {
+  if (e.isComposing) return;
+  const cur = field.value;
+  let p = 0;
+  const max = Math.min(prev.length, cur.length);
+  while (p < max && prev[p] === cur[p]) p++;
+  if (p > 0 && prev.charCodeAt(p - 1) >= 0xd800 && prev.charCodeAt(p - 1) <= 0xdbff) p--; // keep surrogate pairs whole
+  const removed = prev.slice(p).replace(SENTINEL, ''), added = cur.slice(p).replace(SENTINEL, '');
+  const deleting = prev.length > p;
+  if (deleting) send({ t: 'key', k: 'backspace', mods: [], n: Math.max(1, graphemes(removed)) });
+  if (added) {
+    if (mods.size && graphemes(added) === 1) { sendKey(added.toLowerCase()); return resetField(); }
+    send({ t: 'text', s: added });
+  }
+  prev = cur;
+  if (!cur.startsWith(SENTINEL) || (cur.length > 60 && cur.endsWith(' '))) resetField();
+});
+field.addEventListener('compositionend', () => field.dispatchEvent(new Event('input')));
+field.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); sendKey('return'); resetField(); }
+});
+field.addEventListener('focus', () => { keepAwake(); document.body.classList.add('kb'); });
+field.addEventListener('blur', () => { document.body.classList.remove('kb'); resetField(); });
+
+// ---- Layout follows the visible viewport so the keyboard shrinks the trackpad instead of covering it.
+function fit() {
+  const h = window.visualViewport ? visualViewport.height : innerHeight;
+  document.documentElement.style.setProperty('--vh', h + 'px');
+  scrollTo(0, 0);
+}
+if (window.visualViewport) { visualViewport.addEventListener('resize', fit); visualViewport.addEventListener('scroll', fit); }
+addEventListener('resize', fit);
+document.addEventListener('gesturestart', (e) => e.preventDefault());
+fit();
+connect();
+keepAwake();
+</script>
+</body>
+</html>
