@@ -11,6 +11,8 @@ final class Server {
     private let input: Input
     private var listeners: [NWListener] = []
     private var clients: [ObjectIdentifier: Client] = [:]
+    private let screen = ScreenView()
+    private weak var viewer: Client?
 
     private final class Client {
         let connection: NWConnection
@@ -29,11 +31,26 @@ final class Server {
         var k: String?
         var n: Int?
         var mods: [String]?
+        var on: Bool?
+        var w: Double?
+        var h: Double?
+        var zoom: Double?
+        var dpr: Double?
     }
 
     init(token: String, input: Input) {
         self.token = token
         self.input = input
+        screen.send = { [weak self] frame, done in
+            guard let self, let client = self.viewer else {
+                self?.screen.update(nil)
+                return done()
+            }
+            let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
+            let context = NWConnection.ContentContext(identifier: "frame", metadata: [metadata])
+            client.connection.send(content: frame, contentContext: context,
+                                   completion: .contentProcessed { _ in done() })
+        }
     }
 
     func start() throws {
@@ -122,6 +139,7 @@ final class Server {
             case .failed, .cancelled:
                 guard let self, self.clients.removeValue(forKey: id) != nil else { return }
                 if client.authed { self.input.releaseAll() }
+                if self.viewer === client { self.stopView() }
             default: break
             }
         }
@@ -143,7 +161,7 @@ final class Server {
                 return
             }
             if client.authed {
-                self.handle(message)
+                self.handle(message, from: client)
             } else if message.t == "auth", let candidate = message.token, Token.matches(candidate, self.token) {
                 client.authed = true
                 self.send(client, #"{"t":"ok","ax":\#(AXIsProcessTrusted())}"#)
@@ -162,7 +180,7 @@ final class Server {
                                completion: .contentProcessed { _ in then?() })
     }
 
-    private func handle(_ m: Message) {
+    private func handle(_ m: Message, from client: Client) {
         func delta() -> (Double, Double)? {
             guard let dx = m.dx, let dy = m.dy, dx.isFinite, dy.isFinite,
                   abs(dx) <= 5000, abs(dy) <= 5000 else { return nil }
@@ -177,7 +195,28 @@ final class Server {
         case "text": if let s = m.s, s.count <= 2000 { input.type(s) }
         case "key": if let k = m.k { input.key(k, mods: m.mods ?? [], count: m.n ?? 1) }
         case "media": if let k = m.k { input.media(k) }
+        case "view": view(m, for: client)
         default: break
         }
+    }
+
+    /// Switches the live view on (or resizes it) for one client; the most recent requester wins.
+    private func view(_ m: Message, for client: Client) {
+        guard m.on == true, let w = m.w, let h = m.h, (50...4000).contains(w), (50...4000).contains(h) else {
+            if viewer === client { stopView() }
+            return
+        }
+        guard CGPreflightScreenCaptureAccess() else {
+            CGRequestScreenCaptureAccess()
+            return send(client, #"{"t":"view","ok":false}"#)
+        }
+        viewer = client
+        screen.update(.init(width: w, height: h, zoom: min(max(m.zoom ?? 1, 0.25), 4),
+                            pixelRatio: min(max(m.dpr ?? 2, 1), 3)))
+    }
+
+    private func stopView() {
+        viewer = nil
+        screen.update(nil)
     }
 }

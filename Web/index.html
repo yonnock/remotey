@@ -30,9 +30,16 @@
   #field:focus { border-color: var(--accent); }
   #status { font-size: 12px; color: var(--muted); white-space: nowrap; }
   #status.bad { color: var(--bad); }
-  #pad { flex: 1; min-height: 60px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line);
-    touch-action: none; display: flex; align-items: center; justify-content: center; text-align: center;
-    color: var(--muted); font-size: 13px; padding: 24px; }
+  [hidden] { display: none !important; }
+  #padwrap { flex: 1; min-height: 60px; position: relative; overflow: hidden; border-radius: 12px;
+    background: var(--surface); border: 1px solid var(--line); }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #marker { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+    border: 2px solid var(--accent); pointer-events: none; }
+  #pad { position: absolute; inset: 0; touch-action: none; display: flex; align-items: center;
+    justify-content: center; text-align: center; color: var(--muted); font-size: 13px; padding: 24px; }
+  #viewctl { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; }
+  #viewctl button { flex: none; height: 36px; padding: 0 12px; font-size: 13px; background: rgba(17, 18, 20, .78); }
   .row { display: flex; gap: 6px; }
   button { flex: 1; min-width: 0; height: 46px; border: 1px solid var(--line); border-radius: 8px;
     background: var(--surface); color: var(--text); font: inherit; padding: 0; touch-action: none; }
@@ -50,7 +57,15 @@
            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Text an den Mac senden">
     <span id="status" role="status">Verbinde…</span>
   </div>
-  <div id="pad" aria-label="Trackpad"></div>
+  <div id="padwrap">
+    <canvas id="view" hidden></canvas>
+    <div id="marker" hidden></div>
+    <div id="pad" aria-label="Trackpad"></div>
+    <div id="viewctl">
+      <button id="zoomBtn" data-act="zoom" aria-label="Zoom der Live-Ansicht" hidden>0,5×</button>
+      <button id="viewBtn" data-act="view" aria-label="Live-Ansicht des Mac-Bildschirms">Bild</button>
+    </div>
+  </div>
   <div class="row mouse">
     <button data-hold="left" style="flex:2">Links</button>
     <button data-click="right">Rechts</button>
@@ -106,13 +121,20 @@ function connect() {
   ready = false;
   const url = location.protocol === 'https:' ? `wss://${location.host}/ws` : `ws://${location.hostname}:47801`;
   const socket = ws = new WebSocket(url);
+  socket.binaryType = 'arraybuffer';
   socket.onopen = () => socket.send(JSON.stringify({ t: 'auth', token }));
   socket.onmessage = (e) => {
+    if (typeof e.data !== 'string') return drawFrame(e.data);
     const m = JSON.parse(e.data);
     if (m.t === 'ok') {
       ready = true;
       pad.textContent = m.ax ? '' : 'Am Mac fehlt die Bedienungshilfen-Freigabe für Remotey (Systemeinstellungen, Datenschutz & Sicherheit).';
       setStatus(m.ax ? 'Verbunden' : 'Freigabe fehlt', !m.ax);
+      syncView();
+    } else if (m.t === 'view' && m.ok === false) {
+      viewOn = false;
+      syncView();
+      pad.textContent = 'Am Mac fehlt die Freigabe „Bildschirmaufnahme“ für Remotey. Dort erlauben, Remotey neu starten, dann „Bild“ erneut antippen.';
     } else if (m.t === 'denied') {
       denied = true;
       pad.textContent = 'Zugangsschlüssel ungültig. Am Mac neu koppeln und den QR-Code scannen.';
@@ -200,10 +222,47 @@ function padEnd(e) {
 pad.addEventListener('touchend', padEnd, { passive: false });
 pad.addEventListener('touchcancel', padEnd, { passive: false });
 
+// ---- Live view: the Mac streams the screen region around the cursor into the trackpad area.
+const view = $('#view'), marker = $('#marker'), wrap = $('#padwrap'), viewCtx = view.getContext('2d');
+const ZOOMS = [0.5, 1, 1.5, 2];
+let viewOn = false, zoom = 0.5, frameSeq = 0, drawnSeq = 0;
+try {
+  viewOn = localStorage.getItem('remotey-view') === '1';
+  zoom = ZOOMS.includes(+localStorage.getItem('remotey-zoom')) ? +localStorage.getItem('remotey-zoom') : 0.5;
+} catch {}
+function syncView() {
+  $('#viewBtn').classList.toggle('on', viewOn);
+  $('#zoomBtn').hidden = !viewOn;
+  $('#zoomBtn').textContent = String(zoom).replace('.', ',') + '×';
+  if (!viewOn) view.hidden = marker.hidden = true;
+  try { localStorage.setItem('remotey-view', viewOn ? '1' : '0'); localStorage.setItem('remotey-zoom', zoom); } catch {}
+  const r = wrap.getBoundingClientRect();
+  send({ t: 'view', on: viewOn, w: r.width, h: r.height, zoom, dpr: window.devicePixelRatio || 2 });
+}
+async function drawFrame(buffer) {
+  if (!viewOn) return;
+  const seq = ++frameSeq, head = new DataView(buffer);
+  const cx = head.getFloat32(0, true), cy = head.getFloat32(4, true);
+  let bitmap;
+  try { bitmap = await createImageBitmap(new Blob([buffer.slice(8)], { type: 'image/jpeg' })); } catch { return; }
+  if (seq > drawnSeq && viewOn) { // frames decode asynchronously; never draw an older one over a newer one
+    drawnSeq = seq;
+    if (view.width !== bitmap.width || view.height !== bitmap.height) { view.width = bitmap.width; view.height = bitmap.height; }
+    viewCtx.drawImage(bitmap, 0, 0);
+    marker.style.left = cx * 100 + '%';
+    marker.style.top = cy * 100 + '%';
+    view.hidden = marker.hidden = false;
+    pad.textContent = '';
+  }
+  bitmap.close();
+}
+
 // ---- Buttons. preventDefault on touchstart keeps the iOS keyboard open.
 function fire(b) {
   const d = b.dataset;
-  if (d.key) sendKey(d.key);
+  if (d.act === 'view') { viewOn = !viewOn; syncView(); }
+  else if (d.act === 'zoom') { zoom = ZOOMS[(ZOOMS.indexOf(zoom) + 1) % ZOOMS.length]; syncView(); }
+  else if (d.key) sendKey(d.key);
   else if (d.media) send({ t: 'media', k: d.media });
   else if (d.click) send({ t: 'c', b: d.click });
   else if (d.mod) { mods.has(d.mod) ? mods.delete(d.mod) : mods.add(d.mod); b.classList.toggle('on', mods.has(d.mod)); }
@@ -269,6 +328,7 @@ function fit() {
   const h = window.visualViewport ? visualViewport.height : innerHeight;
   document.documentElement.style.setProperty('--vh', h + 'px');
   scrollTo(0, 0);
+  if (viewOn) syncView(); // the pad changed size, so the captured region must follow
 }
 if (window.visualViewport) { visualViewport.addEventListener('resize', fit); visualViewport.addEventListener('scroll', fit); }
 addEventListener('resize', fit);

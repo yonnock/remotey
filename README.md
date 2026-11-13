@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/trackpad.png" width="260" alt="Trackpad view">
+  <img src="docs/live.png" width="260" alt="Trackpad with the live view of the Mac screen around the pointer">
   &nbsp;&nbsp;
   <img src="docs/typing.png" width="260" alt="Typing with a modifier armed">
 </p>
@@ -34,6 +34,7 @@ flowchart TB
     serve -- "/" --> http
     serve -- "/ws" --> ws
     ws -- "injects" --> cg
+    ws -. "screen around the pointer<br/>(optional live view)" .-> phone
 ```
 
 The agent is a small Swift menu bar app with no dependencies. The UI is a single HTML file (labels are in German).
@@ -46,6 +47,8 @@ An input remote is remote control of your Mac, so the agent is locked down in th
 - `tailscale serve` terminates TLS and admits only devices in your tailnet.
 - Every WebSocket must authenticate with a 256-bit token first. This also stops web pages in your Mac's browser from talking to the loopback port. The token travels in the URL fragment of the pairing link, which is never sent to the server, and can be rotated from the menu.
 
+The live view sends screen content only to an authenticated client, only while it is switched on, over the same TLS connection.
+
 ## Setup
 
 Requirements: macOS 14+, Xcode command line tools, Tailscale on the Mac and the iPhone (same account).
@@ -55,6 +58,7 @@ Requirements: macOS 14+, Xcode command line tools, Tailscale on the Mac and the 
    ./scripts/build.sh --install
    ```
 2. Allow Remotey under System Settings → Privacy & Security → Accessibility.
+   For the live view, also allow it under Screen & System Audio Recording and restart Remotey.
 3. Publish the agent inside your tailnet (asks you to enable Serve once):
    ```sh
    ./scripts/tailscale-serve.sh
@@ -74,6 +78,7 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 | Two-finger tap | Right click |
 | Hold "Links" and swipe with a second finger | Drag |
 | ⌘ ⌥ ⌃ ⇧ | Applies to the next key, e.g. ⌘ then `w` |
+| "Bild" | Live view: shows the screen around the pointer inside the trackpad, with a zoom button (0.5× to 2×) |
 
 Text typed on the iOS keyboard is replayed on the Mac key by key.
 
