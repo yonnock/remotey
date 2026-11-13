@@ -17,13 +17,23 @@
 
 ## How it works
 
-```
-iPhone (Safari / home screen)
-   │  HTTPS + WSS, tailnet only (tailscale serve, port 8443)
-   ▼
-Mac agent (menu bar), listens on 127.0.0.1 only
-   ├─ :47800  HTTP  serves the web UI
-   └─ :47801  WS    receives input, injects it via CGEvent
+```mermaid
+flowchart TB
+    phone["<b>iPhone</b><br/>Safari / home screen"]
+
+    subgraph mac["Mac"]
+        serve["<b>tailscale serve</b> :8443<br/>terminates TLS, tailnet only"]
+        subgraph agent["Remotey agent (menu bar), listens on 127.0.0.1 only"]
+            http["<b>:47800 HTTP</b><br/>serves the web UI"]
+            ws["<b>:47801 WebSocket</b><br/>receives input"]
+        end
+        cg["<b>CGEvent</b><br/>pointer, keyboard, media keys"]
+    end
+
+    phone -- "HTTPS + WSS" --> serve
+    serve -- "/" --> http
+    serve -- "/ws" --> ws
+    ws -- "injects" --> cg
 ```
 
 The agent is a small Swift menu bar app with no dependencies. The UI is a single HTML file (labels are in German).
