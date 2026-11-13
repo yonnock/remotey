@@ -41,6 +41,7 @@ final class Server {
         var h: Double?
         var zoom: Double?
         var dpr: Double?
+        var codec: String?
     }
 
     init(token: String, input: Input) {
@@ -84,6 +85,8 @@ final class Server {
             if parts.first == "GET" {
                 if path == "/" || path == "/index.html" {
                     (status, type, body) = ("200 OK", "text/html; charset=utf-8", Self.resource("index", "html"))
+                } else if path == "/live-view.js" {
+                    (status, type, body) = ("200 OK", "text/javascript; charset=utf-8", Self.resource("live-view", "js"))
                 } else if path == "/icon.png" {
                     (status, type, body) = ("200 OK", "image/png", Self.resource("icon", "png"))
                 }
@@ -97,7 +100,7 @@ final class Server {
                 "X-Content-Type-Options: nosniff",
                 "Referrer-Policy: no-referrer",
                 "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; "
-                    + "script-src 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self'; "
+                    + "script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self'; "
                     + "frame-ancestors 'none'",
             ].joined(separator: "\r\n") + "\r\n\r\n"
             connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in
@@ -195,7 +198,7 @@ final class Server {
     private func view(_ m: Message, for client: Client) {
         guard m.on == true, let width = m.w, let height = m.h,
               let request = ScreenView.Request(width: width, height: height, zoom: m.zoom ?? 1,
-                                               pixelRatio: m.dpr ?? 2) else {
+                                               pixelRatio: m.dpr ?? 2, h264: m.codec == "h264") else {
             if viewer === client { stopView() }
             return
         }

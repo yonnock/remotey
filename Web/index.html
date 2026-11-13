@@ -153,8 +153,8 @@
     <button data-act="full" aria-label="Zurück zur Fernbedienung">Tasten</button>
   </div>
 </div>
-<script>
-'use strict';
+<script type="module">
+import { LiveView } from './live-view.js';
 const $ = (s) => document.querySelector(s);
 const statusEl = $('#status'), pad = $('#pad'), field = $('#field');
 
@@ -167,22 +167,28 @@ try {
 } catch {}
 
 // ---- Connection
-let ws = null, ready = false, denied = false, retryTimer = 0;
+let ws = null, liveView = null, ready = false, denied = false, retryTimer = 0;
 function setStatus(text, bad) { statusEl.textContent = text; statusEl.classList.toggle('bad', !!bad); }
 
 function connect() {
   clearTimeout(retryTimer);
   if (!token) { pad.textContent = 'Kein Zugangsschlüssel. Am Mac im Remotey-Menü „iPhone koppeln“ wählen und den QR-Code scannen.'; return setStatus('Nicht gekoppelt', true); }
   if (denied) return;
+  liveView?.close();
   if (ws) { ws.onclose = null; ws.close(); }
   ready = false;
   const url = location.protocol === 'https:' ? `wss://${location.host}/ws` : `ws://${location.hostname}:47801`;
   const socket = ws = new WebSocket(url);
   socket.binaryType = 'arraybuffer';
+  const player = liveView = new LiveView(view, marker, {
+    visible: () => viewOn,
+    shown: (n) => { if (socket === ws && socket.readyState === 1) socket.send(JSON.stringify({ t: 'shown', n })); },
+    fallback: () => { if (socket === ws) syncView(); },
+  });
   socket.onopen = () => socket.send(JSON.stringify({ t: 'auth', token }));
   socket.onmessage = (e) => {
     if (socket !== ws) return;
-    if (typeof e.data !== 'string') { frames = frames.then(() => showFrame(e.data)); return; }
+    if (typeof e.data !== 'string') { player.receive(e.data); return; }
     const m = JSON.parse(e.data);
     if (m.t === 'ok') {
       ready = true;
@@ -202,6 +208,7 @@ function connect() {
   socket.onclose = () => {
     if (socket !== ws) return;
     ready = false;
+    player.close();
     if (denied) return;
     setStatus('Getrennt', true);
     if (document.visibilityState === 'visible') retryTimer = setTimeout(connect, 1000);
@@ -282,9 +289,9 @@ pad.addEventListener('touchcancel', padEnd, { passive: false });
 
 // ---- Live view: the Mac streams the screen region around the cursor into the display.
 // The display sits above the trackpad; in pointer mode ("full") it fills the phone.
-const screenEl = $('#screen'), view = $('#view'), marker = $('#marker'), viewCtx = view.getContext('2d');
+const screenEl = $('#screen'), view = $('#view'), marker = $('#marker');
 const ZOOMS = [0.5, 1, 1.5, 2];
-let viewOn = false, full = false, zoom = ZOOMS[0], frames = Promise.resolve();
+let viewOn = false, full = false, zoom = ZOOMS[0];
 try {
   viewOn = localStorage.getItem('remotey-view') === '1';
   if (ZOOMS.includes(+localStorage.getItem('remotey-zoom'))) zoom = +localStorage.getItem('remotey-zoom');
@@ -298,29 +305,12 @@ function syncView() {
   document.querySelectorAll('[data-act=zoom]').forEach((b) => { b.textContent = String(zoom).replace('.', ',') + '×'; });
   try { localStorage.setItem('remotey-view', viewOn ? '1' : '0'); localStorage.setItem('remotey-zoom', zoom); } catch {}
   const r = screenEl.getBoundingClientRect(); // measured after the layout change above
-  send({ t: 'view', on: viewOn, w: r.width, h: r.height, zoom, dpr: window.devicePixelRatio || 2 });
+  send({ t: 'view', on: viewOn, w: r.width, h: r.height, zoom, dpr: window.devicePixelRatio || 2, codec: liveView?.codec || 'jpeg' });
 }
 function setFull(on) {
   full = on;
   if (on) { viewOn = true; field.blur(); }
   syncView();
-}
-// Frames are shown one after another, and the Mac sends the next ones only once it hears "shown":
-// that keeps the picture current however slow the link or this phone is.
-async function showFrame(buffer) {
-  const head = new DataView(buffer);
-  try {
-    const bitmap = await createImageBitmap(new Blob([new Uint8Array(buffer, 12)], { type: 'image/jpeg' }));
-    if (viewOn) {
-      if (view.width !== bitmap.width || view.height !== bitmap.height) { view.width = bitmap.width; view.height = bitmap.height; }
-      viewCtx.drawImage(bitmap, 0, 0);
-      marker.style.left = head.getFloat32(0, true) * 100 + '%';
-      marker.style.top = head.getFloat32(4, true) * 100 + '%';
-      marker.hidden = false;
-    }
-    bitmap.close();
-  } catch {}
-  send({ t: 'shown', n: head.getUint32(8, true) });
 }
 // Tapping the small display opens pointer mode. In pointer mode the trackpad covers the display.
 screenEl.addEventListener('touchend', (e) => { e.preventDefault(); setFull(true); }, { passive: false });

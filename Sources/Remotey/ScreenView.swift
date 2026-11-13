@@ -3,7 +3,7 @@ import CoreImage
 import ImageIO
 import ScreenCaptureKit
 
-/// Live view for the phone: streams the screen region around the cursor as JPEG frames.
+/// Live view for the phone: streams the screen region around the cursor as H.264, with a JPEG fallback.
 /// Needs the Screen Recording permission. Captures only while a client has the view switched on.
 ///
 /// One `SCStream` covers the display under the cursor; every frame is cropped around the cursor.
@@ -18,14 +18,16 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         /// 1 = one Mac point per CSS pixel, 2 = twice as large on the phone.
         let zoom: Double
         let pixelRatio: Double
+        let h264: Bool
 
         /// Nil for a size no phone display has.
-        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double) {
+        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool = false) {
             guard (50...4000).contains(width), (50...4000).contains(height) else { return nil }
             self.width = width
             self.height = height
             self.zoom = min(max(zoom, 0.25), 4)
             self.pixelRatio = min(max(pixelRatio, 1), ScreenView.maxPixelRatio)
+            self.h264 = h264
         }
     }
 
@@ -38,7 +40,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         self.send = send
     }
 
-    private static let framesPerSecond: Int32 = 30
+    private static let framesPerSecond: Int32 = 60
     private static let maxOutputWidth = 1400.0
     /// Sharper than 2x costs bandwidth and frame rate for little gain at arm's length.
     private static let maxPixelRatio = 2.0
@@ -48,6 +50,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
 
     // Main queue state.
     private var request: Request?
+    private var revision: UInt64 = 0
     private var stream: SCStream?
     private var streamDisplay: CGDirectDisplayID = 0
     private var configuring = false
@@ -58,15 +61,24 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     private let queue = DispatchQueue(label: "remotey.frames", qos: .userInteractive)
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-    private var geometry: (request: Request, bounds: CGRect)?
+    private var geometry: (request: Request, bounds: CGRect, revision: UInt64)?
+    private var generation = UUID()
+    private var encoder: H264Encoder?
+    private var encoding = false
+    private var jpegFallback = false
     private var latest: CVPixelBuffer?
     private var framesSent: UInt32 = 0
-    private var framesShown: UInt32 = 0
+    private var inFlight: Set<UInt32> = []
 
     func update(_ request: Request?) {
         guard request != self.request else { return }
-        // Frames of a stopped view may never be answered, so a new view counts none of them as in flight.
-        if self.request == nil { queue.async { self.framesShown = self.framesSent } }
+        revision += 1
+        let restarting = self.request == nil || self.request?.h264 != request?.h264
+        queue.async {
+            self.resetFrames()
+            // A stopped or replaced viewer may never answer its old frames.
+            if restarting { self.inFlight.removeAll() }
+        }
         self.request = request
         if request == nil {
             displayWatch?.invalidate()
@@ -84,8 +96,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     /// The phone has drawn (or discarded) the frame with this number.
     func frameShown(_ number: UInt32) {
         queue.async {
-            guard number > self.framesShown, number <= self.framesSent else { return }
-            self.framesShown = number
+            guard self.inFlight.remove(number) != nil else { return }
             self.encodeLatest()
         }
     }
@@ -115,6 +126,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     @MainActor
     private func apply() async throws {
         guard let request else { return await teardown() }
+        let revision = self.revision
         let id = Self.cursorDisplay()
         let bounds = CGDisplayBounds(id)
         let regionWidth = Self.region(request, in: bounds).width
@@ -128,7 +140,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         let config = SCStreamConfiguration()
         config.width = max(2, Int(bounds.width * scale))
         config.height = max(2, Int(bounds.height * scale))
-        config.minimumFrameInterval = CMTime(value: 1, timescale: Self.framesPerSecond)
+        config.minimumFrameInterval = CMTime(value: 1, timescale: request.h264 ? Self.framesPerSecond : 30)
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = true
         config.queueDepth = 3
@@ -146,7 +158,8 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
             self.stream = stream
             streamDisplay = id
         }
-        queue.async { self.geometry = (request, bounds) }
+        guard revision == self.revision else { return }
+        queue.async { self.geometry = (request, bounds, revision) }
     }
 
     @MainActor
@@ -155,10 +168,19 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         stream = nil
         streamDisplay = 0
         queue.async {
-            self.geometry = nil
-            self.latest = nil
+            self.resetFrames()
         }
         try? await old?.stopCapture()
+    }
+
+    /// Invalidates late encoder callbacks as well as queued captures. Frame numbers never reset.
+    private func resetFrames() {
+        generation = UUID()
+        geometry = nil
+        latest = nil
+        encoder = nil
+        encoding = false
+        jpegFallback = false
     }
 
     private static func cursorDisplay() -> CGDirectDisplayID {
@@ -175,7 +197,10 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     // MARK: Frames (frame queue)
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, let buffer = sampleBuffer.imageBuffer else { return }
+        guard type == .screen, let buffer = sampleBuffer.imageBuffer,
+              let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+                as? [[SCStreamFrameInfo: Any]],
+              attachments.first?[.status] as? Int == SCFrameStatus.complete.rawValue else { return }
         // While the phone is busy only the newest frame is kept, so a slow link or phone lowers the
         // frame rate instead of building up delay, and the last frame of a movement always arrives.
         latest = buffer
@@ -183,9 +208,9 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     }
 
     /// Frame layout, little endian: Float32 cursor x, Float32 cursor y (both 0...1 inside the image),
-    /// UInt32 frame number, then JPEG.
+    /// UInt32 frame number, then JPEG or the H264Encoder payload.
     private func encodeLatest() {
-        guard framesSent - framesShown < Self.maxFramesInFlight, let buffer = latest, let geometry else { return }
+        guard !encoding, inFlight.count < Self.maxFramesInFlight, let buffer = latest, let geometry else { return }
         latest = nil
         let bounds = geometry.bounds
         let size = Self.region(geometry.request, in: bounds)
@@ -200,17 +225,65 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
                           width: size.width * scaleX, height: size.height * scaleY).integral
         let image = CIImage(cvPixelBuffer: buffer).cropped(to: crop)
             .transformed(by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
+        let cx = Float32((cursor.x - bounds.minX - x) / size.width)
+        let cy = Float32((cursor.y - bounds.minY - y) / size.height)
+        let generation = self.generation
+        if geometry.request.h264 && !jpegFallback {
+            do {
+                // NV12 needs even dimensions. Keep them stable as the fractional crop follows the pointer.
+                let width = max(2, Int(size.width * scaleX) / 2 * 2)
+                let height = max(2, Int(size.height * scaleY) / 2 * 2)
+                if encoder?.width != width || encoder?.height != height {
+                    encoder = try H264Encoder(width: width, height: height)
+                }
+                encoding = true
+                try encoder!.encode(image, context: ciContext) { payload in
+                    self.queue.async {
+                        guard generation == self.generation else { return }
+                        self.encoding = false
+                        if let payload {
+                            self.deliver(payload, cx: cx, cy: cy, revision: geometry.revision)
+                        } else {
+                            self.jpegFallback = true
+                            self.encoder = nil
+                            self.sendJPEG(image, cx: cx, cy: cy, revision: geometry.revision)
+                        }
+                        self.encodeLatest()
+                    }
+                }
+                return
+            } catch {
+                encoding = false
+                jpegFallback = true
+                encoder = nil
+            }
+        }
+        sendJPEG(image, cx: cx, cy: cy, revision: geometry.revision)
+    }
+
+    private func sendJPEG(_ image: CIImage, cx: Float32, cy: Float32, revision: UInt64) {
         guard let jpeg = ciContext.jpegRepresentation(
             of: image, colorSpace: colorSpace,
             options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.5]) else { return }
+        deliver(jpeg, cx: cx, cy: cy, revision: revision)
+    }
 
-        var header = [Float32((cursor.x - bounds.minX - x) / size.width),
-                      Float32((cursor.y - bounds.minY - y) / size.height)]
+    private func deliver(_ payload: Data, cx: Float32, cy: Float32, revision: UInt64) {
+        var header = [cx, cy]
         var frame = Data(bytes: &header, count: MemoryLayout<Float32>.size * 2)
-        framesSent += 1
+        framesSent &+= 1
+        let number = framesSent
+        inFlight.insert(number)
         withUnsafeBytes(of: framesSent.littleEndian) { frame.append(contentsOf: $0) }
-        frame.append(jpeg)
-        DispatchQueue.main.async { self.send(frame) }
+        frame.append(payload)
+        DispatchQueue.main.async {
+            // Never send an old viewer's delta frame to a new viewer who has no reference picture.
+            guard revision == self.revision else {
+                self.frameShown(number)
+                return
+            }
+            self.send(frame)
+        }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {

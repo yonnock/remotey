@@ -9,6 +9,7 @@ let package = Package(
             name: "Remotey",
             path: "Sources/Remotey",
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
+        .testTarget(name: "RemoteyTests", dependencies: ["Remotey"])
     ]
 )
