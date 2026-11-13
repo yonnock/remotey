@@ -64,7 +64,7 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 | Two-finger tap | Right click |
 | Hold "Links" and swipe with a second finger | Drag |
 | ⌘ ⌥ ⌃ ⇧ | Applies to the next key, e.g. ⌘ then `w` |
-| "Bild" | Live view: a display above the trackpad shows the screen around the pointer; the key next to it zooms (0.5× to 2×) |
+| "Bild" | Live view: a display above the trackpad shows the screen around the pointer; the key next to it zooms (0.25× to 2×) |
 | Tap the display | Pointer mode: the live view fills the phone and the whole screen is the trackpad; "Tasten" goes back |
 | Dial | Volume up and down, previous, play/pause, next |
 

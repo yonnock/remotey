@@ -290,8 +290,8 @@ pad.addEventListener('touchcancel', padEnd, { passive: false });
 // ---- Live view: the Mac streams the screen region around the cursor into the display.
 // The display sits above the trackpad; in pointer mode ("full") it fills the phone.
 const screenEl = $('#screen'), view = $('#view'), marker = $('#marker');
-const ZOOMS = [0.5, 1, 1.5, 2];
-let viewOn = false, full = false, zoom = ZOOMS[0];
+const ZOOMS = [0.25, 0.5, 1, 1.5, 2];
+let viewOn = false, full = false, zoom = 0.5;
 try {
   viewOn = localStorage.getItem('remotey-view') === '1';
   if (ZOOMS.includes(+localStorage.getItem('remotey-zoom'))) zoom = +localStorage.getItem('remotey-zoom');
