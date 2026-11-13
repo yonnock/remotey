@@ -17,25 +17,7 @@
 
 ## How it works
 
-```mermaid
-flowchart TB
-    phone["<b>iPhone</b><br/>Safari / home screen"]
-
-    subgraph mac["Mac"]
-        serve["<b>tailscale serve</b> :8443<br/>terminates TLS, tailnet only"]
-        subgraph agent["Remotey agent (menu bar), listens on 127.0.0.1 only"]
-            http["<b>:47800 HTTP</b><br/>serves the web UI"]
-            ws["<b>:47801 WebSocket</b><br/>receives input"]
-        end
-        cg["<b>CGEvent</b><br/>pointer, keyboard, media keys"]
-    end
-
-    phone -- "HTTPS + WSS" --> serve
-    serve -- "/" --> http
-    serve -- "/ws" --> ws
-    ws -- "injects" --> cg
-    ws -. "screen around the pointer<br/>(optional live view)" .-> phone
-```
+<img src="docs/how-it-works.svg" width="968" alt="The iPhone connects over HTTPS and WSS, tailnet only, to tailscale serve on port 8443 on the Mac. It forwards / to the agent's HTTP port 47800, which serves the web UI, and /ws to its WebSocket port 47801, which receives input and injects it via CGEvent. The agent listens on 127.0.0.1 only.">
 
 The agent is a small Swift menu bar app with no dependencies. The UI is a single HTML file (labels are in German).
 

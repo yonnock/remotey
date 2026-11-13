@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 968 300" width="968" height="300" role="img" aria-label="iPhone connects over HTTPS and WSS through tailscale serve to the Remotey agent on the Mac, which injects input via CGEvent">
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
+.t{font-size:14px;font-weight:600;text-anchor:middle}
+.s{font-size:12px;fill:#59636e;text-anchor:middle}
+.g{font-size:12px;font-weight:600;fill:#59636e;letter-spacing:.04em}
+.l{font-size:12px;fill:#59636e;text-anchor:middle}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.box{fill:#ffffff;stroke:#d1d9e0;stroke-width:1.2}
+.e{fill:none;stroke:#0969da;stroke-width:1.6}
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L10,5 L0,9 z" fill="#0969da"/></marker></defs>
+<rect width="968" height="300" rx="12" fill="#ffffff"/>
+<rect x="270" y="16" width="678" height="268" rx="14" fill="#f6f8fa" stroke="#d1d9e0" stroke-width="1.2"/>
+<text class="g" x="290" y="42">MAC</text>
+<rect x="510" y="52" width="200" height="216" rx="12" fill="#eaeef2" stroke="#d1d9e0" stroke-width="1.2"/>
+<text x="524" y="75" font-size="13" font-weight="600">Remotey agent</text>
+<text x="524" y="92" style="font-size:11.5px;fill:#59636e">menu bar app, 127.0.0.1 only</text>
+<rect class="box" x="20" y="141" width="140" height="72" rx="10"/><text class="t" x="90.0" y="173.0">iPhone</text><text class="s" x="90.0" y="192.0">Safari / home screen</text>
+<rect class="box" x="290" y="141" width="150" height="72" rx="10"/><text class="t" x="365.0" y="173.0">tailscale serve</text><text class="s" x="365.0" y="192.0">:8443, terminates TLS</text>
+<rect class="box" x="524" y="104" width="172" height="62" rx="10"/><text class="t m" x="610.0" y="131.0">:47800 HTTP</text><text class="s" x="610.0" y="150.0">serves the web UI</text>
+<rect class="box" x="524" y="190" width="172" height="62" rx="10"/><text class="t m" x="610.0" y="217.0">:47801 WebSocket</text><text class="s" x="610.0" y="236.0">receives input</text>
+<rect class="box" x="780" y="185" width="150" height="72" rx="10"/><text class="t" x="855.0" y="217.0">CGEvent</text><text class="s" x="855.0" y="236.0">pointer, keys, media</text>
+<path class="e" marker-end="url(#a)" d="M160,177 H289"/>
+<text class="l" x="215" y="166">HTTPS + WSS</text>
+<text class="l" x="215" y="196">tailnet only</text>
+<path class="e" marker-end="url(#a)" d="M440,165 C482,165 482,135 523,135"/>
+<path class="e" marker-end="url(#a)" d="M440,189 C482,189 482,221 523,221"/>
+<text class="l m" x="466" y="138">/</text>
+<text class="l m" x="466" y="228">/ws</text>
+<path class="e" marker-end="url(#a)" d="M696,221 H779"/>
+<text class="l" x="745" y="211">injects</text>
+</svg>
