@@ -16,7 +16,6 @@ enum Token {
         return rotate()
     }
 
-    @discardableResult
     static func rotate() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         precondition(SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess)

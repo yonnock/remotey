@@ -67,7 +67,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func rotateToken() {
         server.token = Token.rotate()
-        server.disconnectAll()
         pairingWindow?.close()
         showPairing()
     }

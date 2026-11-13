@@ -7,11 +7,16 @@ final class Server {
     static let httpPort: UInt16 = 47800
     static let wsPort: UInt16 = 47801
 
-    var token: String
+    /// Clients are authenticated against the current token, so replacing it drops all of them.
+    var token: String { didSet { clients.values.forEach { $0.connection.cancel() } } }
     private let input: Input
     private var listeners: [NWListener] = []
     private var clients: [ObjectIdentifier: Client] = [:]
-    private let screen = ScreenView()
+    private lazy var screen = ScreenView { [weak self] frame in
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
+        let context = NWConnection.ContentContext(identifier: "frame", metadata: [metadata])
+        self?.viewer?.connection.send(content: frame, contentContext: context, completion: .idempotent)
+    }
     private weak var viewer: Client?
 
     private final class Client {
@@ -41,16 +46,6 @@ final class Server {
     init(token: String, input: Input) {
         self.token = token
         self.input = input
-        screen.send = { [weak self] frame, done in
-            guard let self, let client = self.viewer else {
-                self?.screen.update(nil)
-                return done()
-            }
-            let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
-            let context = NWConnection.ContentContext(identifier: "frame", metadata: [metadata])
-            client.connection.send(content: frame, contentContext: context,
-                                   completion: .contentProcessed { _ in done() })
-        }
     }
 
     func start() throws {
@@ -73,11 +68,6 @@ final class Server {
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
         parameters.allowLocalEndpointReuse = true
         return try NWListener(using: parameters)
-    }
-
-    /// Drops every connected client, e.g. after the token was rotated.
-    func disconnectAll() {
-        clients.values.forEach { $0.connection.cancel() }
     }
 
     // MARK: HTTP
@@ -196,13 +186,16 @@ final class Server {
         case "key": if let k = m.k { input.key(k, mods: m.mods ?? [], count: m.n ?? 1) }
         case "media": if let k = m.k { input.media(k) }
         case "view": view(m, for: client)
+        case "shown": if viewer === client, let n = m.n.flatMap(UInt32.init(exactly:)) { screen.frameShown(n) }
         default: break
         }
     }
 
     /// Switches the live view on (or resizes it) for one client; the most recent requester wins.
     private func view(_ m: Message, for client: Client) {
-        guard m.on == true, let w = m.w, let h = m.h, (50...4000).contains(w), (50...4000).contains(h) else {
+        guard m.on == true, let width = m.w, let height = m.h,
+              let request = ScreenView.Request(width: width, height: height, zoom: m.zoom ?? 1,
+                                               pixelRatio: m.dpr ?? 2) else {
             if viewer === client { stopView() }
             return
         }
@@ -210,9 +203,9 @@ final class Server {
             CGRequestScreenCaptureAccess()
             return send(client, #"{"t":"view","ok":false}"#)
         }
+        if viewer !== client { stopView() }
         viewer = client
-        screen.update(.init(width: w, height: h, zoom: min(max(m.zoom ?? 1, 0.25), 4),
-                            pixelRatio: min(max(m.dpr ?? 2, 1), 3)))
+        screen.update(request)
     }
 
     private func stopView() {

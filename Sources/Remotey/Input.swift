@@ -9,21 +9,17 @@ final class Input {
     private var moveRemainder = CGPoint.zero
     private var scrollRemainder = CGPoint.zero
 
-    static let namedKeys: [String: Int] = [
-        "return": kVK_Return, "tab": kVK_Tab, "space": kVK_Space, "backspace": kVK_Delete,
-        "escape": kVK_Escape, "delete": kVK_ForwardDelete,
+    private static let namedKeys: [String: Int] = [
+        "return": kVK_Return, "tab": kVK_Tab, "space": kVK_Space, "backspace": kVK_Delete, "escape": kVK_Escape,
         "left": kVK_LeftArrow, "right": kVK_RightArrow, "up": kVK_UpArrow, "down": kVK_DownArrow,
-        "home": kVK_Home, "end": kVK_End, "pageup": kVK_PageUp, "pagedown": kVK_PageDown,
     ]
 
     // NX_KEYTYPE_* values from IOKit/hidsystem/ev_keymap.h
-    static let mediaKeys: [String: Int] = [
+    private static let mediaKeys: [String: Int] = [
         "volup": 0, "voldown": 1, "mute": 7, "play": 16, "next": 17, "prev": 18,
     ]
 
     // MARK: Mouse
-
-    private var cursor: CGPoint { CGEvent(source: nil)?.location ?? .zero }
 
     func move(dx: Double, dy: Double) {
         moveRemainder.x += dx
@@ -33,7 +29,7 @@ final class Input {
         moveRemainder.x -= step.x
         moveRemainder.y -= step.y
 
-        let from = cursor
+        let from = Pointer.location
         let to = clamp(CGPoint(x: from.x + step.x, y: from.y + step.y), from: from)
         let left = held.contains(CGMouseButton.left.rawValue)
         let right = held.contains(CGMouseButton.right.rawValue)
@@ -48,18 +44,15 @@ final class Input {
 
     /// Keeps the cursor on a display: a target off every screen is clamped to the current one.
     private func clamp(_ target: CGPoint, from: CGPoint) -> CGPoint {
-        var count: UInt32 = 0
-        var display: CGDirectDisplayID = 0
-        if CGGetDisplaysWithPoint(target, 1, &display, &count) == .success, count > 0 { return target }
-        let bounds = CGGetDisplaysWithPoint(from, 1, &display, &count) == .success && count > 0
-            ? CGDisplayBounds(display) : CGDisplayBounds(CGMainDisplayID())
+        guard Pointer.display(at: target) == nil else { return target }
+        let bounds = CGDisplayBounds(Pointer.display(at: from) ?? CGMainDisplayID())
         return CGPoint(x: min(max(target.x, bounds.minX), bounds.maxX - 1),
                        y: min(max(target.y, bounds.minY), bounds.maxY - 1))
     }
 
     func button(_ button: CGMouseButton, down: Bool) {
         guard held.contains(button.rawValue) != down else { return }
-        let point = cursor
+        let point = Pointer.location
         if down {
             let now = ProcessInfo.processInfo.systemUptime
             var count: Int64 = 1
@@ -105,7 +98,7 @@ final class Input {
 
     // MARK: Keyboard
 
-    static func flags(_ mods: [String]) -> CGEventFlags {
+    private static func flags(_ mods: [String]) -> CGEventFlags {
         var flags: CGEventFlags = []
         for mod in mods {
             switch mod {
@@ -122,11 +115,12 @@ final class Input {
     /// `key` is a name from `namedKeys` or a single character (for shortcuts like cmd+c).
     func key(_ key: String, mods: [String], count: Int) {
         let flags = Self.flags(mods)
+        let keymap = Self.keymap()
         for _ in 0..<max(1, min(count, 100)) {
             if let code = Self.namedKeys[key] {
                 press(CGKeyCode(code), flags: flags)
             } else if key.count == 1, let ch = key.first {
-                typeCharacter(ch, flags: flags, keymap: Self.keymap())
+                typeCharacter(ch, flags: flags, keymap: keymap)
             }
         }
     }
@@ -170,7 +164,7 @@ final class Input {
 
     /// Character -> key code for the unshifted main block of the active keyboard layout.
     /// Rebuilt per message so layout switches need no invalidation.
-    static func keymap() -> [Character: CGKeyCode] {
+    private static func keymap() -> [Character: CGKeyCode] {
         guard let inputSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let raw = TISGetInputSourceProperty(inputSource, kTISPropertyUnicodeKeyLayoutData) else { return [:] }
         let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data

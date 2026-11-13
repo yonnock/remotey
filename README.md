@@ -72,7 +72,7 @@ Text typed on the iOS keyboard is replayed on the Mac key by key.
 
 ```sh
 swift run               # agent from the source tree, Web/ is re-read on every request
-node scripts/smoke.mjs  # checks HTTP, auth and pointer movement against the running agent
+node scripts/smoke.mjs  # checks HTTP, auth, pointer movement and the live view against the running agent
 ```
 
 Known limits: untested on the Mac lock screen, and characters without a key in the active layout (emoji, for example) are sent as Unicode events, which some terminals ignore.

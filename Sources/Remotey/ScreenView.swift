@@ -11,22 +11,40 @@ import ScreenCaptureKit
 ///
 /// `@unchecked Sendable`: state is confined to the main queue or the frame queue, as marked below.
 final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    struct Request {
-        /// Size of the phone's trackpad area in CSS pixels; the captured region gets the same aspect.
-        var width: Double
-        var height: Double
+    struct Request: Equatable {
+        /// Size of the phone's display element in CSS pixels; the captured region gets the same aspect.
+        let width: Double
+        let height: Double
         /// 1 = one Mac point per CSS pixel, 2 = twice as large on the phone.
-        var zoom: Double
-        var pixelRatio: Double
+        let zoom: Double
+        let pixelRatio: Double
+
+        /// Nil for a size no phone display has.
+        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double) {
+            guard (50...4000).contains(width), (50...4000).contains(height) else { return nil }
+            self.width = width
+            self.height = height
+            self.zoom = min(max(zoom, 0.25), 4)
+            self.pixelRatio = min(max(pixelRatio, 1), ScreenView.maxPixelRatio)
+        }
     }
 
-    /// Delivers one frame on the main queue; must call the completion once the frame is written.
-    var send: ((Data, @escaping () -> Void) -> Void)?
+    private struct DisplayUnavailable: Error {}
+
+    private let send: (Data) -> Void
+
+    /// `send` delivers one frame on the main queue. The phone answers frames by number through `frameShown`.
+    init(send: @escaping (Data) -> Void) {
+        self.send = send
+    }
 
     private static let framesPerSecond: Int32 = 30
     private static let maxOutputWidth = 1400.0
     /// Sharper than 2x costs bandwidth and frame rate for little gain at arm's length.
     private static let maxPixelRatio = 2.0
+    /// Frames sent but not yet shown on the phone. Sockets and proxies on the way buffer megabytes,
+    /// so only the phone can tell whether it keeps up. Two lets the next frame travel while one decodes.
+    private static let maxFramesInFlight = 2
 
     // Main queue state.
     private var request: Request?
@@ -42,11 +60,14 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     private var geometry: (request: Request, bounds: CGRect)?
     private var latest: CVPixelBuffer?
-    private var sending = false
+    private var framesSent: UInt32 = 0
+    private var framesShown: UInt32 = 0
 
     func update(_ request: Request?) {
+        guard request != self.request else { return }
+        // Frames of a stopped view may never be answered, so a new view counts none of them as in flight.
+        if self.request == nil { queue.async { self.framesShown = self.framesSent } }
         self.request = request
-        dirty = true
         if request == nil {
             displayWatch?.invalidate()
             displayWatch = nil
@@ -54,15 +75,24 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
             // The stream covers one display; follow the cursor when it moves to another one.
             displayWatch = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                 guard let self, self.stream != nil, Self.cursorDisplay() != self.streamDisplay else { return }
-                self.dirty = true
                 self.configure()
             }
         }
         configure()
     }
 
-    /// Applies the newest request; calls arriving while a change is in flight are coalesced.
+    /// The phone has drawn (or discarded) the frame with this number.
+    func frameShown(_ number: UInt32) {
+        queue.async {
+            guard number > self.framesShown, number <= self.framesSent else { return }
+            self.framesShown = number
+            self.encodeLatest()
+        }
+    }
+
+    /// Brings the stream in line with the newest request; calls arriving while a change is in flight are coalesced.
     private func configure() {
+        dirty = true
         guard !configuring else { return }
         configuring = true
         Task { @MainActor in
@@ -91,8 +121,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         let backingScale = NSScreen.screens.first {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id
         }?.backingScaleFactor ?? 2
-        let outputWidth = min(regionWidth * backingScale,
-                              request.width * min(request.pixelRatio, Self.maxPixelRatio), Self.maxOutputWidth)
+        let outputWidth = min(regionWidth * backingScale, request.width * request.pixelRatio, Self.maxOutputWidth)
         // The whole display is captured at exactly the density the cropped region needs.
         let scale = outputWidth / regionWidth
 
@@ -109,7 +138,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         } else {
             await teardown()
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let display = content.displays.first(where: { $0.displayID == id }) else { return }
+            guard let display = content.displays.first(where: { $0.displayID == id }) else { throw DisplayUnavailable() }
             let stream = SCStream(filter: SCContentFilter(display: display, excludingWindows: []),
                                   configuration: config, delegate: self)
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
@@ -133,10 +162,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     }
 
     private static func cursorDisplay() -> CGDirectDisplayID {
-        var id: CGDirectDisplayID = 0
-        var count: UInt32 = 0
-        let cursor = CGEvent(source: nil)?.location ?? .zero
-        return CGGetDisplaysWithPoint(cursor, 1, &id, &count) == .success && count > 0 ? id : CGMainDisplayID()
+        Pointer.display(at: Pointer.location) ?? CGMainDisplayID()
     }
 
     /// Region size in points: the pad's aspect, shrunk if it would not fit on the display.
@@ -150,19 +176,20 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, let buffer = sampleBuffer.imageBuffer else { return }
-        // While a frame is on the wire only the newest one is kept, so a slow link lowers the
+        // While the phone is busy only the newest frame is kept, so a slow link or phone lowers the
         // frame rate instead of building up delay, and the last frame of a movement always arrives.
         latest = buffer
-        if !sending { encodeLatest() }
+        encodeLatest()
     }
 
-    /// Frame layout: Float32 cursor x, Float32 cursor y (both 0...1 inside the image, little endian), then JPEG.
+    /// Frame layout, little endian: Float32 cursor x, Float32 cursor y (both 0...1 inside the image),
+    /// UInt32 frame number, then JPEG.
     private func encodeLatest() {
-        guard let buffer = latest, let geometry, let send else { return }
+        guard framesSent - framesShown < Self.maxFramesInFlight, let buffer = latest, let geometry else { return }
         latest = nil
         let bounds = geometry.bounds
         let size = Self.region(geometry.request, in: bounds)
-        let cursor = CGEvent(source: nil)?.location ?? .zero
+        let cursor = Pointer.location
         let x = min(max(0, cursor.x - bounds.minX - size.width / 2), bounds.width - size.width)
         let y = min(max(0, cursor.y - bounds.minY - size.height / 2), bounds.height - size.height)
 
@@ -180,16 +207,10 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         var header = [Float32((cursor.x - bounds.minX - x) / size.width),
                       Float32((cursor.y - bounds.minY - y) / size.height)]
         var frame = Data(bytes: &header, count: MemoryLayout<Float32>.size * 2)
+        framesSent += 1
+        withUnsafeBytes(of: framesSent.littleEndian) { frame.append(contentsOf: $0) }
         frame.append(jpeg)
-        sending = true
-        DispatchQueue.main.async {
-            send(frame) {
-                self.queue.async {
-                    self.sending = false
-                    self.encodeLatest()
-                }
-            }
-        }
+        DispatchQueue.main.async { self.send(frame) }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -197,11 +218,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
             guard stream === self.stream else { return }
             self.stream = nil
             self.streamDisplay = 0
-            guard self.request != nil else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                self.dirty = true
-                self.configure()
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.configure() }
         }
     }
 }

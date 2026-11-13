@@ -181,7 +181,8 @@ function connect() {
   socket.binaryType = 'arraybuffer';
   socket.onopen = () => socket.send(JSON.stringify({ t: 'auth', token }));
   socket.onmessage = (e) => {
-    if (typeof e.data !== 'string') return drawFrame(e.data);
+    if (socket !== ws) return;
+    if (typeof e.data !== 'string') { frames = frames.then(() => showFrame(e.data)); return; }
     const m = JSON.parse(e.data);
     if (m.t === 'ok') {
       ready = true;
@@ -225,7 +226,7 @@ function takeMods() {
   document.querySelectorAll('[data-mod]').forEach((b) => b.classList.remove('on'));
   return list;
 }
-function sendKey(k, n) { send({ t: 'key', k, mods: takeMods(), n: n || 1 }); }
+function sendKey(k) { send({ t: 'key', k, mods: takeMods(), n: 1 }); }
 
 // ---- Trackpad: 1 finger moves, 2 fingers scroll, tap = click, 2-finger tap = right click
 const TAP_MS = 250, TAP_SLOP = 8;
@@ -283,10 +284,10 @@ pad.addEventListener('touchcancel', padEnd, { passive: false });
 // The display sits above the trackpad; in pointer mode ("full") it fills the phone.
 const screenEl = $('#screen'), view = $('#view'), marker = $('#marker'), viewCtx = view.getContext('2d');
 const ZOOMS = [0.5, 1, 1.5, 2];
-let viewOn = false, full = false, zoom = 0.5, frameSeq = 0, drawnSeq = 0;
+let viewOn = false, full = false, zoom = ZOOMS[0], frames = Promise.resolve();
 try {
   viewOn = localStorage.getItem('remotey-view') === '1';
-  zoom = ZOOMS.includes(+localStorage.getItem('remotey-zoom')) ? +localStorage.getItem('remotey-zoom') : 0.5;
+  if (ZOOMS.includes(+localStorage.getItem('remotey-zoom'))) zoom = +localStorage.getItem('remotey-zoom');
 } catch {}
 function syncView() {
   if (!viewOn) full = false;
@@ -304,21 +305,22 @@ function setFull(on) {
   if (on) { viewOn = true; field.blur(); }
   syncView();
 }
-async function drawFrame(buffer) {
-  if (!viewOn) return;
-  const seq = ++frameSeq, head = new DataView(buffer);
-  const cx = head.getFloat32(0, true), cy = head.getFloat32(4, true);
-  let bitmap;
-  try { bitmap = await createImageBitmap(new Blob([buffer.slice(8)], { type: 'image/jpeg' })); } catch { return; }
-  if (seq > drawnSeq && viewOn) { // frames decode asynchronously; never draw an older one over a newer one
-    drawnSeq = seq;
-    if (view.width !== bitmap.width || view.height !== bitmap.height) { view.width = bitmap.width; view.height = bitmap.height; }
-    viewCtx.drawImage(bitmap, 0, 0);
-    marker.style.left = cx * 100 + '%';
-    marker.style.top = cy * 100 + '%';
-    marker.hidden = false;
-  }
-  bitmap.close();
+// Frames are shown one after another, and the Mac sends the next ones only once it hears "shown":
+// that keeps the picture current however slow the link or this phone is.
+async function showFrame(buffer) {
+  const head = new DataView(buffer);
+  try {
+    const bitmap = await createImageBitmap(new Blob([new Uint8Array(buffer, 12)], { type: 'image/jpeg' }));
+    if (viewOn) {
+      if (view.width !== bitmap.width || view.height !== bitmap.height) { view.width = bitmap.width; view.height = bitmap.height; }
+      viewCtx.drawImage(bitmap, 0, 0);
+      marker.style.left = head.getFloat32(0, true) * 100 + '%';
+      marker.style.top = head.getFloat32(4, true) * 100 + '%';
+      marker.hidden = false;
+    }
+    bitmap.close();
+  } catch {}
+  send({ t: 'shown', n: head.getUint32(8, true) });
 }
 // Tapping the small display opens pointer mode. In pointer mode the trackpad covers the display.
 screenEl.addEventListener('touchend', (e) => { e.preventDefault(); setFull(true); }, { passive: false });

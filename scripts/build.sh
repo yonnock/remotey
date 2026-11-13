@@ -23,6 +23,7 @@ echo "Gebaut: $APP"
 
 if [ "${1:-}" = "--install" ]; then
     pkill -x Remotey 2>/dev/null || true
+    while pgrep -x Remotey >/dev/null; do sleep 0.1; done # `open` fails while the old instance is still quitting
     rm -rf /Applications/Remotey.app
     ditto "$APP" /Applications/Remotey.app
     open /Applications/Remotey.app
