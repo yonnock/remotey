@@ -10,11 +10,11 @@
 </p>
 
 <p align="center">
-  <img src="docs/remote.png" width="250" alt="Remote with the live view of the Mac screen above the trackpad">
+  <img src="docs/remote.png" width="250" alt="Remote: the live view is the trackpad, with the media keys below">
   &nbsp;
-  <img src="docs/full.png" width="250" alt="Pointer mode: the live view fills the phone">
+  <img src="docs/keys.png" width="250" alt="Keys page with a modifier armed">
   &nbsp;
-  <img src="docs/typing.png" width="250" alt="Typing with a modifier armed">
+  <img src="docs/full.png" width="250" alt="Full view: the keys fold away and the display takes the phone">
 </p>
 
 ## How it works
@@ -68,9 +68,12 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 | Two-finger tap | Right click |
 | Hold "Links" and swipe with a second finger | Drag |
 | ⌘ ⌥ ⌃ ⇧ | Applies to the next key, e.g. ⌘ then `w` |
-| "Bild" | Live view: a display above the trackpad shows the screen around the pointer; the key next to it zooms (0.25× to 2×) |
-| Tap the display | Pointer mode: the live view fills the phone and the whole screen is the trackpad; "Tasten" goes back |
-| Dial | Volume up and down, previous, play/pause, next |
+| "Bild" | Live view: the trackpad shows the screen around the pointer, so you steer on the picture itself |
+| Zoom switch | Tap a position or slide across them (0.25× to 2×) |
+| Full view key | The keys fold away and the display takes the phone; the keyboard key opens typing. Turning the phone sideways does the same with the controls beside the display |
+| "Medien" / "Tasten" | Slides between the media keys and the key page (Esc, Tab, modifiers, arrows) |
+
+The dot left of the zoom switch is the connection: blinking amber while connecting, green when connected, red when not. The screenshots above show a placeholder instead of a real Mac screen.
 
 Text typed on the iOS keyboard is replayed on the Mac key by key.
 
