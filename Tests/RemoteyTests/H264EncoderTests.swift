@@ -17,6 +17,19 @@ final class H264EncoderTests: XCTestCase {
         XCTAssertLessThan(second.count, first.count, "An unchanged image should use interframe compression")
     }
 
+    func testOneKeyFrameStartsTheStreamAndNoLaterOneInterruptsIt() throws {
+        let encoder = try H264Encoder(width: 640, height: 360, framesPerSecond: 120)
+        let context = CIContext()
+        // Five seconds of video at 120 fps.
+        let keys = try (0..<600).filter { index in
+            let image = CIImage(color: CIColor(red: Double(index % 7) / 7, green: 0.5, blue: 0.5))
+                .cropped(to: CGRect(x: 0, y: 0, width: 640, height: 360))
+            if case .frame(let data) = try output(image, encoder: encoder, context: context) { return data[3] == 1 }
+            return false
+        }
+        XCTAssertEqual(keys, [0])
+    }
+
     func testNewSizeStartsAnIndependentStream() throws {
         let context = CIContext()
         for (width, height) in [(640, 360), (360, 640)] {

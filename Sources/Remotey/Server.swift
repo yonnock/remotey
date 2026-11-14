@@ -12,12 +12,19 @@ final class Server {
     private let input: Input
     private var listeners: [NWListener] = []
     private var clients: [ObjectIdentifier: Client] = [:]
-    private lazy var screen = ScreenView { [weak self] frame in
+    private lazy var screen = ScreenView(send: { [weak self] frame in
         let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
         let context = NWConnection.ContentContext(identifier: "frame", metadata: [metadata])
         self?.viewer?.connection.send(content: frame, contentContext: context, completion: .idempotent)
-    }
+    }, cursor: { [weak self] picture in
+        guard let self, let viewer = self.viewer else { return }
+        self.send(viewer, picture)
+    })
     private weak var viewer: Client?
+    private let decoder = JSONDecoder()
+
+    /// The page compares this with its own number and reloads itself after an update of the agent.
+    static let protocolVersion = 2
 
     private final class Client {
         let connection: NWConnection
@@ -43,6 +50,7 @@ final class Server {
         var dpr: Double?
         var codec: String?
         var fps: Int?
+        var q: UInt32?
     }
 
     /// Connections that are not yet answered (HTTP) or authenticated (WebSocket), oldest first.
@@ -93,7 +101,10 @@ final class Server {
         let wsOptions = NWProtocolWebSocket.Options()
         wsOptions.autoReplyPing = true
         wsOptions.maximumMessageSize = 64 * 1024
-        let wsParameters = NWParameters.tcp
+        // Without Nagle's algorithm: a frame smaller than a segment must not wait for the acknowledgement of the one before.
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        let wsParameters = NWParameters(tls: nil, tcp: tcp)
         wsParameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
         let ws = try listener(port: ports.ws, parameters: wsParameters)
         ws.newConnectionHandler = { [weak self] in self?.serveWebSocket($0) }
@@ -139,7 +150,7 @@ final class Server {
                 "X-Content-Type-Options: nosniff",
                 "Referrer-Policy: no-referrer",
                 "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; "
-                    + "script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self'; "
+                    + "script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:; "
                     + "frame-ancestors 'none'",
             ].joined(separator: "\r\n") + "\r\n\r\n"
             connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in
@@ -187,7 +198,7 @@ final class Server {
                   let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
                     as? NWProtocolWebSocket.Metadata,
                   metadata.opcode == .text || metadata.opcode == .binary,
-                  let data, let message = try? JSONDecoder().decode(Message.self, from: data) else {
+                  let data, let message = try? self.decoder.decode(Message.self, from: data) else {
                 client.connection.cancel()
                 return
             }
@@ -196,7 +207,7 @@ final class Server {
             } else if message.t == "auth", let candidate = message.token, Token.matches(candidate, self.token) {
                 client.authed = true
                 self.settle(client.connection)
-                self.send(client, #"{"t":"ok","ax":\#(AXIsProcessTrusted())}"#)
+                self.send(client, #"{"t":"ok","ax":\#(AXIsProcessTrusted()),"v":\#(Self.protocolVersion)}"#)
             } else {
                 self.send(client, #"{"t":"denied"}"#) { client.connection.cancel() }
                 return
@@ -220,7 +231,11 @@ final class Server {
         }
         let button: CGMouseButton = m.b == "right" ? .right : .left
         switch m.t {
-        case "m": if let (dx, dy) = delta() { input.move(dx: dx, dy: dy) }
+        case "m":
+            guard let (dx, dy) = delta() else { break }
+            input.move(dx: dx, dy: dy)
+            // The view follows at once instead of waiting for the screen to show the move.
+            if viewer === client { screen.pointerMoved(applied: m.q) }
         case "s": if let (dx, dy) = delta() { input.scroll(dx: dx, dy: dy) }
         case "c": input.click(button)
         case "b": if let down = m.d { input.button(button, down: down) }

@@ -71,20 +71,31 @@ if (hello.ax) {
 
 // Live view: the agent may only have a bounded number of frames under way until the client reports
 // them shown. Otherwise frames pile up in buffers on a slow link and the picture lags behind.
-const MAX_IN_FLIGHT = 2;
-let frames = 0, bytes = 0, acking = false, denied = false, held = [], expectKey = true, keyFrames = 0;
+// Two until the first answer. After that the agent allows for the time an answer takes, up to six pictures.
+const MAX_IN_FLIGHT = 2, MAX_WINDOW = 6, HEADER = 20;
+let frames = 0, bytes = 0, acking = false, denied = false, held = [], expectKey = true, keyFrames = 0, cursors = 0, moves = 0;
 const shown = (frame) => send({ t: 'shown', n: new DataView(frame).getUint32(8, true) });
 good.ws.onmessage = (e) => {
-  if (typeof e.data === 'string') { denied = JSON.parse(e.data).ok === false; return; }
+  if (typeof e.data === 'string') {
+    const m = JSON.parse(e.data);
+    if (m.t === 'cursor') {
+      if (!(m.w > 0 && m.h > 0 && m.x >= 0 && m.y >= 0) || !Buffer.from(m.png, 'base64').subarray(1, 4).equals(Buffer.from('PNG'))) fail('pointer picture');
+      cursors++;
+    } else denied = m.ok === false;
+    return;
+  }
   const head = new DataView(e.data);
+  if (!(head.getFloat32(16, true) > 0)) fail('message without the width of the picture');
+  // The pointer moved inside the view: no picture, no answer expected.
+  if (e.data.byteLength === HEADER) { if (head.getUint32(8, true) !== 0) fail('numbered message without a picture'); moves++; return; }
   if (codec === 'h264') {
-    if (head.getUint16(12) === 0xffd8) fail('agent sent JPEG instead of H.264');
-    if (expectKey && head.getUint8(15) !== 1) fail('new H.264 stream did not start with an IDR');
+    if (head.getUint16(HEADER) === 0xffd8) fail('agent sent JPEG instead of H.264');
+    if (expectKey && head.getUint8(HEADER + 3) !== 1) fail('new H.264 stream did not start with an IDR');
     expectKey = false;
-    if (head.getUint8(15) === 1) keyFrames++;
-    if (head.getUint32(16) !== 1) fail('H.264 payload is not Annex B');
-    if (capture) packets.push(Buffer.from(e.data, 16));
-  } else if (head.getUint16(12) !== 0xffd8) fail('agent did not send the requested JPEG fallback');
+    if (head.getUint8(HEADER + 3) === 1) keyFrames++;
+    if (head.getUint32(HEADER + 4) !== 1) fail('H.264 payload is not Annex B');
+    if (capture) packets.push(Buffer.from(e.data, HEADER + 4));
+  } else if (head.getUint16(HEADER) !== 0xffd8) fail('agent did not send the requested JPEG fallback');
   frames++;
   bytes += e.data.byteLength;
   if (acking) shown(e.data); else held.push(e.data);
@@ -105,16 +116,19 @@ if (denied) {
 } else {
   if (frames < 1 || frames > MAX_IN_FLIGHT) fail(`${frames} frames without a "shown", expected 1 to ${MAX_IN_FLIGHT}`);
   console.log(`ok   view: stream waits after ${frames} unanswered frames`);
+  if (cursors < 1) fail('no pointer picture for a new view');
+  console.log('ok   view: pointer picture arrives separately');
   if (hello.ax) {
     // An out-of-order answer releases only that frame, not every earlier reference picture.
+    // It comes more than a second late, so the window opens all the way: one picture answered, the first still not.
     const later = held.at(-1);
     shown(later);
     send({ t: 'shown', n: new DataView(later).getUint32(8, true) + 1000 });
     await stir();
     shown(later); // duplicate answers cannot create more send credit
     await stir();
-    if (frames > MAX_IN_FLIGHT + 1) fail('duplicate, future, or out-of-order answers bypassed the frame window');
-    console.log('ok   view: answers release only their own frame');
+    if (frames > MAX_WINDOW + 1) fail(`duplicate, future, or out-of-order answers bypassed the frame window: ${frames} frames`);
+    console.log(`ok   view: answers release only their own frame (${frames} frames, at most ${MAX_WINDOW} unanswered)`);
     acking = true;
     held.forEach(shown);
     const startFrames = frames, startBytes = bytes, startTime = performance.now();

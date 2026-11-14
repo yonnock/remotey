@@ -40,6 +40,7 @@ final class Input {
         e.setIntegerValueField(.mouseEventDeltaY, value: Int64(step.y))
         e.flags = []
         e.post(tap: .cghidEventTap)
+        Pointer.posted(to)
     }
 
     /// Keeps the cursor on a display: a target off every screen is clamped to the current one.

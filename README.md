@@ -21,7 +21,15 @@
 
 <img src="docs/how-it-works.svg" width="968" alt="The iPhone connects over HTTPS and WSS, tailnet only, to tailscale serve on port 8443 on the Mac. It forwards / to the agent's HTTP port 47800, which serves the web UI, and /ws to its WebSocket port 47801, which receives input, injects it via CGEvent and streams the optional live view back. The agent listens on 127.0.0.1 only.">
 
-The live view uses hardware-encoded H.264 at up to 120 fps with a 4 Mbit/s average bitrate target. Safari 16.4+ can decode it through WebCodecs; unsupported browsers or encoders fall back to JPEG at up to 30 fps. The client measures its rendering cadence and requests up to 120 fps; capture is also capped by the Mac display’s refresh rate. A 60 Hz display or Safari limited to 60 Hz stays at 60 fps. Static screen samples are not encoded. With several displays, each one is captured and the view is composed from those around the pointer, so it pans across the seam between two displays instead of switching; space no display covers is black. At most two frames await a draw acknowledgement, so a slow connection lowers the frame rate instead of building up a queue.
+The live view uses hardware-encoded H.264 at up to 120 fps with a 4 Mbit/s average bitrate target. Safari 16.4+ can decode it through WebCodecs; unsupported browsers or encoders fall back to JPEG at up to 30 fps. The client measures its rendering cadence and requests up to 120 fps; the rate is also capped by the refresh rate of the fastest Mac display. A Mac with 60 Hz displays or Safari limited to 60 Hz stays at 60 fps. With several displays, each one is captured and the view is composed from those around the pointer, so it pans across the seam between two displays instead of switching; space no display covers is black.
+
+The stream is built for a short way from finger to picture and for doing nothing whenever possible:
+
+- The pointer is not part of the picture. The phone gets its place with every message and its image when the shape changes, and draws it itself, so pointer and marker cannot drift apart.
+- A pointer move needs no screen capture. The agent cuts the new view from the frames it already holds the moment it posts the move. A move inside a view held by the display's edges sends 20 bytes and no picture.
+- A still screen sends nothing, and neither does a change outside the view, such as a clock in the menu bar.
+- One key frame starts the stream. The link is reliable, so no later one interrupts it.
+- Pictures await a draw acknowledgement: two at first, up to six for a phone whose answers take several frame intervals even at their best. A slow connection lowers the frame rate instead of building up a queue.
 
 The agent is a small Swift menu bar app with no dependencies. The UI is an HTML page with a small decoder module (labels are in German).
 
@@ -70,6 +78,7 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 | ⌘ ⌥ ⌃ ⇧ | Applies to the next key, e.g. ⌘ then `w` |
 | "Bild" | Live view: the trackpad shows the screen around the pointer, so you steer on the picture itself |
 | Zoom switch | Tap a position or slide across them (0.25× to 2×) |
+| Readout next to "Bild" | Updates of the live view per second and the delay of a pointer move in milliseconds, measured from sending the move until the picture that shows it is drawn. Green is good, amber middling, red poor; grey while the screen is still |
 | Full view key | The keys fold away and the display takes the phone; the keyboard key opens typing. Turning the phone sideways does the same with the controls beside the display |
 | "Medien" / "Tasten" | Slides between the media keys and the key page (Esc, Tab, modifiers, arrows) |
 
@@ -82,13 +91,16 @@ Text typed on the iOS keyboard is replayed on the Mac key by key.
 ```sh
 swift run                          # agent from the source tree, Web/ is re-read on every request
 swift test                         # hardware encoder; server: auth and limits for unauthenticated connections
-node --test scripts/live-view.test.mjs  # client decode, acknowledgements and JPEG fallback
+node --test scripts/live-view.test.mjs  # client decode, acknowledgements, pointer, readout and JPEG fallback
 node scripts/smoke.mjs              # running agent: HTTP, auth, pointer and JPEG flow control
 node scripts/smoke.mjs --h264       # same checks for H.264, including IDR after restart/resize
 node scripts/smoke.mjs --h264 --fps=120  # request 120 fps (requires a 120 Hz source display)
+node scripts/bench.mjs --fps=60     # running agent: frame rate, delay from move to picture, CPU, bursts of moves
 ```
 
-The smoke tests move the pointer. Close Remotey on the phone first, since the most recent viewer owns the stream. They measure received frames, not displayed frames on the phone. The 4 Mbit/s setting is an average target, not a hard cap; actual frame rate, latency and text quality still need verification on the iPhone.
+The smoke tests and the benchmark move the pointer, so keep your hands off the mouse while they run. Close Remotey on the phone first, since the most recent viewer owns the stream. They measure the Mac's side: received frames, not displayed frames on the phone. The 4 Mbit/s setting is an average target, not a hard cap; the readout on the phone shows the frame rate and delay that actually arrive there.
+
+The hardware encoder takes one picture at a time. On an M3 Max a picture for a full phone display (780 × 1688 pixels) needs about 7 ms to encode and 2.5 ms to compose, so that size tops out at 90 to 100 fps; the smaller display above the keys reaches 120 fps.
 
 Known limits: untested on the Mac lock screen, and characters without a key in the active layout (emoji, for example) are sent as Unicode events, which some terminals ignore.
 

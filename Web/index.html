@@ -42,8 +42,13 @@
     background-image: radial-gradient(var(--line) 1px, transparent 1.4px); background-size: 12px 12px; }
   /* cover: while the display changes size, the last frame of the old size is cropped, never stretched. */
   #view { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--deep); }
-  #marker { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
-    border: 2px solid var(--accent); pointer-events: none; }
+  /* Covers the display and is shifted to the pointer's place, so its top left corner is the pointer.
+     The Mac's pointer is not in the picture: its image comes separately and is drawn here, inside the marker. */
+  #aim { position: absolute; inset: 0; pointer-events: none; will-change: transform; }
+  #marker { position: absolute; left: -15px; top: -15px; width: 30px; height: 30px; border-radius: 50%;
+    border: 2px solid var(--accent); }
+  #cursor { position: absolute; left: 0; top: 0; }
+  #cursor:not([src]) { display: none; }
   #pad { position: absolute; inset: 0; touch-action: none; display: flex; align-items: center;
     justify-content: center; text-align: center; color: var(--text); font-size: 14px; line-height: 1.45; padding: 32px; }
   #pad:not(:empty) { background: var(--surface); }
@@ -69,7 +74,15 @@
   #zoom { --n: 5; flex: 0 1 200px; min-width: 0; height: 36px; margin-right: auto; }
   #zoom span { pointer-events: none; letter-spacing: 0; }
   #zoom span::after { content: '×'; }
-  body:not(.view) #zoom { visibility: hidden; }
+  body:not(.view) #zoom, body:not(.view) #meter { visibility: hidden; }
+  /* Readout for the live view: updates per second above, delay of a pointer move below.
+     The upper number takes the colours of the connection LED: green good, amber middling, red poor. */
+  #meter { flex: none; min-width: 38px; display: grid; justify-items: end; gap: 3px; color: var(--muted);
+    font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: .03em; font-variant-numeric: tabular-nums; }
+  #meter b { font-size: 15px; font-weight: 600; letter-spacing: 0; color: var(--ok); }
+  #meter.mid b { color: var(--accent); }
+  #meter.bad b { color: var(--bad); }
+  #meter.idle b { color: var(--muted); }
 
   .key { position: relative; flex: none; height: 36px; min-width: 44px; padding: 0 12px; border-radius: 7px; background: var(--cap);
     display: grid; place-items: center; box-shadow: inset 0 1px 0 var(--line); }
@@ -152,6 +165,7 @@
   body.wide #strip { flex: none; height: auto; flex-direction: column; padding: 12px 0 10px; }
   body.wide #status { margin: 0 0 4px; }
   body.wide #zoom { flex: none; flex-direction: column; width: 52px; height: 160px; margin: 0; }
+  body.wide #meter { justify-items: center; margin: 2px 0; }
   body.wide #zoom i { left: 2px; width: calc(100% - 4px); bottom: auto; top: calc(var(--i, 0) * 100% / var(--n) + 3px);
     height: calc(100% / var(--n) - 6px); }
   body.wide .key { width: 52px; padding: 0; }
@@ -168,7 +182,7 @@
   <div id="console">
     <div id="screen">
       <canvas id="view" hidden></canvas>
-      <div id="marker" hidden></div>
+      <div id="aim" hidden><div id="marker"></div><img id="cursor" alt=""></div>
       <div id="pad" aria-label="Trackpad"></div>
     </div>
     <div id="side">
@@ -177,6 +191,9 @@
         <div id="zoom" class="switch legend" role="slider" tabindex="0" aria-label="Zoom des Live-Bilds"
              aria-valuemin="0" aria-valuemax="4">
           <i></i><span>0,25</span><span>0,5</span><span>1</span><span>1,5</span><span>2</span>
+        </div>
+        <div id="meter" class="idle" role="img" aria-label="Live-Bild: noch keine Messung">
+          <span><b>0</b> fps</span><span>– ms</span>
         </div>
         <button class="key legend" id="viewBtn" data-act="view" aria-label="Live-Bild ein oder aus">Bild</button>
         <button class="key full-only" data-act="type" aria-label="Tastatur öffnen">
@@ -241,7 +258,7 @@
   </div>
 </div>
 <script type="module">
-import { LiveView } from './live-view.js';
+import { LiveView, Meter, PROTOCOL } from './live-view.js';
 const $ = (s) => document.querySelector(s);
 const statusEl = $('#status'), pad = $('#pad'), field = $('#field');
 
@@ -269,9 +286,10 @@ function connect() {
   const url = location.protocol === 'https:' ? `wss://${location.host}/ws` : `ws://${location.hostname}:47801`;
   const socket = ws = new WebSocket(url);
   socket.binaryType = 'arraybuffer';
-  const player = liveView = new LiveView(view, marker, {
+  const player = liveView = new LiveView(view, { aim, cursor: $('#cursor') }, {
     visible: () => viewOn,
     shown: (n) => { if (socket === ws && socket.readyState === 1) socket.send(JSON.stringify({ t: 'shown', n })); },
+    placed: (meta) => { meter.placed(meta.q, performance.now()); showMeter(); },
     fallback: () => { if (socket === ws) syncView(); },
   });
   socket.onopen = () => socket.send(JSON.stringify({ t: 'auth', token }));
@@ -280,12 +298,23 @@ function connect() {
     if (typeof e.data !== 'string') { player.receive(e.data); return; }
     const m = JSON.parse(e.data);
     if (m.t === 'ok') {
+      // The agent was updated while this page stayed open: load the page that speaks its protocol.
+      // Once per connection attempt at most, in case the browser hands back the old page.
+      let reloaded = String(m.v); // without storage there is no telling, so no reload
+      try {
+        const last = sessionStorage.getItem('remotey-reloaded');
+        sessionStorage.setItem('remotey-reloaded', m.v);
+        reloaded = last;
+      } catch {}
+      if (m.v !== PROTOCOL && reloaded !== String(m.v)) return location.reload();
       ready = true;
       pad.textContent = m.ax ? '' : 'Am Mac fehlt die Bedienungshilfen-Freigabe für Remotey (Systemeinstellungen, Datenschutz & Sicherheit).';
       setStatus(m.ax ? 'Verbunden' : 'Freigabe fehlt', m.ax ? 'ok' : 'bad');
       sentView = '';
       syncView();
       if (viewOn) player.measureFrameRate(syncView);
+    } else if (m.t === 'cursor') {
+      player.setCursor(m);
     } else if (m.t === 'view' && m.ok === false) {
       viewOn = false;
       syncView();
@@ -330,13 +359,8 @@ function sendKey(k) { send({ t: 'key', k, mods: takeMods(), n: 1 }); }
 // ---- Trackpad: 1 finger moves, 2 fingers scroll, tap = click, 2-finger tap = right click
 const TAP_MS = 250, TAP_SLOP = 8;
 const points = new Map();
-let gesture = null, moveX = 0, moveY = 0, scrollX = 0, scrollY = 0, frame = 0;
-
-function flush() {
-  frame = 0;
-  if (moveX || moveY) { send({ t: 'm', dx: moveX, dy: moveY }); moveX = moveY = 0; }
-  if (scrollX || scrollY) { send({ t: 's', dx: scrollX, dy: scrollY }); scrollX = scrollY = 0; }
-}
+const meter = new Meter();
+let gesture = null, moveNumber = 0;
 pad.addEventListener('touchstart', (e) => {
   e.preventDefault();
   keepAwake();
@@ -359,13 +383,16 @@ pad.addEventListener('touchmove', (e) => {
   const wasTap = gesture.travel < TAP_SLOP;
   gesture.travel += dist;
   if (wasTap && gesture.travel < TAP_SLOP) return; // dead zone so a tap does not nudge the cursor
+  // Sent at once: the browser delivers touches once per frame already, waiting for the next would only add delay.
   if (points.size === 1) {
     const gain = 1 + Math.min(3.5, (dist / dt) * 2.2); // slow = precise, fast = far
-    moveX += dx * gain; moveY += dy * gain;
+    // The Mac returns the number with the first picture that shows the move, which times the round trip.
+    moveNumber = (moveNumber + 1) >>> 0;
+    send({ t: 'm', dx: dx * gain, dy: dy * gain, q: moveNumber });
+    if (viewOn && ready) meter.moved(moveNumber, performance.now());
   } else {
-    scrollX += (dx / points.size) * 1.6; scrollY += (dy / points.size) * 1.6;
+    send({ t: 's', dx: (dx / points.size) * 1.6, dy: (dy / points.size) * 1.6 });
   }
-  if (!frame) frame = requestAnimationFrame(flush);
 }, { passive: false });
 function padEnd(e) {
   e.preventDefault();
@@ -381,7 +408,7 @@ pad.addEventListener('touchcancel', padEnd, { passive: false });
 
 // ---- Live view: the Mac streams the screen region around the cursor into the display, and the
 // trackpad lies on top of it. Without the live view the same surface is a plain trackpad.
-const screenEl = $('#screen'), view = $('#view'), marker = $('#marker'), zoomEl = $('#zoom');
+const screenEl = $('#screen'), view = $('#view'), aim = $('#aim'), zoomEl = $('#zoom'), meterEl = $('#meter');
 const ZOOMS = [0.25, 0.5, 1, 1.5, 2];
 const wide = matchMedia('(orientation: landscape) and (max-height: 540px)'); // a phone on its side
 let viewOn = false, full = false, zoom = 0.5, sentView = '';
@@ -395,7 +422,7 @@ function syncView() {
   document.body.classList.toggle('wide', wide.matches);
   document.body.classList.toggle('full', full || wide.matches);
   view.hidden = !viewOn;
-  if (!viewOn) marker.hidden = true;
+  if (!viewOn) aim.hidden = true;
   $('#viewBtn').classList.toggle('on', viewOn);
   const step = ZOOMS.indexOf(zoom);
   zoomEl.style.setProperty('--i', step);
@@ -404,12 +431,32 @@ function syncView() {
   zoomEl.querySelectorAll('span').forEach((label, i) => label.classList.toggle('on', i === step));
   try { localStorage.setItem('remotey-view', viewOn ? '1' : '0'); localStorage.setItem('remotey-zoom', zoom); } catch {}
   const r = screenEl.getBoundingClientRect(); // measured after the layout change above
+  liveView?.fitCursor();
   const request = JSON.stringify({ t: 'view', on: viewOn, w: r.width, h: r.height, zoom,
     dpr: window.devicePixelRatio || 2, codec: liveView?.codec || 'jpeg', fps: liveView?.framesPerSecond || 60 });
   // Layout observers call this freely; an unchanged request must not restart the stream.
   if (ready && ws.readyState === 1 && request !== sentView) { sentView = request; ws.send(request); }
   if (!viewOn) liveView?.stopMeasuring();
   else if (!wasOn) liveView?.measureFrameRate(syncView);
+}
+// The readout follows the stream: written twice a second while messages arrive, and once more when they stop.
+let meterTimer = 0, meterText = '';
+function showMeter() {
+  if (meterTimer) return;
+  meterTimer = setTimeout(() => {
+    meterTimer = 0;
+    const { fps, ms, level } = meter.read(performance.now(), liveView?.framesPerSecond || 60);
+    const text = `${fps}|${ms ?? '–'}|${level}`;
+    if (text !== meterText) {
+      meterText = text;
+      meterEl.className = level === 'ok' ? '' : level;
+      meterEl.firstElementChild.firstElementChild.textContent = fps;
+      meterEl.lastElementChild.textContent = `${ms ?? '–'} ms`;
+      meterEl.setAttribute('aria-label', `Live-Bild: ${fps} Bilder pro Sekunde`
+        + (ms === null ? '' : `, ${ms} Millisekunden Verzögerung`));
+    }
+    if (fps && viewOn) showMeter();
+  }, 500);
 }
 function setFull(on) {
   full = on;

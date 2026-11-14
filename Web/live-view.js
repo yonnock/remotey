@@ -1,11 +1,23 @@
+// Must match Server.protocolVersion. The agent names its version when it accepts the token.
+export const PROTOCOL = 2;
+
+// A message from the agent: Float32 pointer x and y (0...1 inside the picture), Uint32 picture number,
+// Uint32 number of the last pointer move it includes, Float32 picture width in Mac points, then the picture.
+const HEADER = 20;
+
 // Owns decoding for one WebSocket. Closing it invalidates every pending async callback.
 export class LiveView {
-  constructor(canvas, marker, { visible, shown, fallback }) {
+  // `aim` is moved to the pointer's place and holds the marker and `cursor`, the pointer's picture.
+  // `shown` answers a picture by number, `placed` reports every message that reached the display.
+  constructor(canvas, { aim, cursor }, { visible, shown, placed, fallback }) {
     this.canvas = canvas;
-    this.context = canvas.getContext('2d');
-    this.marker = marker;
+    // Opaque and not bound to the page's own drawing where the browser allows it: less work per frame.
+    this.context = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    this.aim = aim;
+    this.cursor = cursor;
     this.visible = visible;
     this.shown = shown;
+    this.placed = placed;
     this.fallback = fallback;
     this.codec = typeof VideoDecoder === 'function' ? 'h264' : 'jpeg';
     this.framesPerSecond = 60;
@@ -16,6 +28,8 @@ export class LiveView {
     this.decoder = null;
     this.closed = false;
     this.refreshProbe = 0;
+    this.pointer = null;
+    this.viewWidth = 0;
   }
 
   // Measure rendering cadence, not the device name: ProMotion can still be limited to 60 Hz by Safari.
@@ -52,13 +66,22 @@ export class LiveView {
 
   async decode(buffer, epoch) {
     const head = new DataView(buffer);
-    const meta = { n: head.getUint32(8, true), x: head.getFloat32(0, true), y: head.getFloat32(4, true) };
-    if (head.getUint16(12) === 0xffd8) {
+    const meta = { x: head.getFloat32(0, true), y: head.getFloat32(4, true), n: head.getUint32(8, true),
+      q: head.getUint32(12, true), width: head.getFloat32(16, true) };
+    if (buffer.byteLength === HEADER) {
+      // Only the pointer moved, inside the picture sent last. While that one is still being decoded,
+      // the new place waits with it: the pointer never runs ahead of its picture.
+      const last = [...this.pending.values()].at(-1);
+      if (last) Object.assign(last, { x: meta.x, y: meta.y, q: meta.q });
+      else this.place(meta);
+      return;
+    }
+    if (head.getUint16(HEADER) === 0xffd8) {
       // Also handles a Mac without the required low-latency hardware encoder.
       if (this.codec !== 'jpeg') { this.useJPEG(); return; }
       let image;
       try {
-        image = await createImageBitmap(new Blob([new Uint8Array(buffer, 12)], { type: 'image/jpeg' }));
+        image = await createImageBitmap(new Blob([new Uint8Array(buffer, HEADER)], { type: 'image/jpeg' }));
         if (!this.closed && epoch === this.epoch) this.draw(image, meta);
       } finally {
         image?.close();
@@ -67,8 +90,8 @@ export class LiveView {
       return;
     }
     if (this.codec !== 'h264') return;
-    const key = head.getUint8(15) === 1;
-    const codec = 'avc1.' + [...new Uint8Array(buffer, 12, 3)].map((n) => n.toString(16).padStart(2, '0')).join('');
+    const key = head.getUint8(HEADER + 3) === 1;
+    const codec = 'avc1.' + [...new Uint8Array(buffer, HEADER, 3)].map((n) => n.toString(16).padStart(2, '0')).join('');
     if (!this.decoder || this.decoderCodec !== codec) {
       if (!key) throw new Error('H.264 stream must start with an IDR');
       const config = { codec, optimizeForLatency: true };
@@ -96,10 +119,10 @@ export class LiveView {
     // These timestamps correlate output to acknowledgements; frames are drawn immediately, not paced by them.
     const timestamp = meta.n;
     this.pending.set(timestamp, meta);
-    // A decoder which buffers more than our two-frame window must not leave the view stalled.
+    // A decoder which buffers more than the agent's window of pictures must not leave the view stalled.
     if (!this.timer) this.timer = setTimeout(() => this.useJPEG(), 2000);
     this.decoder.decode(new EncodedVideoChunk({
-      type: key ? 'key' : 'delta', timestamp, data: new Uint8Array(buffer, 16),
+      type: key ? 'key' : 'delta', timestamp, data: new Uint8Array(buffer, HEADER + 4),
     }));
   }
 
@@ -111,9 +134,38 @@ export class LiveView {
       this.canvas.height = height;
     }
     this.context.drawImage(image, 0, 0);
-    this.marker.style.left = meta.x * 100 + '%';
-    this.marker.style.top = meta.y * 100 + '%';
-    this.marker.hidden = false;
+    this.place(meta);
+  }
+
+  // Moves marker and pointer picture. `aim` covers the display, so a shift in percent of its own size
+  // is a place inside the picture, and the browser only has to move a layer: no layout, no repaint.
+  place(meta) {
+    if (!this.visible()) return;
+    this.aim.style.transform = `translate3d(${meta.x * 100}%,${meta.y * 100}%,0)`;
+    this.aim.hidden = false;
+    if (meta.width !== this.viewWidth) {
+      this.viewWidth = meta.width;
+      this.fitCursor();
+    }
+    this.placed?.(meta);
+  }
+
+  // The Mac's pointer is not part of the stream. It arrives as a picture whenever its shape changes.
+  setCursor({ png, w, h, x, y }) {
+    if (this.closed) return;
+    this.pointer = { w, h, x, y };
+    this.cursor.src = 'data:image/png;base64,' + png;
+    this.fitCursor();
+  }
+
+  // Call when the display changed size. The pointer is as large as in the picture, but never below
+  // half its size on the Mac, so it stays recognisable in the overview.
+  fitCursor() {
+    const display = this.canvas.clientWidth;
+    if (!this.pointer || !this.viewWidth || !display) return;
+    const scale = Math.max(0.5, display / this.viewWidth), { w, h, x, y } = this.pointer;
+    Object.assign(this.cursor.style, { width: w * scale + 'px', height: h * scale + 'px',
+      transform: `translate(${-x * scale}px,${-y * scale}px)` });
   }
 
   releaseDecoder() {
@@ -139,5 +191,46 @@ export class LiveView {
     this.epoch++;
     this.stopMeasuring();
     this.releaseDecoder();
+  }
+}
+
+// How good the live view is right now: updates of the display per second, and the time from sending a
+// pointer move until the display shows it (the way to the Mac and back, encoding and decoding).
+export class Meter {
+  constructor() {
+    this.shown = [];
+    this.moves = [];
+    this.sent = new Map();
+    this.delay = null;
+  }
+
+  // A pointer move with this number left for the Mac.
+  moved(q, now) {
+    this.moves.push(now);
+    this.sent.set(q, now);
+    if (this.sent.size > 240) this.sent.delete(this.sent.keys().next().value);
+  }
+
+  // The display shows a message that includes the move with this number.
+  placed(q, now) {
+    this.shown.push(now);
+    const left = this.sent.get(q);
+    if (left === undefined) return;
+    // Later messages with the same number show nothing new about the pointer.
+    for (const key of this.sent.keys()) { this.sent.delete(key); if (key === q) break; }
+    this.delay = this.delay === null ? now - left : this.delay + (now - left - this.delay) * 0.2;
+  }
+
+  // `target` is the frame rate the view asks for. A still screen sends nothing, so only a moving
+  // pointer shows whether the rate is reached. level: 'idle', 'ok', 'mid' or 'bad'.
+  read(now, target) {
+    const recent = (times) => { while (times.length && now - times[0] > 1000) times.shift(); return times.length; };
+    const fps = recent(this.shown), moving = recent(this.moves) >= target / 2;
+    const ms = this.delay === null ? null : Math.round(this.delay);
+    let level = 'ok';
+    if (!fps) level = 'idle';
+    else if (ms > 120 || (moving && fps < target * 0.4)) level = 'bad';
+    else if (ms > 60 || (moving && fps < target * 0.7)) level = 'mid';
+    return { fps, ms, level };
   }
 }

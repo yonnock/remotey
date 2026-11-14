@@ -2,7 +2,7 @@ import CoreImage
 import VideoToolbox
 
 /// One hardware encoder per view size. Call on the frame queue, with at most one encode pending.
-/// Output includes SPS/PPS on every IDR, so a resized or restarted view needs no separate config message.
+/// Output includes SPS/PPS with its IDR, so a resized or restarted view needs no separate config message.
 final class H264Encoder {
     struct Failure: Error { let status: OSStatus }
     enum Output {
@@ -41,8 +41,9 @@ final class H264Encoder {
                 kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_H264_Baseline_AutoLevel,
                 kVTCompressionPropertyKey_ExpectedFrameRate: framesPerSecond,
                 kVTCompressionPropertyKey_AverageBitRate: 4_000_000,
-                kVTCompressionPropertyKey_MaxKeyFrameInterval: framesPerSecond * 2,
-                kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: 2,
+                // The link is reliable and every size gets its own encoder, so one key frame starts the
+                // stream and no later one interrupts it with a burst of data.
+                kVTCompressionPropertyKey_MaxKeyFrameInterval: Int32.max,
             ] as CFDictionary))
             try Self.check(VTCompressionSessionPrepareToEncodeFrames(session))
         } catch {
