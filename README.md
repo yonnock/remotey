@@ -35,6 +35,10 @@ An input remote is remote control of your Mac, so the agent is locked down in th
 
 The live view sends screen content only to an authenticated client, only while it is switched on, over the same TLS connection.
 
+Connections that have not authenticated are closed after five seconds and limited to 32 at a time, so nobody without the token can exhaust the agent's sockets. The app is signed with the hardened runtime, so other processes on the Mac cannot load code into it and borrow its Accessibility and Screen Recording permissions.
+
+Known limit: the token is a file in `~/Library/Application Support/Remotey`, readable by every unsandboxed process running as you. Such a process can connect to the loopback port and gets the same input and screen access as the phone.
+
 ## Setup
 
 Requirements: macOS 14+, Xcode command line tools, Tailscale on the Mac and the iPhone (same account).
@@ -74,7 +78,7 @@ Text typed on the iOS keyboard is replayed on the Mac key by key.
 
 ```sh
 swift run                          # agent from the source tree, Web/ is re-read on every request
-swift test                         # hardware encoder: IDR, delta frames and new stream sizes
+swift test                         # hardware encoder; server: auth and limits for unauthenticated connections
 node --test scripts/live-view.test.mjs  # client decode, acknowledgements and JPEG fallback
 node scripts/smoke.mjs              # running agent: HTTP, auth, pointer and JPEG flow control
 node scripts/smoke.mjs --h264       # same checks for H.264, including IDR after restart/resize

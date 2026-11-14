@@ -18,7 +18,9 @@ if [ -z "$IDENTITY" ]; then
     echo "Keine Signatur-Identität gefunden. REMOTEY_SIGN_IDENTITY setzen." >&2
     exit 1
 fi
-codesign --force --sign "$IDENTITY" "$APP"
+# Hardened runtime: no other process may load code into Remotey (DYLD_INSERT_LIBRARIES, task ports)
+# and so borrow its Accessibility and Screen Recording permissions.
+codesign --force --options runtime --sign "$IDENTITY" "$APP"
 echo "Gebaut: $APP"
 
 if [ "${1:-}" = "--install" ]; then

@@ -45,13 +45,49 @@ final class Server {
         var fps: Int?
     }
 
-    init(token: String, input: Input) {
+    /// Connections that are not yet answered (HTTP) or authenticated (WebSocket), oldest first.
+    /// Anyone who reaches the ports gets this far without the token: local processes, web pages in
+    /// the Mac's browser, tailnet peers. Bounded in number and time so they cannot use up the
+    /// 256 file descriptors of a GUI app and lock the phone out.
+    static let maxPending = 32
+    private var pending: [NWConnection] = []
+    private let pendingTimeout: TimeInterval
+    private let ports: (http: UInt16, ws: UInt16)
+
+    init(token: String, input: Input, httpPort: UInt16 = Server.httpPort, wsPort: UInt16 = Server.wsPort,
+         pendingTimeout: TimeInterval = 5) {
         self.token = token
         self.input = input
+        self.ports = (httpPort, wsPort)
+        self.pendingTimeout = pendingTimeout
+    }
+
+    func stop() {
+        listeners.forEach { $0.cancel() }
+        listeners = []
+        pending.forEach { $0.cancel() }
+        clients.values.forEach { $0.connection.cancel() }
+    }
+
+    private func admit(_ connection: NWConnection) {
+        pending.append(connection)
+        if pending.count > Self.maxPending { pending.removeFirst().cancel() }
+        // Weak: a WebSocket cancelled before its handshake keeps its socket until the last reference is gone.
+        DispatchQueue.main.asyncAfter(deadline: .now() + pendingTimeout) { [weak self, weak connection] in
+            if let connection, self?.settle(connection) == true { connection.cancel() }
+        }
+    }
+
+    /// False if the connection was no longer pending.
+    @discardableResult
+    private func settle(_ connection: NWConnection) -> Bool {
+        guard let index = pending.firstIndex(where: { $0 === connection }) else { return false }
+        pending.remove(at: index)
+        return true
     }
 
     func start() throws {
-        let http = try listener(port: Self.httpPort, parameters: .tcp)
+        let http = try listener(port: ports.http, parameters: .tcp)
         http.newConnectionHandler = { [weak self] in self?.serveHTTP($0) }
 
         let wsOptions = NWProtocolWebSocket.Options()
@@ -59,7 +95,7 @@ final class Server {
         wsOptions.maximumMessageSize = 64 * 1024
         let wsParameters = NWParameters.tcp
         wsParameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
-        let ws = try listener(port: Self.wsPort, parameters: wsParameters)
+        let ws = try listener(port: ports.ws, parameters: wsParameters)
         ws.newConnectionHandler = { [weak self] in self?.serveWebSocket($0) }
 
         listeners = [http, ws]
@@ -75,10 +111,12 @@ final class Server {
     // MARK: HTTP
 
     private func serveHTTP(_ connection: NWConnection) {
+        admit(connection)
         connection.start(queue: .main)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
-            let requestLine = data.flatMap { String(data: $0, encoding: .utf8) }?
-                .components(separatedBy: "\r\n").first ?? ""
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
+            self?.settle(connection)
+            guard let data else { return connection.cancel() }
+            let requestLine = String(data: data, encoding: .utf8)?.components(separatedBy: "\r\n").first ?? ""
             let parts = requestLine.split(separator: " ")
             let path = parts.count > 1 ? String(parts[1].split(separator: "?").first ?? "") : ""
 
@@ -132,15 +170,14 @@ final class Server {
             switch state {
             case .failed, .cancelled:
                 guard let self, self.clients.removeValue(forKey: id) != nil else { return }
+                self.settle(connection)
                 if client.authed { self.input.releaseAll() }
                 if self.viewer === client { self.stopView() }
             default: break
             }
         }
+        admit(connection)
         connection.start(queue: .main)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            if !client.authed { connection.cancel() }
-        }
         receive(client)
     }
 
@@ -158,6 +195,7 @@ final class Server {
                 self.handle(message, from: client)
             } else if message.t == "auth", let candidate = message.token, Token.matches(candidate, self.token) {
                 client.authed = true
+                self.settle(client.connection)
                 self.send(client, #"{"t":"ok","ax":\#(AXIsProcessTrusted())}"#)
             } else {
                 self.send(client, #"{"t":"denied"}"#) { client.connection.cancel() }
