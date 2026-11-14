@@ -53,8 +53,10 @@ final class WireTests: XCTestCase {
         guard case .move(dx: 3.5, dy: -2, sequence: 7) = try command(#"{"t":"m","dx":3.5,"dy":-2,"q":7}"#) else { return XCTFail("move") }
         guard case .move(dx: 1, dy: 1, sequence: nil) = try command(#"{"t":"m","dx":1,"dy":1}"#) else { return XCTFail("move without a number") }
         guard case .scroll(dx: 0, dy: 12) = try command(#"{"t":"s","dx":0,"dy":12}"#) else { return XCTFail("scroll") }
-        guard case .click(.right) = try command(#"{"t":"c","b":"right"}"#) else { return XCTFail("click") }
-        guard case .button(.left, down: true) = try command(#"{"t":"b","b":"left","d":true}"#) else { return XCTFail("button") }
+        guard case .click(.right, mods: []) = try command(#"{"t":"c","b":"right"}"#) else { return XCTFail("click") }
+        guard case .click(.left, mods: ["alt"]) = try command(#"{"t":"c","b":"left","mods":["alt"]}"#) else { return XCTFail("click with a modifier") }
+        guard case .button(.left, down: true, mods: ["cmd", "shift"]) = try command(#"{"t":"b","b":"left","d":true,"mods":["cmd","shift"]}"#) else { return XCTFail("button") }
+        guard case .button(.left, down: false, mods: []) = try command(#"{"t":"b","b":"left","d":false}"#) else { return XCTFail("release") }
         guard case .text("hä") = try command(#"{"t":"text","s":"hä"}"#) else { return XCTFail("text") }
         guard case .key("w", mods: ["cmd"], count: 2) = try command(#"{"t":"key","k":"w","mods":["cmd"],"n":2}"#) else { return XCTFail("key") }
         guard case .media("play") = try command(#"{"t":"media","k":"play"}"#) else { return XCTFail("media") }

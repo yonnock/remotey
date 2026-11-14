@@ -75,7 +75,7 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 | Two fingers | Scroll |
 | Two-finger tap | Right click |
 | Hold "Links" and swipe with a second finger | Drag |
-| ⌘ ⌥ ⌃ ⇧ | Applies to the next key, e.g. ⌘ then `w` |
+| ⌘ ⌥ ⌃ ⇧ | Applies to the next key or click, e.g. ⌘ then `w`, or ⌥ then a tap. Armed before holding "Links", it stays for the whole drag |
 | "Bild" | Live view: the trackpad shows the screen around the pointer, so you steer on the picture itself |
 | Zoom switch | Tap a position or slide across them (0.25× to 2×) |
 | Readout next to "Bild" | Updates of the live view per second and the delay of a pointer move in milliseconds, measured from sending the move until the picture that shows it is drawn. Green is good, amber middling, red poor; grey while the screen is still |

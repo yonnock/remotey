@@ -188,8 +188,8 @@ final class Server {
             // The view follows at once instead of waiting for the screen to show the move.
             if viewer === client { screen.pointerMoved(applied: sequence) }
         case .scroll(let dx, let dy): input.scroll(dx: dx, dy: dy)
-        case .click(let button): input.click(button)
-        case .button(let button, let down): input.button(button, down: down)
+        case .click(let button, let mods): input.click(button, mods: mods)
+        case .button(let button, let down, let mods): input.button(button, down: down, mods: mods)
         case .text(let text): input.type(text)
         case .key(let key, let mods, let count): input.key(key, mods: mods, count: count)
         case .media(let key): input.media(key)

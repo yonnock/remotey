@@ -108,7 +108,7 @@
   .cap { min-width: 0; border-radius: 9px; background: var(--cap); display: grid; place-items: center;
     box-shadow: inset 0 1px 0 var(--line), 0 4px 0 var(--edge); transition: transform .05s, box-shadow .05s; }
   .cap.pressed, .cap:active { transform: translateY(3px); box-shadow: inset 0 1px 0 var(--line), 0 1px 0 var(--edge); }
-  /* An armed modifier stays latched down, on an amber edge, until the next key releases it. */
+  /* An armed modifier stays latched down, on an amber edge, until the next key or click releases it. */
   .cap.on { color: var(--accent); background: var(--surface); transform: translateY(3px);
     box-shadow: inset 0 2px 4px var(--edge), 0 1px 0 var(--accent); }
   .cap.accent { background: var(--accent); color: var(--accent-ink); box-shadow: 0 4px 0 var(--edge); }
@@ -339,7 +339,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') { connect(); keepAwake(); }
 });
 
-// ---- Sticky modifiers (apply to the next key, then release)
+// ---- Sticky modifiers (apply to the next key or click, then release)
 const mods = new Set();
 function takeMods() {
   const list = [...mods];
@@ -348,6 +348,7 @@ function takeMods() {
   return list;
 }
 function sendKey(k) { send({ t: 'key', k, mods: takeMods(), n: 1 }); }
+function sendClick(b) { send({ t: 'c', b, mods: takeMods() }); }
 
 // ---- Trackpad: 1 finger moves, 2 fingers scroll, tap = click, 2-finger tap = right click
 const TAP_MS = 250, TAP_SLOP = 8;
@@ -392,7 +393,7 @@ function padEnd(e) {
   for (const t of e.changedTouches) points.delete(t.identifier);
   if (points.size || !gesture) return;
   if (e.type === 'touchend' && gesture.travel < TAP_SLOP && e.timeStamp - gesture.start < TAP_MS) {
-    send({ t: 'c', b: gesture.fingers >= 2 ? 'right' : 'left' });
+    sendClick(gesture.fingers >= 2 ? 'right' : 'left');
   }
   gesture = null;
 }
@@ -517,7 +518,7 @@ function fire(b) {
   else if (d.act === 'type') field.focus();
   else if (d.key) sendKey(d.key);
   else if (d.media) send({ t: 'media', k: d.media });
-  else if (d.click) send({ t: 'c', b: d.click });
+  else if (d.click) sendClick(d.click);
   else if (d.mod) { mods.has(d.mod) ? mods.delete(d.mod) : mods.add(d.mod); b.classList.toggle('on', mods.has(d.mod)); }
 }
 document.querySelectorAll('button').forEach((b) => {
@@ -527,7 +528,8 @@ document.querySelectorAll('button').forEach((b) => {
     e.preventDefault();
     keepAwake();
     b.classList.add('pressed');
-    if (b.dataset.hold) return send({ t: 'b', b: b.dataset.hold, d: true });
+    // The Mac keeps the modifiers of the press until the release, so a drag carries them.
+    if (b.dataset.hold) return send({ t: 'b', b: b.dataset.hold, d: true, mods: takeMods() });
     if (b.dataset.act === 'type') return; // iOS opens the keyboard only for a focus made on touchend
     fire(b);
     if ('repeat' in b.dataset) delay = setTimeout(() => { repeat = setInterval(() => fire(b), 70); }, 400);
@@ -542,7 +544,7 @@ document.querySelectorAll('button').forEach((b) => {
   b.addEventListener('touchend', end, { passive: false });
   b.addEventListener('touchcancel', end, { passive: false });
   // Mouse/keyboard fallback for desktop browsers and assistive tech.
-  b.addEventListener('click', () => { if (b.dataset.hold) send({ t: 'c', b: b.dataset.hold }); else fire(b); });
+  b.addEventListener('click', () => { if (b.dataset.hold) sendClick(b.dataset.hold); else fire(b); });
 });
 
 // ---- Keyboard: the field mirrors what was typed; every change is diffed and replayed on the Mac.

@@ -9,8 +9,10 @@ enum Wire {
         /// `sequence` numbers the move, so that the page can time it until a `LiveUpdate` includes it.
         case move(dx: Double, dy: Double, sequence: UInt32?)
         case scroll(dx: Double, dy: Double)
-        case click(CGMouseButton)
-        case button(CGMouseButton, down: Bool)
+        /// `mods` are the modifiers held during the click, named as for `key`.
+        case click(CGMouseButton, mods: [String])
+        /// A press names its `mods`; the agent keeps them until the release.
+        case button(CGMouseButton, down: Bool, mods: [String])
         case text(String)
         case key(String, mods: [String], count: Int)
         case media(String)
@@ -57,8 +59,8 @@ enum Wire {
         case "auth": m.token.map { .auth(token: $0) }
         case "m": delta.map { .move(dx: $0.dx, dy: $0.dy, sequence: m.q) }
         case "s": delta.map { .scroll(dx: $0.dx, dy: $0.dy) }
-        case "c": .click(button)
-        case "b": m.d.map { .button(button, down: $0) }
+        case "c": .click(button, mods: m.mods ?? [])
+        case "b": m.d.map { .button(button, down: $0, mods: m.mods ?? []) }
         case "text": m.s.flatMap { $0.count <= 2000 ? .text($0) : nil }
         case "key": if let key = m.k, let mods = m.mods, let count = m.n { .key(key, mods: mods, count: count) } else { nil }
         case "media": m.k.map { .media($0) }

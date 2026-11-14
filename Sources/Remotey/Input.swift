@@ -4,7 +4,9 @@ import Carbon.HIToolbox
 /// Injects mouse, keyboard and media events. Needs the Accessibility permission. Main thread only.
 final class Input {
     private let source = CGEventSource(stateID: .hidSystemState)
-    private var held: Set<UInt32> = []
+    private let post: (CGEvent) -> Void
+    /// The buttons that are down, each with the modifiers of its press.
+    private var held: [UInt32: CGEventFlags] = [:]
     private var lastClick: (time: TimeInterval, point: CGPoint, button: CGMouseButton, count: Int64)?
     private var moveRemainder = CGPoint.zero
     private var scrollRemainder = CGPoint.zero
@@ -19,6 +21,11 @@ final class Input {
         "volup": 0, "voldown": 1, "mute": 7, "play": 16, "next": 17, "prev": 18,
     ]
 
+    /// `post` hands an event to the system; the tests collect the events instead.
+    init(post: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }) {
+        self.post = post
+    }
+
     // MARK: Mouse
 
     func move(dx: Double, dy: Double) {
@@ -31,15 +38,15 @@ final class Input {
 
         let from = Pointer.location
         let to = clamp(CGPoint(x: from.x + step.x, y: from.y + step.y), from: from)
-        let left = held.contains(CGMouseButton.left.rawValue)
-        let right = held.contains(CGMouseButton.right.rawValue)
+        let left = held[CGMouseButton.left.rawValue] != nil
+        let right = held[CGMouseButton.right.rawValue] != nil
         let type: CGEventType = left ? .leftMouseDragged : right ? .rightMouseDragged : .mouseMoved
         guard let e = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: to,
                               mouseButton: right && !left ? .right : .left) else { return }
         e.setIntegerValueField(.mouseEventDeltaX, value: Int64(step.x))
         e.setIntegerValueField(.mouseEventDeltaY, value: Int64(step.y))
-        e.flags = []
-        Pointer.post(e, movingTo: to)
+        e.flags = held.values.reduce([]) { $0.union($1) } // a drag keeps the modifiers of its press
+        Pointer.post(e, movingTo: to, with: post)
     }
 
     /// Keeps the cursor on a display: a target off every screen is clamped to the current one.
@@ -55,9 +62,12 @@ final class Input {
                        y: min(max(target.y, bounds.minY), bounds.maxY - 1))
     }
 
-    func button(_ button: CGMouseButton, down: Bool) {
-        guard held.contains(button.rawValue) != down else { return }
+    /// `mods` count for a press. The release and the moves in between carry the same ones, as with a real
+    /// keyboard, where the modifier stays down for the whole click or drag.
+    func button(_ button: CGMouseButton, down: Bool, mods: [String] = []) {
+        guard (held[button.rawValue] != nil) != down else { return }
         let point = Pointer.location
+        let flags = down ? Self.flags(mods) : held[button.rawValue] ?? []
         if down {
             let now = ProcessInfo.processInfo.systemUptime
             var count: Int64 = 1
@@ -66,9 +76,9 @@ final class Input {
                 count = last.count + 1
             }
             lastClick = (now, point, button, count)
-            held.insert(button.rawValue)
+            held[button.rawValue] = flags
         } else {
-            held.remove(button.rawValue)
+            held[button.rawValue] = nil
         }
         let type: CGEventType = button == .left
             ? (down ? .leftMouseDown : .leftMouseUp)
@@ -76,18 +86,18 @@ final class Input {
         guard let e = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
                               mouseButton: button) else { return }
         e.setIntegerValueField(.mouseEventClickState, value: lastClick?.count ?? 1)
-        e.flags = []
-        e.post(tap: .cghidEventTap)
+        e.flags = flags
+        post(e)
     }
 
-    func click(_ b: CGMouseButton) {
-        button(b, down: true)
+    func click(_ b: CGMouseButton, mods: [String] = []) {
+        button(b, down: true, mods: mods)
         button(b, down: false)
     }
 
     /// Called when a client disconnects so a drag never stays stuck.
     func releaseAll() {
-        for raw in held { if let b = CGMouseButton(rawValue: raw) { button(b, down: false) } }
+        for raw in held.keys { if let b = CGMouseButton(rawValue: raw) { button(b, down: false) } }
     }
 
     func scroll(dx: Double, dy: Double) {

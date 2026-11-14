@@ -16,8 +16,8 @@ enum Pointer {
     }
 
     /// Posts an event that moves the pointer to `target`, and follows the move until the window server reports it.
-    static func post(_ event: CGEvent, movingTo target: CGPoint) {
-        event.post(tap: .cghidEventTap)
+    static func post(_ event: CGEvent, movingTo target: CGPoint, with post: (CGEvent) -> Void) {
+        post(event)
         track.withLock { $0.post(target, reported: reported, now: ProcessInfo.processInfo.systemUptime) }
     }
 
