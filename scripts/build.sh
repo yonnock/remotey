@@ -28,6 +28,15 @@ if [ "${1:-}" = "--install" ]; then
     while pgrep -x Remotey >/dev/null; do sleep 0.1; done # `open` fails while the old instance is still quitting
     rm -rf /Applications/Remotey.app
     ditto "$APP" /Applications/Remotey.app
-    open /Applications/Remotey.app
+    # Launch Services can still hold the replaced bundle for a moment and refuse with error -600.
+    tries=0
+    until open /Applications/Remotey.app 2>/dev/null; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 10 ]; then
+            echo "Installiert, aber der Start schlug fehl. Von Hand starten: open /Applications/Remotey.app" >&2
+            exit 1
+        fi
+        sleep 0.5
+    done
     echo "Installiert und gestartet: /Applications/Remotey.app"
 fi
