@@ -15,15 +15,10 @@ enum Pointer {
         track.withLock { $0.location(reported: reported, now: ProcessInfo.processInfo.systemUptime) }
     }
 
-    /// Call after posting a move to `target`.
-    static func posted(_ target: CGPoint) {
+    /// Posts an event that moves the pointer to `target`, and follows the move until the window server reports it.
+    static func post(_ event: CGEvent, movingTo target: CGPoint) {
+        event.post(tap: .cghidEventTap)
         track.withLock { $0.post(target, reported: reported, now: ProcessInfo.processInfo.systemUptime) }
-    }
-
-    static func display(at point: CGPoint) -> CGDirectDisplayID? {
-        var id: CGDirectDisplayID = 0
-        var count: UInt32 = 0
-        return CGGetDisplaysWithPoint(point, 1, &id, &count) == .success && count > 0 ? id : nil
     }
 
     /// The pointer's current picture for the phone, which draws the pointer itself. Main thread only.

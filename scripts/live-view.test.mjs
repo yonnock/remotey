@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { LiveView, Meter } from '../Web/live-view.js';
+import { Cadence, H264, JPEG, LiveView, Meter, POINTER } from '../Web/live-view.js';
 
 function setup() {
   const outputs = [], chunks = [], drawn = [], shown = [], placed = [];
@@ -16,27 +18,26 @@ function setup() {
   const canvas = { clientWidth: 390, getContext: () => ({ drawImage: (image) => drawn.push(image.timestamp) }) };
   const aim = { style: {} }, cursor = { style: {} };
   const player = new LiveView(canvas, { aim, cursor }, {
-    visible: () => true, shown: (n) => shown.push(n), placed: (meta) => placed.push(meta), fallback: () => fallback++,
+    shown: (n) => shown.push(n), placed: (meta) => placed.push(meta), fallback: () => fallback++,
   });
+  player.show(true);
   const output = (index, n) => outputs[index].output({
     timestamp: n, displayWidth: 640, displayHeight: 360, close: () => closed++,
   });
   return { player, chunks, drawn, shown, placed, outputs, output, canvas, aim, cursor, get fallback() { return fallback; }, get closed() { return closed; } };
 }
 
-function header(buffer, n, q = 0, x = 0.5, y = 0.25) {
-  const head = new DataView(buffer);
-  head.setFloat32(0, x, true); head.setFloat32(4, y, true); head.setUint32(8, n, true);
-  head.setUint32(12, q, true); head.setFloat32(16, 780, true);
+/** An update as the agent sends it (Sources/Remotey/Wire.swift), of a view that runs at 60 fps. */
+function update(kind, picture, n, q = 0, x = 0.5, y = 0.25) {
+  const buffer = new ArrayBuffer(22 + picture.length), head = new DataView(buffer);
+  head.setUint8(0, kind); head.setUint8(1, 60); head.setFloat32(2, x, true); head.setFloat32(6, y, true);
+  head.setFloat32(10, 780, true); head.setUint32(14, q, true); head.setUint32(18, n, true);
+  new Uint8Array(buffer, 22).set(picture);
   return buffer;
 }
-function packet(n, key = true, level = 31, q = 0) {
-  const buffer = header(new ArrayBuffer(29), n, q);
-  new Uint8Array(buffer, 20).set([66, 192, level, +key, 0, 0, 0, 1, key ? 0x65 : 0x41]);
-  return buffer;
-}
-/** A message without a picture: the pointer moved inside the view. */
-const pointerOnly = (q, x, y) => header(new ArrayBuffer(20), 0, q, x, y);
+const packet = (n, key = true, level = 31) => update(H264, [66, 192, level, +key, 0, 0, 0, 1, key ? 0x65 : 0x41], n);
+/** The pointer moved inside the view. */
+const pointerOnly = (q, x, y) => update(POINTER, [], 0, q, x, y);
 
 test('submits both frames without waiting for output, but acknowledges only drawn frames', async () => {
   const s = setup();
@@ -112,8 +113,7 @@ test('a codec change discards and acknowledges old pending frames', async () => 
 
 test('JPEG from a Mac without hardware H.264 switches the request to JPEG', async () => {
   const s = setup();
-  const jpeg = packet(1);
-  new Uint8Array(jpeg, 20, 2).set([0xff, 0xd8]);
+  const jpeg = update(JPEG, [0xff, 0xd8, 0xff], 1);
   s.player.receive(jpeg); await s.player.chain;
   assert.equal(s.fallback, 1);
   let closed = false;
@@ -126,34 +126,57 @@ test('JPEG from a Mac without hardware H.264 switches the request to JPEG', asyn
 
 test('matches the rendering cadence up to 120 fps', () => {
   for (const hz of [30, 60, 90, 120, 144]) {
-    const s = setup(), callbacks = new Map();
+    const callbacks = new Map();
     let id = 0, changes = 0;
     globalThis.requestAnimationFrame = (callback) => { callbacks.set(++id, callback); return id; };
     globalThis.cancelAnimationFrame = (id) => callbacks.delete(id);
-    s.player.measureFrameRate(() => changes++);
+    const cadence = new Cadence(() => changes++);
+    cadence.measure();
     for (let i = 0; i < 25; i++) {
       const [key, callback] = callbacks.entries().next().value;
       callbacks.delete(key);
       callback(i * 1000 / hz);
     }
-    assert.equal(s.player.framesPerSecond, Math.min(hz, 120));
+    assert.equal(cadence.framesPerSecond, Math.min(hz, 120));
     assert.equal(changes, hz !== 60 ? 1 : 0);
     assert.equal(callbacks.size, 0);
-    s.player.close();
   }
 });
 
-test('turning off the view or closing the connection cancels refresh measurement', () => {
-  const s = setup(), callbacks = new Map();
+test('a stopped or restarted probe of the cadence leaves no frame callback behind', () => {
+  const callbacks = new Map();
   let id = 0;
   globalThis.requestAnimationFrame = (callback) => { callbacks.set(++id, callback); return id; };
   globalThis.cancelAnimationFrame = (id) => callbacks.delete(id);
-  s.player.measureFrameRate(() => assert.fail('cancelled probe completed'));
-  s.player.stopMeasuring();
+  const cadence = new Cadence(() => assert.fail('cancelled probe completed'));
+  cadence.measure();
+  cadence.measure();
+  assert.equal(callbacks.size, 1);
+  cadence.stop();
   assert.equal(callbacks.size, 0);
-  s.player.measureFrameRate(() => assert.fail('closed probe completed'));
-  s.player.close();
-  assert.equal(callbacks.size, 0);
+});
+
+test('hiding the view takes the pointer away', async () => {
+  const s = setup();
+  try {
+    s.player.receive(packet(1)); await s.player.chain;
+    s.output(0, 1);
+    assert.equal(s.aim.hidden, false);
+    s.player.show(false);
+    assert.equal(s.aim.hidden, true);
+  } finally { s.player.close(); }
+});
+
+test('a hidden view draws nothing but still answers its pictures', async () => {
+  const s = setup();
+  try {
+    s.player.show(false);
+    s.player.receive(packet(1)); await s.player.chain;
+    s.output(0, 1);
+    assert.deepEqual(s.drawn, []);
+    assert.deepEqual(s.placed, []);
+    assert.deepEqual(s.shown, [1]);
+  } finally { s.player.close(); }
 });
 
 test('a pointer move without a picture moves the marker at once and is not answered', async () => {
@@ -204,24 +227,25 @@ test('the pointer picture is as large as in the view, but at least half its size
 
 test('the meter counts updates per second and times a move until it shows', () => {
   const meter = new Meter();
-  assert.deepEqual(meter.read(0, 60), { fps: 0, ms: null, level: 'idle' });
+  assert.deepEqual(meter.read(0), { fps: 0, ms: null, level: 'idle' });
   // A second of steady movement at 60 Hz, each move shown 30 ms later.
-  for (let i = 1; i <= 60; i++) { meter.moved(i, i * 16); meter.placed(i, i * 16 + 30); }
-  assert.deepEqual(meter.read(1000, 60), { fps: 60, ms: 30, level: 'ok' });
-  // Messages that repeat a number show nothing new about the pointer and are not timed again.
-  meter.placed(60, 1500);
-  assert.equal(meter.read(1500, 60).ms, 30);
-  assert.deepEqual(meter.read(5000, 60), { fps: 0, ms: 30, level: 'idle' });
+  for (let i = 1; i <= 60; i++) { meter.moved(i, i * 16); meter.placed({ fps: 60, q: i }, i * 16 + 30); }
+  assert.deepEqual(meter.read(1000), { fps: 60, ms: 30, level: 'ok' });
+  // Updates that repeat a number show nothing new about the pointer and are not timed again.
+  meter.placed({ fps: 60, q: 60 }, 1500);
+  assert.equal(meter.read(1500).ms, 30);
+  assert.deepEqual(meter.read(5000), { fps: 0, ms: 30, level: 'idle' });
 });
 
 test('the meter rates delay always, and the frame rate only while the pointer moves', () => {
-  const run = (shownEvery, delay, moving = true) => {
+  // `rate` is what the view runs at, as the agent names it in every update.
+  const run = (shownEvery, delay, moving = true, rate = 60) => {
     const meter = new Meter();
     for (let i = 1; i <= 60; i++) {
       if (moving) meter.moved(i, i * 16);
-      if (i % shownEvery === 0) meter.placed(i, i * 16 + (moving ? delay : 0));
+      if (i % shownEvery === 0) meter.placed({ fps: rate, q: i }, i * 16 + (moving ? delay : 0));
     }
-    return meter.read(1000 + (moving ? delay : 0), 60).level;
+    return meter.read(1000 + (moving ? delay : 0)).level;
   };
   assert.equal(run(1, 30), 'ok');
   assert.equal(run(1, 80), 'mid');
@@ -229,13 +253,22 @@ test('the meter rates delay always, and the frame rate only while the pointer mo
   assert.equal(run(2, 30), 'mid', 'half the frames of a moving pointer');
   assert.equal(run(4, 30), 'bad');
   assert.equal(run(4, 0, false), 'ok', 'a clock ticking on a still screen needs no more');
+  assert.equal(run(2, 30, true, 30), 'ok', 'a view the Mac runs at 30 fps is complete with 30');
 });
 
 test('a move that never shows does not grow the meter without bound', () => {
   const meter = new Meter();
   for (let i = 1; i <= 1000; i++) meter.moved(i, i);
   assert.equal(meter.sent.size, 240);
-  meter.placed(1000, 1040);
+  meter.placed({ fps: 60, q: 1000 }, 1040);
   assert.equal(meter.sent.size, 0);
-  assert.equal(meter.read(1040, 60).ms, 40);
+  assert.equal(meter.read(1040).ms, 40);
+});
+
+// Nothing else loads the page's own script before a browser does.
+test('the inline script of the page parses', () => {
+  const html = readFileSync(new URL('../Web/index.html', import.meta.url), 'utf8');
+  const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
+  const check = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: script, encoding: 'utf8' });
+  assert.equal(check.status, 0, check.stderr);
 });

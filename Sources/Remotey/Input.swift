@@ -39,14 +39,18 @@ final class Input {
         e.setIntegerValueField(.mouseEventDeltaX, value: Int64(step.x))
         e.setIntegerValueField(.mouseEventDeltaY, value: Int64(step.y))
         e.flags = []
-        e.post(tap: .cghidEventTap)
-        Pointer.posted(to)
+        Pointer.post(e, movingTo: to)
     }
 
     /// Keeps the cursor on a display: a target off every screen is clamped to the current one.
     private func clamp(_ target: CGPoint, from: CGPoint) -> CGPoint {
-        guard Pointer.display(at: target) == nil else { return target }
-        let bounds = CGDisplayBounds(Pointer.display(at: from) ?? CGMainDisplayID())
+        func display(at point: CGPoint) -> CGDirectDisplayID? {
+            var id: CGDirectDisplayID = 0
+            var count: UInt32 = 0
+            return CGGetDisplaysWithPoint(point, 1, &id, &count) == .success && count > 0 ? id : nil
+        }
+        guard display(at: target) == nil else { return target }
+        let bounds = CGDisplayBounds(display(at: from) ?? CGMainDisplayID())
         return CGPoint(x: min(max(target.x, bounds.minX), bounds.maxX - 1),
                        y: min(max(target.y, bounds.minY), bounds.maxY - 1))
     }

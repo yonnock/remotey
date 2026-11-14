@@ -1,0 +1,118 @@
+import CoreGraphics
+import Foundation
+
+/// Everything the agent and the page say to each other. `Web/live-view.js` holds the page's half.
+enum Wire {
+    /// What the page says. A message is JSON; `t` names its kind, the other fields belong to one kind or another.
+    enum Command {
+        case auth(token: String)
+        /// `sequence` numbers the move, so that the page can time it until a `LiveUpdate` includes it.
+        case move(dx: Double, dy: Double, sequence: UInt32?)
+        case scroll(dx: Double, dy: Double)
+        case click(CGMouseButton)
+        case button(CGMouseButton, down: Bool)
+        case text(String)
+        case key(String, mods: [String], count: Int)
+        case media(String)
+        /// Nil switches the live view off. The page asks for 30 to 120 frames per second, as it measures its display.
+        case view(ScreenView.Request?)
+        /// The page has drawn or discarded the picture with this number.
+        case shown(UInt32)
+        /// Nothing the agent acts on: an unknown kind, a missing field, a value out of range.
+        case ignored
+    }
+
+    private struct Fields: Decodable {
+        let t: String
+        var token: String?
+        var dx: Double?
+        var dy: Double?
+        var b: String?
+        var d: Bool?
+        var s: String?
+        var k: String?
+        var n: Int?
+        var mods: [String]?
+        var on: Bool?
+        var w: Double?
+        var h: Double?
+        var zoom: Double?
+        var dpr: Double?
+        var codec: String?
+        var fps: Int?
+        var q: UInt32?
+    }
+
+    private static let decoder = JSONDecoder()
+
+    /// Throws for anything that is not a message at all.
+    static func command(from data: Data) throws -> Command {
+        let m = try decoder.decode(Fields.self, from: data)
+        var delta: (dx: Double, dy: Double)? {
+            guard let dx = m.dx, let dy = m.dy, dx.isFinite, dy.isFinite, abs(dx) <= 5000, abs(dy) <= 5000 else { return nil }
+            return (dx, dy)
+        }
+        let button: CGMouseButton = m.b == "right" ? .right : .left
+        let command: Command? = switch m.t {
+        case "auth": m.token.map { .auth(token: $0) }
+        case "m": delta.map { .move(dx: $0.dx, dy: $0.dy, sequence: m.q) }
+        case "s": delta.map { .scroll(dx: $0.dx, dy: $0.dy) }
+        case "c": .click(button)
+        case "b": m.d.map { .button(button, down: $0) }
+        case "text": m.s.flatMap { $0.count <= 2000 ? .text($0) : nil }
+        case "key": if let key = m.k, let mods = m.mods, let count = m.n { .key(key, mods: mods, count: count) } else { nil }
+        case "media": m.k.map { .media($0) }
+        case "view": .view(view(m))
+        case "shown": m.n.flatMap(UInt32.init(exactly:)).map { .shown($0) }
+        default: nil
+        }
+        return command ?? .ignored
+    }
+
+    private static func view(_ m: Fields) -> ScreenView.Request? {
+        guard m.on == true, let width = m.w, let height = m.h, let zoom = m.zoom, let pixelRatio = m.dpr,
+              let codec = m.codec, let fps = m.fps else { return nil }
+        return ScreenView.Request(width: width, height: height, zoom: zoom, pixelRatio: pixelRatio, h264: codec == "h264", fps: fps)
+    }
+
+    /// The token was right. `page` is `Web.version`: a page that was loaded from an older agent reloads itself.
+    static func accepted(accessibility: Bool, page: String) -> String {
+        #"{"t":"ok","ax":\#(accessibility),"page":"\#(page)"}"#
+    }
+
+    static let denied = #"{"t":"denied"}"#
+
+    /// The live view needs the Screen Recording permission.
+    static let viewRefused = #"{"t":"view","ok":false}"#
+
+    /// The pointer's picture, which the page draws at the place every `LiveUpdate` names. Sizes are in points.
+    static func cursor(_ picture: Pointer.Picture) -> String? {
+        picture.png.map {
+            #"{"t":"cursor","png":"\#($0.base64EncodedString())","w":\#(Double(picture.size.width)),"#
+                + #""h":\#(Double(picture.size.height)),"x":\#(Double(picture.hotSpot.x)),"y":\#(Double(picture.hotSpot.y))}"#
+        }
+    }
+}
+
+extension LiveUpdate {
+    static let headerSize = 22
+
+    /// One binary message, little endian: UInt8 kind (0 pointer only, 1 JPEG, 2 H.264), UInt8 frames per second,
+    /// Float32 pointer x, Float32 pointer y, Float32 width, UInt32 sequence, UInt32 picture number, then the picture.
+    var data: Data {
+        let (kind, payload): (UInt8, Data) = switch picture?.content {
+        case nil: (0, Data())
+        case .jpeg(let data): (1, data)
+        case .h264(let data): (2, data)
+        }
+        var data = Data(capacity: Self.headerSize + payload.count)
+        data.append(kind)
+        data.append(UInt8(clamping: framesPerSecond))
+        for value in [Float32(pointer.x).bitPattern, Float32(pointer.y).bitPattern, Float32(width).bitPattern,
+                      sequence, picture?.number ?? 0] {
+            withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+        }
+        data.append(payload)
+        return data
+    }
+}

@@ -1,21 +1,17 @@
 // Smoke test against a running agent: HTTP page, auth, pointer movement, live view flow control.
 // Usage: node scripts/smoke.mjs [--h264] [--fps=120] [--capture=/tmp/view.h264]   (moves the cursor a little and back; sends no keystrokes)
 // Close Remotey on the phone first: the most recent viewer gets the live view, so an open phone takes it back.
-import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { writeFileSync } from 'node:fs';
+import { H264, JPEG, POINTER, parseH264, parseUpdate } from '../Web/live-view.js';
+import { HTTP, fail, open, pointer, sleep, token } from './agent.mjs';
 
-const HTTP = 'http://127.0.0.1:47800', WS = 'ws://127.0.0.1:47801/ws';
 const codec = process.argv.includes('--h264') ? 'h264' : 'jpeg';
 const fps = Number(process.argv.find((arg) => arg.startsWith('--fps='))?.slice(6) || 60);
 const capture = process.argv.find((arg) => arg.startsWith('--capture='))?.slice(10);
 const packets = [];
-const token = readFileSync(`${homedir()}/Library/Application Support/Remotey/token`, 'utf8').trim();
-const fail = (msg) => { console.error('FAIL', msg); process.exit(1); };
 if (capture && codec !== 'h264') fail('--capture requires --h264');
 if (!Number.isInteger(fps) || fps < 30 || fps > 120) fail('--fps must be an integer from 30 to 120');
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const cursorX = () => +execFileSync('osascript', ['-l', 'JavaScript', '-e', 'ObjC.import("AppKit"); $.NSEvent.mouseLocation.x']);
+const cursorX = () => pointer()[0];
 
 const page = await fetch(`${HTTP}/`);
 if (page.status !== 200 || !(await page.text()).includes('<title>Remotey</title>')) fail('page');
@@ -27,15 +23,6 @@ if (decoderModule.status !== 200 || !decoderModule.headers.get('content-type')?.
     || !(await decoderModule.text()).includes('export class LiveView')) fail('decoder module');
 console.log('ok   http: page, decoder module, icon, 404');
 
-/** Opens a socket and sends `first`; resolves with the first reply, or null once the socket closed without one. */
-function open(first) {
-  const ws = new WebSocket(WS);
-  ws.binaryType = 'arraybuffer';
-  const closed = new Promise((r) => { ws.onclose = () => r(null); });
-  const reply = new Promise((r) => { ws.onmessage = (e) => r(JSON.parse(e.data)); });
-  ws.onopen = () => ws.send(JSON.stringify(first));
-  return { ws, closed, reply: Promise.race([reply, closed]) };
-}
 const within = (promise, ms) => Promise.race([promise.then(() => true), sleep(ms).then(() => false)]);
 
 const bad = open({ t: 'auth', token: 'wrong-token' });
@@ -50,7 +37,7 @@ const good = open({ t: 'auth', token });
 const hello = await good.reply;
 if (hello?.t !== 'ok') fail(`auth failed: ${JSON.stringify(hello)}`);
 console.log(`ok   ws: authenticated, accessibility=${hello.ax}`);
-const send = (msg) => good.ws.send(JSON.stringify(msg));
+const send = good.send;
 
 if (hello.ax) {
   const start = cursorX();
@@ -72,33 +59,34 @@ if (hello.ax) {
 // Live view: the agent may only have a bounded number of frames under way until the client reports
 // them shown. Otherwise frames pile up in buffers on a slow link and the picture lags behind.
 // Two until the first answer. After that the agent allows for the time an answer takes, up to six pictures.
-const MAX_IN_FLIGHT = 2, MAX_WINDOW = 6, HEADER = 20;
-let frames = 0, bytes = 0, acking = false, denied = false, held = [], expectKey = true, keyFrames = 0, cursors = 0, moves = 0;
-const shown = (frame) => send({ t: 'shown', n: new DataView(frame).getUint32(8, true) });
-good.ws.onmessage = (e) => {
+const MAX_IN_FLIGHT = 2, MAX_WINDOW = 6;
+let frames = 0, bytes = 0, acking = false, denied = false, held = [], expectKey = true, keyFrames = 0, cursors = 0;
+const shown = (n) => send({ t: 'shown', n });
+good.onMessage = (e) => {
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data);
     if (m.t === 'cursor') {
       if (!(m.w > 0 && m.h > 0 && m.x >= 0 && m.y >= 0) || !Buffer.from(m.png, 'base64').subarray(1, 4).equals(Buffer.from('PNG'))) fail('pointer picture');
       cursors++;
-    } else denied = m.ok === false;
+    } else if (m.t === 'view') denied = m.ok === false;
     return;
   }
-  const head = new DataView(e.data);
-  if (!(head.getFloat32(16, true) > 0)) fail('message without the width of the picture');
+  const update = parseUpdate(e.data);
+  if (!(update.width > 0)) fail('update without the width of the picture');
   // The pointer moved inside the view: no picture, no answer expected.
-  if (e.data.byteLength === HEADER) { if (head.getUint32(8, true) !== 0) fail('numbered message without a picture'); moves++; return; }
+  if (update.kind === POINTER) { if (update.picture.length) fail('pointer update with a picture'); return; }
+  if (update.kind !== (codec === 'h264' ? H264 : JPEG)) fail(`agent sent a picture of kind ${update.kind} instead of ${codec}`);
   if (codec === 'h264') {
-    if (head.getUint16(HEADER) === 0xffd8) fail('agent sent JPEG instead of H.264');
-    if (expectKey && head.getUint8(HEADER + 3) !== 1) fail('new H.264 stream did not start with an IDR');
+    const { key, data } = parseH264(update.picture);
+    if (expectKey && !key) fail('new H.264 stream did not start with an IDR');
     expectKey = false;
-    if (head.getUint8(HEADER + 3) === 1) keyFrames++;
-    if (head.getUint32(HEADER + 4) !== 1) fail('H.264 payload is not Annex B');
-    if (capture) packets.push(Buffer.from(e.data, HEADER + 4));
-  } else if (head.getUint16(HEADER) !== 0xffd8) fail('agent did not send the requested JPEG fallback');
+    if (key) keyFrames++;
+    if (Buffer.from(data.subarray(0, 4)).readUInt32BE() !== 1) fail('H.264 payload is not Annex B');
+    if (capture) packets.push(Buffer.from(data));
+  } else if (Buffer.from(update.picture.subarray(0, 2)).readUInt16BE() !== 0xffd8) fail('JPEG picture without its marker');
   frames++;
   bytes += e.data.byteLength;
-  if (acking) shown(e.data); else held.push(e.data);
+  if (acking) shown(update.n); else held.push(update.n);
 };
 /** Moves the cursor in circles for a second so the screen keeps changing; ends where it started. */
 async function stir() {
@@ -123,7 +111,7 @@ if (denied) {
     // It comes more than a second late, so the window opens all the way: one picture answered, the first still not.
     const later = held.at(-1);
     shown(later);
-    send({ t: 'shown', n: new DataView(later).getUint32(8, true) + 1000 });
+    send({ t: 'shown', n: later + 1000 });
     await stir();
     shown(later); // duplicate answers cannot create more send credit
     await stir();
@@ -156,5 +144,5 @@ if (denied) {
     console.log('ok   view: resize continues with a fresh stream');
   }
 }
-good.ws.close();
+good.close();
 if (capture) writeFileSync(capture, Buffer.concat(packets));

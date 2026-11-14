@@ -10,7 +10,7 @@ APP=build/Remotey.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Remotey "$APP/Contents/MacOS/Remotey"
-cp Web/index.html Web/live-view.js Web/icon.png "$APP/Contents/Resources/"
+cp -R Web "$APP/Contents/Resources/Web"
 cp Support/Info.plist "$APP/Contents/Info.plist"
 
 IDENTITY=${REMOTEY_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ { print $2; exit }')}

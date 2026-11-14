@@ -12,45 +12,21 @@ final class Server {
     private let input: Input
     private var listeners: [NWListener] = []
     private var clients: [ObjectIdentifier: Client] = [:]
-    private lazy var screen = ScreenView(send: { [weak self] frame in
+    private lazy var screen = ScreenView(update: { [weak self] update in
         let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
         let context = NWConnection.ContentContext(identifier: "frame", metadata: [metadata])
-        self?.viewer?.connection.send(content: frame, contentContext: context, completion: .idempotent)
+        self?.viewer?.connection.send(content: update.data, contentContext: context, completion: .idempotent)
     }, cursor: { [weak self] picture in
-        guard let self, let viewer = self.viewer else { return }
-        self.send(viewer, picture)
+        guard let self, let viewer = self.viewer, let message = Wire.cursor(picture) else { return false }
+        self.send(viewer, message)
+        return true
     })
     private weak var viewer: Client?
-    private let decoder = JSONDecoder()
-
-    /// The page compares this with its own number and reloads itself after an update of the agent.
-    static let protocolVersion = 2
 
     private final class Client {
         let connection: NWConnection
         var authed = false
         init(_ connection: NWConnection) { self.connection = connection }
-    }
-
-    private struct Message: Decodable {
-        let t: String
-        var token: String?
-        var dx: Double?
-        var dy: Double?
-        var b: String?
-        var d: Bool?
-        var s: String?
-        var k: String?
-        var n: Int?
-        var mods: [String]?
-        var on: Bool?
-        var w: Double?
-        var h: Double?
-        var zoom: Double?
-        var dpr: Double?
-        var codec: String?
-        var fps: Int?
-        var q: UInt32?
     }
 
     /// Connections that are not yet answered (HTTP) or authenticated (WebSocket), oldest first.
@@ -132,14 +108,8 @@ final class Server {
             let path = parts.count > 1 ? String(parts[1].split(separator: "?").first ?? "") : ""
 
             var status = "404 Not Found", type = "text/plain; charset=utf-8", body = Data("Not found".utf8)
-            if parts.first == "GET" {
-                if path == "/" || path == "/index.html" {
-                    (status, type, body) = ("200 OK", "text/html; charset=utf-8", Self.resource("index", "html"))
-                } else if path == "/live-view.js" {
-                    (status, type, body) = ("200 OK", "text/javascript; charset=utf-8", Self.resource("live-view", "js"))
-                } else if path == "/icon.png" {
-                    (status, type, body) = ("200 OK", "image/png", Self.resource("icon", "png"))
-                }
+            if parts.first == "GET", let file = Web.file(path == "/" ? "index.html" : String(path.dropFirst())) {
+                (status, type, body) = ("200 OK", file.type, file.body)
             }
             let head = [
                 "HTTP/1.1 \(status)",
@@ -157,18 +127,6 @@ final class Server {
                 connection.cancel()
             })
         }
-    }
-
-    /// Bundled files in the app; read from the source tree on every request during `swift run`.
-    private static func resource(_ name: String, _ ext: String) -> Data {
-        if let url = Bundle.main.url(forResource: name, withExtension: ext),
-           let data = try? Data(contentsOf: url) {
-            return data
-        }
-        let dev = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Web/\(name).\(ext)")
-        return (try? Data(contentsOf: dev)) ?? Data("\(name).\(ext) fehlt".utf8)
     }
 
     // MARK: WebSocket
@@ -198,18 +156,18 @@ final class Server {
                   let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
                     as? NWProtocolWebSocket.Metadata,
                   metadata.opcode == .text || metadata.opcode == .binary,
-                  let data, let message = try? self.decoder.decode(Message.self, from: data) else {
+                  let data, let command = try? Wire.command(from: data) else {
                 client.connection.cancel()
                 return
             }
             if client.authed {
-                self.handle(message, from: client)
-            } else if message.t == "auth", let candidate = message.token, Token.matches(candidate, self.token) {
+                self.handle(command, from: client)
+            } else if case .auth(let candidate) = command, Token.matches(candidate, self.token) {
                 client.authed = true
                 self.settle(client.connection)
-                self.send(client, #"{"t":"ok","ax":\#(AXIsProcessTrusted()),"v":\#(Self.protocolVersion)}"#)
+                self.send(client, Wire.accepted(accessibility: AXIsProcessTrusted(), page: Web.version))
             } else {
-                self.send(client, #"{"t":"denied"}"#) { client.connection.cancel() }
+                self.send(client, Wire.denied) { client.connection.cancel() }
                 return
             }
             self.receive(client)
@@ -223,42 +181,33 @@ final class Server {
                                completion: .contentProcessed { _ in then?() })
     }
 
-    private func handle(_ m: Message, from client: Client) {
-        func delta() -> (Double, Double)? {
-            guard let dx = m.dx, let dy = m.dy, dx.isFinite, dy.isFinite,
-                  abs(dx) <= 5000, abs(dy) <= 5000 else { return nil }
-            return (dx, dy)
-        }
-        let button: CGMouseButton = m.b == "right" ? .right : .left
-        switch m.t {
-        case "m":
-            guard let (dx, dy) = delta() else { break }
+    private func handle(_ command: Wire.Command, from client: Client) {
+        switch command {
+        case .move(let dx, let dy, let sequence):
             input.move(dx: dx, dy: dy)
             // The view follows at once instead of waiting for the screen to show the move.
-            if viewer === client { screen.pointerMoved(applied: m.q) }
-        case "s": if let (dx, dy) = delta() { input.scroll(dx: dx, dy: dy) }
-        case "c": input.click(button)
-        case "b": if let down = m.d { input.button(button, down: down) }
-        case "text": if let s = m.s, s.count <= 2000 { input.type(s) }
-        case "key": if let k = m.k { input.key(k, mods: m.mods ?? [], count: m.n ?? 1) }
-        case "media": if let k = m.k { input.media(k) }
-        case "view": view(m, for: client)
-        case "shown": if viewer === client, let n = m.n.flatMap(UInt32.init(exactly:)) { screen.frameShown(n) }
-        default: break
+            if viewer === client { screen.pointerMoved(applied: sequence) }
+        case .scroll(let dx, let dy): input.scroll(dx: dx, dy: dy)
+        case .click(let button): input.click(button)
+        case .button(let button, let down): input.button(button, down: down)
+        case .text(let text): input.type(text)
+        case .key(let key, let mods, let count): input.key(key, mods: mods, count: count)
+        case .media(let key): input.media(key)
+        case .view(let request): view(request, for: client)
+        case .shown(let number): if viewer === client { screen.frameShown(number) }
+        case .auth, .ignored: break
         }
     }
 
     /// Switches the live view on (or resizes it) for one client; the most recent requester wins.
-    private func view(_ m: Message, for client: Client) {
-        guard m.on == true, let width = m.w, let height = m.h,
-              let request = ScreenView.Request(width: width, height: height, zoom: m.zoom ?? 1,
-                                               pixelRatio: m.dpr ?? 2, h264: m.codec == "h264", fps: m.fps ?? 60) else {
+    private func view(_ request: ScreenView.Request?, for client: Client) {
+        guard let request else {
             if viewer === client { stopView() }
             return
         }
         guard CGPreflightScreenCaptureAccess() else {
             CGRequestScreenCaptureAccess()
-            return send(client, #"{"t":"view","ok":false}"#)
+            return send(client, Wire.viewRefused)
         }
         if viewer !== client { stopView() }
         viewer = client

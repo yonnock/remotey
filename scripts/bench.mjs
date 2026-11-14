@@ -4,10 +4,9 @@
 // Close Remotey on the phone first: the most recent viewer gets the live view.
 // Frames are answered on arrival, so the numbers are the Mac's side: no decoding, no network.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { POINTER, parseUpdate } from '../Web/live-view.js';
+import { fail, open, pointer, sleep, token } from './agent.mjs';
 
-const WS = 'ws://127.0.0.1:47801/ws';
 const codec = process.argv.includes('--jpeg') ? 'jpeg' : 'h264';
 const fps = Number(process.argv.find((arg) => arg.startsWith('--fps='))?.slice(6) || 120);
 /** Moves per second while circling. Above the frame rate no interval stays without a move, which shows what the agent can deliver. */
@@ -16,13 +15,7 @@ const moveRate = Number(process.argv.find((arg) => arg.startsWith('--move-rate='
 const [width, height] = (process.argv.find((arg) => arg.startsWith('--size='))?.slice(7) || '390x844').split('x').map(Number);
 /** Answers every frame this late, like a phone that needs time to receive, decode and draw it. */
 const ackDelay = Number(process.argv.find((arg) => arg.startsWith('--ack-delay='))?.slice(12) || 0);
-const token = readFileSync(`${homedir()}/Library/Application Support/Remotey/token`, 'utf8').trim();
-const fail = (msg) => { console.error('FAIL', msg); process.exit(1); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sh = (cmd, ...args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
-/** Pointer in AppKit coordinates (origin bottom left, y up). */
-const pointer = () => sh('osascript', '-l', 'JavaScript', '-e',
-  'ObjC.import("AppKit"); const p = $.NSEvent.mouseLocation; p.x + " " + p.y').split(' ').map(Number);
 const pid = (name) => sh('pgrep', '-x', name).split('\n')[0];
 /** CPU seconds a process has used so far. */
 function cpu(id) {
@@ -32,32 +25,25 @@ function cpu(id) {
 const agent = pid('Remotey'), windowServer = pid('WindowServer');
 const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
 
-const ws = new WebSocket(WS);
-ws.binaryType = 'arraybuffer';
-await new Promise((resolve) => { ws.onopen = resolve; ws.onerror = () => fail('agent not running'); });
-const send = (msg) => ws.send(JSON.stringify(msg));
-const HEADER = 20;
-let frames = 0, moves = 0, bytes = 0, onMessage = null, moveNumber = 0;
-const hello = new Promise((resolve) => {
-  ws.onmessage = (e) => {
-    if (typeof e.data === 'string') {
-      const m = JSON.parse(e.data);
-      if (m.t === 'ok') resolve(m);
-      if (m.t === 'cursor') bytes += e.data.length;
-      if (m.t === 'view' && m.ok === false) fail('no Screen Recording permission');
-      return;
-    }
-    const head = new DataView(e.data);
-    bytes += e.data.byteLength;
-    onMessage?.(head.getUint32(12, true));
-    if (e.data.byteLength === HEADER) { moves++; return; } // the pointer moved inside the view: no picture, no answer
-    frames++;
-    const n = head.getUint32(8, true);
-    if (ackDelay) setTimeout(() => send({ t: 'shown', n }), ackDelay); else send({ t: 'shown', n });
-  };
-});
-send({ t: 'auth', token });
-if (!(await hello).ax) fail('no Accessibility permission');
+const agentSocket = open({ t: 'auth', token }), send = agentSocket.send;
+const hello = await agentSocket.reply;
+if (hello?.t !== 'ok') fail(hello ? 'token refused' : 'agent not running');
+if (!hello.ax) fail('no Accessibility permission');
+let frames = 0, moves = 0, bytes = 0, onUpdate = null, moveNumber = 0;
+agentSocket.onMessage = (e) => {
+  if (typeof e.data === 'string') {
+    const m = JSON.parse(e.data);
+    if (m.t === 'cursor') bytes += e.data.length;
+    if (m.t === 'view' && m.ok === false) fail('no Screen Recording permission');
+    return;
+  }
+  const update = parseUpdate(e.data);
+  bytes += e.data.byteLength;
+  onUpdate?.(update.q);
+  if (update.kind === POINTER) { moves++; return; } // the pointer moved inside the view: no picture, no answer
+  frames++;
+  if (ackDelay) setTimeout(() => send({ t: 'shown', n: update.n }), ackDelay); else send({ t: 'shown', n: update.n });
+};
 
 /** Runs `work` and reports frame rate, bit rate and CPU use over that time. */
 async function measure(label, work) {
@@ -101,13 +87,13 @@ const timed = async (label, vertical = false) => {
   const delays = [];
   for (let i = 0; i < 60; i++) {
     const q = ++moveNumber, sent = performance.now();
-    const seen = new Promise((resolve) => { onMessage = (included) => { if (included === q) resolve(performance.now() - sent); }; });
+    const seen = new Promise((resolve) => { onUpdate = (included) => { if (included === q) resolve(performance.now() - sent); }; });
     send({ t: 'm', dx: vertical ? 0 : i % 2 ? -24 : 24, dy: i % 2 ? -24 : 24, q });
     const delay = await Promise.race([seen, sleep(500).then(() => null)]);
     if (delay !== null) delays.push(delay);
     await sleep(40 + Math.random() * 30); // not in step with the display
   }
-  onMessage = null;
+  onUpdate = null;
   delays.sort((a, b) => a - b);
   if (delays.length < 30) console.log(`${label}: only ${delays.length} of 60 moves came back`);
   else console.log(`${label.padEnd(22)} median ${quantile(delays, 0.5).toFixed(1)} ms, p90 ${quantile(delays, 0.9).toFixed(1)} ms, `
@@ -136,4 +122,4 @@ send({ t: 'm', dx: startX - endX, dy: endY - startY }); // AppKit's y points up,
 await sleep(200);
 send({ t: 'view', on: false });
 await sleep(100);
-ws.close();
+agentSocket.close();

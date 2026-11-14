@@ -26,7 +26,7 @@ The live view uses hardware-encoded H.264 at up to 120 fps with a 4 Mbit/s avera
 The stream is built for a short way from finger to picture and for doing nothing whenever possible:
 
 - The pointer is not part of the picture. The phone gets its place with every message and its image when the shape changes, and draws it itself, so pointer and marker cannot drift apart.
-- A pointer move needs no screen capture. The agent cuts the new view from the frames it already holds the moment it posts the move. A move inside a view held by the display's edges sends 20 bytes and no picture.
+- A pointer move needs no screen capture. The agent cuts the new view from the frames it already holds the moment it posts the move. A move inside a view held by the display's edges sends 22 bytes and no picture.
 - A still screen sends nothing, and neither does a change outside the view, such as a clock in the menu bar.
 - One key frame starts the stream. The link is reliable, so no later one interrupts it.
 - Pictures await a draw acknowledgement: two at first, up to six for a phone whose answers take several frame intervals even at their best. A slow connection lowers the frame rate instead of building up a queue.
@@ -90,13 +90,15 @@ Text typed on the iOS keyboard is replayed on the Mac key by key.
 
 ```sh
 swift run                          # agent from the source tree, Web/ is re-read on every request
-swift test                         # hardware encoder; server: auth and limits for unauthenticated connections
+swift test                         # encoder, pointer, view, send window, wire format; server: auth and limits
 node --test scripts/live-view.test.mjs  # client decode, acknowledgements, pointer, readout and JPEG fallback
 node scripts/smoke.mjs              # running agent: HTTP, auth, pointer and JPEG flow control
 node scripts/smoke.mjs --h264       # same checks for H.264, including IDR after restart/resize
 node scripts/smoke.mjs --h264 --fps=120  # request 120 fps (requires a 120 Hz source display)
 node scripts/bench.mjs --fps=60     # running agent: frame rate, delay from move to picture, CPU, bursts of moves
 ```
+
+`Sources/Remotey/Wire.swift` and `Web/live-view.js` are the two halves of what agent and page say to each other; a change to one belongs in the other. Every file in `Web/` is served and bundled. A page that was loaded from an older agent reloads itself when it reconnects.
 
 The smoke tests and the benchmark move the pointer, so keep your hands off the mouse while they run. Close Remotey on the phone first, since the most recent viewer owns the stream. They measure the Mac's side: received frames, not displayed frames on the phone. The 4 Mbit/s setting is an average target, not a hard cap; the readout on the phone shows the frame rate and delay that actually arrive there.
 

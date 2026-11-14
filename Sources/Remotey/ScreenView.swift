@@ -3,6 +3,26 @@ import CoreImage
 import ImageIO
 import ScreenCaptureKit
 
+/// What the live view tells the phone at once: where the pointer is, and a new picture if the view changed.
+struct LiveUpdate {
+    enum Picture {
+        case jpeg(Data)
+        /// The payload `H264Encoder` describes.
+        case h264(Data)
+    }
+
+    /// The pointer's place, 0...1 inside the picture.
+    var pointer: CGPoint
+    /// Width of the picture in points, which gives the pointer's size on the phone.
+    var width: Double
+    /// The rate the view runs at: the phone's wish, bounded by the codec and the Mac's displays.
+    var framesPerSecond: Int32
+    /// Number of the last pointer move from the phone that this update includes.
+    var sequence: UInt32
+    /// The picture, and the number the phone answers it with. Nil: the pointer moved inside the picture sent last.
+    var picture: (number: UInt32, content: Picture)?
+}
+
 /// Live view for the phone: streams the screen region around the cursor as H.264, with a JPEG fallback.
 /// Needs the Screen Recording permission. Captures only while a client has the view switched on.
 ///
@@ -27,7 +47,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let framesPerSecond: Int32
 
         /// Nil for a size no phone display has.
-        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool = false, fps: Int = 60) {
+        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool, fps: Int) {
             guard (50...4000).contains(width), (50...4000).contains(height) else { return nil }
             self.width = width
             self.height = height
@@ -39,6 +59,20 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     }
 
     private struct DisplayUnavailable: Error {}
+
+    /// What a picture is cut from, for one request and one arrangement of displays.
+    private struct Geometry: Equatable {
+        let request: Request
+        let displays: [Display]
+        /// Output pixels per point, the same for every display.
+        let scale: Double
+        let revision: UInt64
+        let framesPerSecond: Int32
+
+        func view(around cursor: CGPoint) -> CGRect {
+            ScreenView.viewport(request, displays: displays.map(\.bounds), around: cursor)
+        }
+    }
 
     /// A display in global coordinates (points, origin top left of the main display).
     private struct Display: Equatable {
@@ -89,13 +123,14 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         }
     }
 
-    private let send: (Data) -> Void
-    private let sendCursor: (String) -> Void
+    private let send: (LiveUpdate) -> Void
+    private let sendCursor: (Pointer.Picture) -> Bool
 
-    /// Both closures run on the main queue. `send` delivers one message of the layout described at `message`;
-    /// the phone answers pictures by number through `frameShown`. `cursor` delivers the pointer's picture as JSON.
-    init(send: @escaping (Data) -> Void, cursor: @escaping (String) -> Void) {
-        self.send = send
+    /// Both closures run on the main queue and deliver to the phone. It answers the pictures among the
+    /// updates by number through `frameShown`, and draws the pointer's picture at the place every update names.
+    /// `cursor` returns false if the picture could not be sent.
+    init(update: @escaping (LiveUpdate) -> Void, cursor: @escaping (Pointer.Picture) -> Bool) {
+        self.send = update
         self.sendCursor = cursor
         super.init()
         // Displays were connected, removed, rearranged or changed their mode.
@@ -110,8 +145,6 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private static let maxOutputWidth = 1400.0
     /// Sharper than 2x costs bandwidth and frame rate for little gain at arm's length.
     private static let maxPixelRatio = 2.0
-    /// The most pictures that may be sent but not yet shown on the phone, see `framesInFlight`.
-    private static let maxFramesInFlight = 6
     /// The pointer's shape is looked at this often while the view changes, and once more after it has come to rest.
     private static let cursorInterval = 0.1
     /// Capture rate of a display out of view. Its last frame is what shows first when the view reaches it.
@@ -141,8 +174,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private let queue = DispatchQueue(label: "remotey.frames", qos: .userInteractive)
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-    /// `scale` is output pixels per point, the same for every display.
-    private var geometry: (request: Request, displays: [Display], scale: Double, revision: UInt64, fps: Int32)?
+    private var geometry: Geometry?
     /// Frames of an older set of captures are ignored.
     private var liveEpoch: UInt64 = 0
     /// The newest frame of every display. A static display keeps its last one for when the view pans onto it.
@@ -155,19 +187,15 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private var sequence: UInt32 = 0
     /// The displays in or near the view that the main queue was last told about.
     private var reported: Set<CGDirectDisplayID>?
-    /// Earliest time of the next encode. Two displays in view deliver up to twice the requested rate.
-    private var nextEncode: TimeInterval = 0
+    /// Earliest time of the next update. Two displays in view deliver up to twice the requested rate.
+    private var nextSlot: TimeInterval = 0
     private var waiting = false
     private var generation = UUID()
     private var encoder: H264Encoder?
     /// The hardware encoder takes one picture at a time; composing the next one meanwhile gains nothing.
     private var encoding = false
     private var jpegFallback = false
-    private var framesSent: UInt32 = 0
-    /// Pictures sent but not yet shown on the phone, with the time they left.
-    private var inFlight: [UInt32: TimeInterval] = [:]
-    /// The shortest time the phone took to answer a picture: the way there, decoding, drawing and the way back.
-    private var fastestAnswer = TimeInterval.infinity
+    private var window = SendWindow()
 
     func update(_ request: Request?) {
         guard request != self.request else { return }
@@ -175,10 +203,8 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let restarting = self.request == nil || self.request?.h264 != request?.h264
         queue.async {
             self.resetFrames()
-            // A stopped or replaced viewer may never answer its old frames.
             if restarting {
-                self.inFlight.removeAll()
-                self.fastestAnswer = .infinity
+                self.window.reset()
                 self.sequence = 0
             }
         }
@@ -192,8 +218,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     /// The phone has drawn (or discarded) the picture with this number.
     func frameShown(_ number: UInt32) {
         queue.async {
-            guard let left = self.inFlight.removeValue(forKey: number) else { return }
-            self.fastestAnswer = min(self.fastestAnswer, ProcessInfo.processInfo.systemUptime - left)
+            guard self.window.answered(number, now: ProcessInfo.processInfo.systemUptime) else { return }
             self.encodeLatest()
         }
     }
@@ -204,15 +229,6 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             if let sequence { self.sequence = sequence }
             self.encodeLatest()
         }
-    }
-
-    /// Pictures that may be under way at once. Sockets and proxies on the way buffer megabytes, so only
-    /// the phone can tell whether it keeps up. Two lets the next picture travel while one decodes. A phone
-    /// whose answers take several frame intervals even at its best gets that many more, or the wait for
-    /// answers would hold the frame rate down. The bound keeps a link that slows down from building up delay.
-    static func framesInFlight(fastestAnswer: TimeInterval, framesPerSecond: Int32) -> Int {
-        guard fastestAnswer.isFinite else { return 2 }
-        return min(maxFramesInFlight, 2 + Int(max(0, fastestAnswer) * Double(framesPerSecond)))
     }
 
     private func watchMouse(_ on: Bool) {
@@ -229,10 +245,8 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     // MARK: Pointer picture (main queue)
 
     private func sendCursorIfChanged() {
-        guard request != nil, let picture = Pointer.picture(), picture != cursorSent, let png = picture.png else { return }
+        guard request != nil, let picture = Pointer.picture(), picture != cursorSent, sendCursor(picture) else { return }
         cursorSent = picture
-        sendCursor(#"{"t":"cursor","png":"\#(png.base64EncodedString())","w":\#(Double(picture.size.width)),"#
-            + #""h":\#(Double(picture.size.height)),"x":\#(Double(picture.hotSpot.x)),"y":\#(Double(picture.hotSpot.y))}"#)
     }
 
     /// Call when the view changed. Apps set the pointer's shape a moment after a move, hence the extra look.
@@ -331,8 +345,11 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         }
         guard revision == self.revision else { return }
         let fps = displays.map { min(request.framesPerSecond, $0.framesPerSecond) }.max()!
+        let geometry = Geometry(request: request, displays: displays, scale: scale, revision: revision, framesPerSecond: fps)
         queue.async {
-            self.geometry = (request, displays, scale, revision, fps)
+            // A change of a capture's frame rate alone leaves the picture on the phone as it is.
+            guard geometry != self.geometry else { return }
+            self.geometry = geometry
             // A static screen sends no new frame for the new view; the kept ones show it.
             self.stale = true
             self.encodeLatest()
@@ -434,7 +451,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let fresh = frames.updateValue(buffer, forKey: id).map { CVPixelBufferGetWidth($0) != width } ?? true
         guard let geometry, let display = geometry.displays.first(where: { $0.id == id }) else { return }
         let cursor = Pointer.location
-        let view = Self.viewport(geometry.request, displays: geometry.displays.map(\.bounds), around: cursor)
+        let view = geometry.view(around: cursor)
         // Measured around the cursor, not the view: a view as tall as its display lies against the
         // neighbour all the time, but shows it only once the cursor is within half a view of the seam.
         let reach = CGRect(x: cursor.x - view.width / 2, y: cursor.y - view.height / 2, width: view.width, height: view.height)
@@ -455,37 +472,44 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         encodeLatest()
     }
 
-    private func encodeLatest() {
-        // Also holds back the pointer's place alone: it must not overtake the picture being encoded, which shows an older one.
-        guard !encoding, let geometry else { return }
-        let cursor = Pointer.location, sequence = self.sequence
-        let view = Self.viewport(geometry.request, displays: geometry.displays.map(\.bounds), around: cursor)
-        let picture = stale || view != sent?.view
-        guard picture || cursor != sent?.cursor else { return }
-        if picture, inFlight.count >= Self.framesInFlight(fastestAnswer: fastestAnswer, framesPerSecond: geometry.fps) { return }
+    /// True if an update may leave now, which takes the slot. If not, `encodeLatest` runs again when it may.
+    private func takeSlot(framesPerSecond: Int32) -> Bool {
         // The slack lets a single display's frames through despite jitter; the average stays at the rate.
-        let interval = 1 / Double(geometry.fps), slack = interval / 4
+        let interval = 1 / Double(framesPerSecond), slack = interval / 4
         let now = ProcessInfo.processInfo.systemUptime
-        guard now >= nextEncode - slack else {
+        guard now >= nextSlot - slack else {
             if !waiting {
                 waiting = true
-                queue.asyncAfter(deadline: .now() + (nextEncode - now)) {
+                queue.asyncAfter(deadline: .now() + (nextSlot - now)) {
                     self.waiting = false
                     self.encodeLatest()
                 }
             }
-            return
+            return false
         }
-        let place = CGPoint(x: (cursor.x - view.minX) / view.width, y: (cursor.y - view.minY) / view.height)
-        func deliver(_ payload: Data) {
-            self.deliver(payload, pointer: place, sequence: sequence, width: view.width, revision: geometry.revision)
-        }
-        guard picture else {
-            // The pointer moved inside a view held by its display's edges: the picture on the phone stays as it is.
+        nextSlot = max(nextSlot, now - slack) + interval
+        return true
+    }
+
+    /// Sends what the phone does not show yet, if anything: a new picture, or the pointer's new place alone.
+    private func encodeLatest() {
+        // Also holds back the pointer's place alone: it must not overtake the picture being encoded, which shows an older one.
+        guard !encoding, let geometry else { return }
+        let cursor = Pointer.location, sequence = self.sequence
+        let view = geometry.view(around: cursor)
+        let picture = stale || view != sent?.view
+        guard picture || cursor != sent?.cursor else { return }
+        if picture, !window.isOpen(framesPerSecond: geometry.framesPerSecond) { return }
+        guard takeSlot(framesPerSecond: geometry.framesPerSecond) else { return }
+        func deliver(_ picture: LiveUpdate.Picture?) {
             sent = (cursor, view)
-            nextEncode = max(nextEncode, now - slack) + interval
-            return deliver(Data())
+            let pointer = CGPoint(x: (cursor.x - view.minX) / view.width, y: (cursor.y - view.minY) / view.height)
+            let numbered = picture.map { (number: window.send(now: ProcessInfo.processInfo.systemUptime), content: $0) }
+            self.deliver(LiveUpdate(pointer: pointer, width: view.width, framesPerSecond: geometry.framesPerSecond,
+                                    sequence: sequence, picture: numbered), revision: geometry.revision)
         }
+        // The pointer moved inside a view held by its display's edges: the picture on the phone stays as it is.
+        guard picture else { return deliver(nil) }
         let scale = geometry.scale
         // NV12 needs even dimensions. They depend on the region's size only, not on where it is.
         let width = max(2, Int(view.width * scale) / 2 * 2), height = max(2, Int(view.height * scale) / 2 * 2)
@@ -507,18 +531,21 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             composed = composed.map { layer.composited(over: $0) } ?? layer
             covered = covered || display.bounds.contains(view)
         }
+        // Without a capture yet the picture stays owed.
         guard var image = composed else { return }
         // Away from a seam one display fills the view. Otherwise space no display covers stays black.
         if !covered { image = image.composited(over: CIImage(color: .black)) }
         stale = false
-        sent = (cursor, view)
-        nextEncode = max(nextEncode, now - slack) + interval
         image = image.cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
         let generation = self.generation
+        func deliverJPEG() {
+            // Without a JPEG the picture stays owed.
+            if let data = jpeg(image) { deliver(.jpeg(data)) } else { stale = true }
+        }
         if geometry.request.h264 && !jpegFallback {
             do {
-                if encoder?.width != width || encoder?.height != height || encoder?.framesPerSecond != geometry.fps {
-                    encoder = try H264Encoder(width: width, height: height, framesPerSecond: geometry.fps)
+                if encoder?.width != width || encoder?.height != height || encoder?.framesPerSecond != geometry.framesPerSecond {
+                    encoder = try H264Encoder(width: width, height: height, framesPerSecond: geometry.framesPerSecond)
                 }
                 encoding = true
                 try encoder!.encode(image, context: ciContext) { output in
@@ -527,11 +554,11 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
                         self.encoding = false
                         switch output {
                         case .frame(let payload):
-                            deliver(payload)
+                            deliver(.h264(payload))
                         case .dropped:
                             // Keep the last changed image even if the screen becomes idle after a rate-control drop.
                             self.stale = true
-                            self.queue.asyncAfter(deadline: .now() + 1 / Double(geometry.fps)) {
+                            self.queue.asyncAfter(deadline: .now() + 1 / Double(geometry.framesPerSecond)) {
                                 guard generation == self.generation else { return }
                                 self.encodeLatest()
                             }
@@ -539,7 +566,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
                         case .failed:
                             self.jpegFallback = true
                             self.encoder = nil
-                            self.jpeg(image).map(deliver)
+                            deliverJPEG()
                         }
                         self.encodeLatest()
                     }
@@ -551,7 +578,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
                 encoder = nil
             }
         }
-        jpeg(image).map(deliver)
+        deliverJPEG()
     }
 
     private func jpeg(_ image: CIImage) -> Data? {
@@ -560,38 +587,16 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.5])
     }
 
-    static let headerSize = 20
-
-    /// One message to the phone, little endian: Float32 pointer x, Float32 pointer y (both 0...1 inside the picture),
-    /// UInt32 picture number, UInt32 number of the last pointer move from the phone the message includes,
-    /// Float32 width of the picture in points, then JPEG or the H264Encoder payload.
-    /// Without a payload only the pointer moved; such a message has the number 0 and is not answered.
-    static func message(pointer: CGPoint, number: UInt32, sequence: UInt32, width: Double, payload: Data) -> Data {
-        var message = Data(capacity: headerSize + payload.count)
-        for value in [Float32(pointer.x).bitPattern, Float32(pointer.y).bitPattern, number, sequence, Float32(width).bitPattern] {
-            withUnsafeBytes(of: value.littleEndian) { message.append(contentsOf: $0) }
-        }
-        message.append(payload)
-        return message
-    }
-
-    private func deliver(_ payload: Data, pointer: CGPoint, sequence: UInt32, width: Double, revision: UInt64) {
-        var number: UInt32 = 0
-        if !payload.isEmpty {
-            framesSent = framesSent == .max ? 1 : framesSent + 1
-            number = framesSent
-            inFlight[number] = ProcessInfo.processInfo.systemUptime
-        }
-        let message = Self.message(pointer: pointer, number: number, sequence: sequence, width: width, payload: payload)
+    private func deliver(_ update: LiveUpdate, revision: UInt64) {
         DispatchQueue.main.async {
             // Never send an old viewer's delta frame to a new viewer who has no reference picture.
             guard revision == self.revision else {
                 return self.queue.async {
-                    guard self.inFlight.removeValue(forKey: number) != nil else { return }
+                    guard let number = update.picture?.number, self.window.withdraw(number) else { return }
                     self.encodeLatest()
                 }
             }
-            self.send(message)
+            self.send(update)
             self.checkCursorSoon()
         }
     }
