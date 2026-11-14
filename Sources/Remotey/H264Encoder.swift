@@ -5,14 +5,21 @@ import VideoToolbox
 /// Output includes SPS/PPS on every IDR, so a resized or restarted view needs no separate config message.
 final class H264Encoder {
     struct Failure: Error { let status: OSStatus }
+    enum Output {
+        case frame(Data)
+        case dropped
+        case failed
+    }
 
     let width: Int
     let height: Int
+    let framesPerSecond: Int32
     private let session: VTCompressionSession
 
-    init(width: Int, height: Int) throws {
+    init(width: Int, height: Int, framesPerSecond: Int32 = 60) throws {
         self.width = width
         self.height = height
+        self.framesPerSecond = framesPerSecond
         var created: VTCompressionSession?
         try Self.check(VTCompressionSessionCreate(
             allocator: nil, width: Int32(width), height: Int32(height), codecType: kCMVideoCodecType_H264,
@@ -32,9 +39,9 @@ final class H264Encoder {
                 kVTCompressionPropertyKey_RealTime: true,
                 kVTCompressionPropertyKey_AllowFrameReordering: false,
                 kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_H264_Baseline_AutoLevel,
-                kVTCompressionPropertyKey_ExpectedFrameRate: 60,
+                kVTCompressionPropertyKey_ExpectedFrameRate: framesPerSecond,
                 kVTCompressionPropertyKey_AverageBitRate: 4_000_000,
-                kVTCompressionPropertyKey_MaxKeyFrameInterval: 120,
+                kVTCompressionPropertyKey_MaxKeyFrameInterval: framesPerSecond * 2,
                 kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: 2,
             ] as CFDictionary))
             try Self.check(VTCompressionSessionPrepareToEncodeFrames(session))
@@ -46,8 +53,8 @@ final class H264Encoder {
 
     deinit { VTCompressionSessionInvalidate(session) }
 
-    /// The callback may run on a VideoToolbox thread. Nil means the caller must fall back to JPEG.
-    func encode(_ image: CIImage, context: CIContext, completion: @escaping (Data?) -> Void) throws {
+    /// The callback may run on a VideoToolbox thread. A rate-control drop is not an encoder failure.
+    func encode(_ image: CIImage, context: CIContext, completion: @escaping (Output) -> Void) throws {
         guard let pool = VTCompressionSessionGetPixelBufferPool(session) else {
             throw Failure(status: kVTAllocationFailedErr)
         }
@@ -60,8 +67,11 @@ final class H264Encoder {
         try Self.check(VTCompressionSessionEncodeFrame(
             session, imageBuffer: buffer, presentationTimeStamp: time, duration: .invalid,
             frameProperties: nil, infoFlagsOut: nil
-        ) { status, _, sample in
-            completion(status == noErr ? sample.flatMap(Self.packet) : nil)
+        ) { status, flags, sample in
+            if status != noErr { completion(.failed) }
+            else if flags.contains(.frameDropped) { completion(.dropped) }
+            else if let frame = sample.flatMap(Self.packet) { completion(.frame(frame)) }
+            else { completion(.failed) }
         })
     }
 

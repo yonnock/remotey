@@ -18,7 +18,7 @@ function setup() {
     visible: () => true, shown: (n) => shown.push(n), fallback: () => fallback++,
   });
   const output = (index, n) => outputs[index].output({
-    timestamp: n * 16667, displayWidth: 640, displayHeight: 360, close: () => closed++,
+    timestamp: n, displayWidth: 640, displayHeight: 360, close: () => closed++,
   });
   return { player, chunks, drawn, shown, outputs, output, canvas, get fallback() { return fallback; }, get closed() { return closed; } };
 }
@@ -38,7 +38,7 @@ test('submits both frames without waiting for output, but acknowledges only draw
     assert.equal(s.chunks.length, 2);
     assert.deepEqual(s.shown, []);
     s.output(0, 1); s.output(0, 2);
-    assert.deepEqual(s.drawn, [16667, 33334]);
+    assert.deepEqual(s.drawn, [1, 2]);
     assert.deepEqual(s.shown, [1, 2]);
     assert.equal(s.closed, 2);
     assert.equal(s.canvas.width, 640);
@@ -114,4 +114,36 @@ test('JPEG from a Mac without hardware H.264 switches the request to JPEG', asyn
   assert.deepEqual(s.shown, [1]);
   assert.equal(closed, true);
   s.player.close();
+});
+
+test('matches the rendering cadence up to 120 fps', () => {
+  for (const hz of [30, 60, 90, 120, 144]) {
+    const s = setup(), callbacks = new Map();
+    let id = 0, changes = 0;
+    globalThis.requestAnimationFrame = (callback) => { callbacks.set(++id, callback); return id; };
+    globalThis.cancelAnimationFrame = (id) => callbacks.delete(id);
+    s.player.measureFrameRate(() => changes++);
+    for (let i = 0; i < 25; i++) {
+      const [key, callback] = callbacks.entries().next().value;
+      callbacks.delete(key);
+      callback(i * 1000 / hz);
+    }
+    assert.equal(s.player.framesPerSecond, Math.min(hz, 120));
+    assert.equal(changes, hz !== 60 ? 1 : 0);
+    assert.equal(callbacks.size, 0);
+    s.player.close();
+  }
+});
+
+test('turning off the view or closing the connection cancels refresh measurement', () => {
+  const s = setup(), callbacks = new Map();
+  let id = 0;
+  globalThis.requestAnimationFrame = (callback) => { callbacks.set(++id, callback); return id; };
+  globalThis.cancelAnimationFrame = (id) => callbacks.delete(id);
+  s.player.measureFrameRate(() => assert.fail('cancelled probe completed'));
+  s.player.stopMeasuring();
+  assert.equal(callbacks.size, 0);
+  s.player.measureFrameRate(() => assert.fail('closed probe completed'));
+  s.player.close();
+  assert.equal(callbacks.size, 0);
 });

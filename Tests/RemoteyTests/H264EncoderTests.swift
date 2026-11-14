@@ -28,10 +28,68 @@ final class H264EncoderTests: XCTestCase {
         }
     }
 
+    func test120FPSHardwareStreamStartsWithoutBuffering() throws {
+        for (width, height) in [(780, 442), (780, 1688)] {
+            let encoder = try H264Encoder(width: width, height: height, framesPerSecond: 120)
+            let image = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
+            let frame = try encode(image, encoder: encoder, context: CIContext())
+            XCTAssertEqual(encoder.framesPerSecond, 120)
+            XCTAssertEqual(frame[3], 1)
+            XCTAssertTrue(nalTypes(frame).isSuperset(of: [7, 8, 5]))
+        }
+    }
+
+    func testRequestedFrameRateIsBoundedAndOlderClientsStayAt60FPS() throws {
+        func request(_ fps: Int = 60, h264: Bool = true) throws -> ScreenView.Request {
+            try XCTUnwrap(ScreenView.Request(width: 390, height: 844, zoom: 0.5, pixelRatio: 2, h264: h264, fps: fps))
+        }
+        XCTAssertEqual(try request().framesPerSecond, 60)
+        XCTAssertEqual(try request(120).framesPerSecond, 120)
+        XCTAssertEqual(try request(1000).framesPerSecond, 120)
+        XCTAssertEqual(try request(-1).framesPerSecond, 30)
+        XCTAssertEqual(try request(120, h264: false).framesPerSecond, 30)
+    }
+
+    func testRateControlDropsAreNotFailuresAndTheLastImageCanBeRetried() throws {
+        let encoder = try H264Encoder(width: 780, height: 1688, framesPerSecond: 120)
+        let context = CIContext()
+        let bounds = CGRect(x: 0, y: 0, width: 780, height: 1688)
+        var encoded = 0
+        // High-entropy inputs exhaust the bitrate budget and can trigger intentional frame drops.
+        for _ in 0..<30 {
+            let noise = try XCTUnwrap(CIFilter(name: "CIRandomGenerator")?.outputImage).cropped(to: bounds)
+            switch try output(noise, encoder: encoder, context: context) {
+            case .frame: encoded += 1
+            case .dropped: break
+            case .failed: return XCTFail("Rate-control pressure must not force a JPEG fallback")
+            }
+        }
+        XCTAssertGreaterThan(encoded, 0)
+        let lastImage = CIImage(color: .white).cropped(to: bounds)
+        for _ in 0..<120 {
+            switch try output(lastImage, encoder: encoder, context: context) {
+            case .frame: return
+            case .dropped: Thread.sleep(forTimeInterval: 1 / 120)
+            case .failed: return XCTFail("Encoder did not recover after bitrate pressure")
+            }
+        }
+        XCTFail("Last image remained dropped after retries")
+    }
+
     private func encode(_ image: CIImage, encoder: H264Encoder, context: CIContext) throws -> Data {
+        let output = try output(image, encoder: encoder, context: context)
+        if case .frame(let data) = output { return data }
+        XCTFail("Expected a frame, got \(output)")
+        throw H264Encoder.Failure(status: -1)
+    }
+
+    private func output(_ image: CIImage, encoder: H264Encoder, context: CIContext) throws -> H264Encoder.Output {
         let ready = expectation(description: "hardware encoder output without flushing")
-        var result: Data?
-        try encoder.encode(image, context: context) { data in result = data; ready.fulfill() }
+        var result: H264Encoder.Output?
+        try encoder.encode(image, context: context) { output in
+            result = output
+            ready.fulfill()
+        }
         wait(for: [ready], timeout: 3)
         return try XCTUnwrap(result)
     }

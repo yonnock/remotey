@@ -21,7 +21,7 @@
 
 <img src="docs/how-it-works.svg" width="968" alt="The iPhone connects over HTTPS and WSS, tailnet only, to tailscale serve on port 8443 on the Mac. It forwards / to the agent's HTTP port 47800, which serves the web UI, and /ws to its WebSocket port 47801, which receives input, injects it via CGEvent and streams the optional live view back. The agent listens on 127.0.0.1 only.">
 
-The live view uses hardware-encoded H.264 at up to 60 fps with a 4 Mbit/s average bitrate target. Safari 16.4+ can decode it through WebCodecs; unsupported browsers or encoders fall back to JPEG at up to 30 fps. Static screen samples are not encoded. At most two frames await a draw acknowledgement, so a slow connection lowers the frame rate instead of building up a queue.
+The live view uses hardware-encoded H.264 at up to 120 fps with a 4 Mbit/s average bitrate target. Safari 16.4+ can decode it through WebCodecs; unsupported browsers or encoders fall back to JPEG at up to 30 fps. The client measures its rendering cadence and requests up to 120 fps; capture is also capped by the Mac display’s refresh rate. A 60 Hz display or Safari limited to 60 Hz stays at 60 fps. Static screen samples are not encoded. At most two frames await a draw acknowledgement, so a slow connection lowers the frame rate instead of building up a queue.
 
 The agent is a small Swift menu bar app with no dependencies. The UI is an HTML page with a small decoder module (labels are in German).
 
@@ -78,6 +78,7 @@ swift test                         # hardware encoder: IDR, delta frames and new
 node --test scripts/live-view.test.mjs  # client decode, acknowledgements and JPEG fallback
 node scripts/smoke.mjs              # running agent: HTTP, auth, pointer and JPEG flow control
 node scripts/smoke.mjs --h264       # same checks for H.264, including IDR after restart/resize
+node scripts/smoke.mjs --h264 --fps=120  # request 120 fps (requires a 120 Hz source display)
 ```
 
 The smoke tests move the pointer. Close Remotey on the phone first, since the most recent viewer owns the stream. They measure received frames, not displayed frames on the phone. The 4 Mbit/s setting is an average target, not a hard cap; actual frame rate, latency and text quality still need verification on the iPhone.

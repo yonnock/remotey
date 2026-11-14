@@ -8,12 +8,38 @@ export class LiveView {
     this.shown = shown;
     this.fallback = fallback;
     this.codec = typeof VideoDecoder === 'function' ? 'h264' : 'jpeg';
+    this.framesPerSecond = 60;
     this.pending = new Map();
     this.chain = Promise.resolve();
     this.epoch = 0;
     this.timer = 0;
     this.decoder = null;
     this.closed = false;
+    this.refreshProbe = 0;
+  }
+
+  // Measure rendering cadence, not the device name: ProMotion can still be limited to 60 Hz by Safari.
+  // Probe only while the view is on, and cancel when its connection closes or the view turns off.
+  measureFrameRate(changed) {
+    this.stopMeasuring();
+    if (this.closed || this.codec !== 'h264') return;
+    const intervals = [];
+    let previous;
+    const sample = (time) => {
+      if (previous !== undefined) intervals.push(time - previous);
+      previous = time;
+      if (intervals.length < 24) { this.refreshProbe = requestAnimationFrame(sample); return; }
+      this.refreshProbe = 0;
+      intervals.sort((a, b) => a - b);
+      const fps = Math.min(120, Math.max(30, Math.round(1000 / intervals[12])));
+      if (fps !== this.framesPerSecond) { this.framesPerSecond = fps; changed(); }
+    };
+    this.refreshProbe = requestAnimationFrame(sample);
+  }
+
+  stopMeasuring() {
+    if (this.refreshProbe) cancelAnimationFrame(this.refreshProbe);
+    this.refreshProbe = 0;
   }
 
   receive(buffer) {
@@ -67,7 +93,8 @@ export class LiveView {
       });
       this.decoder.configure(config);
     }
-    const timestamp = meta.n * 16667;
+    // These timestamps correlate output to acknowledgements; frames are drawn immediately, not paced by them.
+    const timestamp = meta.n;
     this.pending.set(timestamp, meta);
     // A decoder which buffers more than our two-frame window must not leave the view stalled.
     if (!this.timer) this.timer = setTimeout(() => this.useJPEG(), 2000);
@@ -101,6 +128,7 @@ export class LiveView {
   useJPEG() {
     if (this.closed || this.codec === 'jpeg') return;
     this.epoch++;
+    this.stopMeasuring();
     this.releaseDecoder();
     this.codec = 'jpeg';
     this.fallback();
@@ -109,6 +137,7 @@ export class LiveView {
   close() {
     this.closed = true;
     this.epoch++;
+    this.stopMeasuring();
     this.releaseDecoder();
   }
 }

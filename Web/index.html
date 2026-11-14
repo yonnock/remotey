@@ -195,6 +195,7 @@ function connect() {
       pad.textContent = m.ax ? '' : 'Am Mac fehlt die Bedienungshilfen-Freigabe für Remotey (Systemeinstellungen, Datenschutz & Sicherheit).';
       setStatus(m.ax ? 'Verbunden' : 'Freigabe fehlt', !m.ax);
       syncView();
+      if (viewOn) player.measureFrameRate(syncView);
     } else if (m.t === 'view' && m.ok === false) {
       viewOn = false;
       syncView();
@@ -297,6 +298,7 @@ try {
   if (ZOOMS.includes(+localStorage.getItem('remotey-zoom'))) zoom = +localStorage.getItem('remotey-zoom');
 } catch {}
 function syncView() {
+  const wasOn = !screenEl.hidden;
   if (!viewOn) full = false;
   document.body.classList.toggle('full', full);
   screenEl.hidden = !viewOn;
@@ -305,7 +307,10 @@ function syncView() {
   document.querySelectorAll('[data-act=zoom]').forEach((b) => { b.textContent = String(zoom).replace('.', ',') + '×'; });
   try { localStorage.setItem('remotey-view', viewOn ? '1' : '0'); localStorage.setItem('remotey-zoom', zoom); } catch {}
   const r = screenEl.getBoundingClientRect(); // measured after the layout change above
-  send({ t: 'view', on: viewOn, w: r.width, h: r.height, zoom, dpr: window.devicePixelRatio || 2, codec: liveView?.codec || 'jpeg' });
+  send({ t: 'view', on: viewOn, w: r.width, h: r.height, zoom, dpr: window.devicePixelRatio || 2,
+    codec: liveView?.codec || 'jpeg', fps: liveView?.framesPerSecond || 60 });
+  if (!viewOn) liveView?.stopMeasuring();
+  else if (!wasOn) liveView?.measureFrameRate(syncView);
 }
 function setFull(on) {
   full = on;

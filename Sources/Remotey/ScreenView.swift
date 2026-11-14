@@ -19,15 +19,17 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         let zoom: Double
         let pixelRatio: Double
         let h264: Bool
+        let framesPerSecond: Int32
 
         /// Nil for a size no phone display has.
-        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool = false) {
+        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool = false, fps: Int = 60) {
             guard (50...4000).contains(width), (50...4000).contains(height) else { return nil }
             self.width = width
             self.height = height
             self.zoom = min(max(zoom, 0.25), 4)
             self.pixelRatio = min(max(pixelRatio, 1), ScreenView.maxPixelRatio)
             self.h264 = h264
+            self.framesPerSecond = h264 ? Int32(min(max(fps, 30), 120)) : 30
         }
     }
 
@@ -40,7 +42,6 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         self.send = send
     }
 
-    private static let framesPerSecond: Int32 = 60
     private static let maxOutputWidth = 1400.0
     /// Sharper than 2x costs bandwidth and frame rate for little gain at arm's length.
     private static let maxPixelRatio = 2.0
@@ -61,7 +62,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     private let queue = DispatchQueue(label: "remotey.frames", qos: .userInteractive)
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-    private var geometry: (request: Request, bounds: CGRect, revision: UInt64)?
+    private var geometry: (request: Request, bounds: CGRect, revision: UInt64, fps: Int32)?
     private var generation = UUID()
     private var encoder: H264Encoder?
     private var encoding = false
@@ -130,9 +131,11 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         let id = Self.cursorDisplay()
         let bounds = CGDisplayBounds(id)
         let regionWidth = Self.region(request, in: bounds).width
-        let backingScale = NSScreen.screens.first {
+        let display = NSScreen.screens.first {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id
-        }?.backingScaleFactor ?? 2
+        }
+        let backingScale = display?.backingScaleFactor ?? 2
+        let fps = min(request.framesPerSecond, Int32(max(1, display?.maximumFramesPerSecond ?? 60)))
         let outputWidth = min(regionWidth * backingScale, request.width * request.pixelRatio, Self.maxOutputWidth)
         // The whole display is captured at exactly the density the cropped region needs.
         let scale = outputWidth / regionWidth
@@ -140,7 +143,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         let config = SCStreamConfiguration()
         config.width = max(2, Int(bounds.width * scale))
         config.height = max(2, Int(bounds.height * scale))
-        config.minimumFrameInterval = CMTime(value: 1, timescale: request.h264 ? Self.framesPerSecond : 30)
+        config.minimumFrameInterval = CMTime(value: 1, timescale: fps)
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = true
         config.queueDepth = 3
@@ -159,7 +162,7 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
             streamDisplay = id
         }
         guard revision == self.revision else { return }
-        queue.async { self.geometry = (request, bounds, revision) }
+        queue.async { self.geometry = (request, bounds, revision, fps) }
     }
 
     @MainActor
@@ -233,17 +236,26 @@ final class ScreenView: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
                 // NV12 needs even dimensions. Keep them stable as the fractional crop follows the pointer.
                 let width = max(2, Int(size.width * scaleX) / 2 * 2)
                 let height = max(2, Int(size.height * scaleY) / 2 * 2)
-                if encoder?.width != width || encoder?.height != height {
-                    encoder = try H264Encoder(width: width, height: height)
+                if encoder?.width != width || encoder?.height != height || encoder?.framesPerSecond != geometry.fps {
+                    encoder = try H264Encoder(width: width, height: height, framesPerSecond: geometry.fps)
                 }
                 encoding = true
-                try encoder!.encode(image, context: ciContext) { payload in
+                try encoder!.encode(image, context: ciContext) { output in
                     self.queue.async {
                         guard generation == self.generation else { return }
                         self.encoding = false
-                        if let payload {
+                        switch output {
+                        case .frame(let payload):
                             self.deliver(payload, cx: cx, cy: cy, revision: geometry.revision)
-                        } else {
+                        case .dropped:
+                            // Keep the last changed image even if the screen becomes idle after a rate-control drop.
+                            if self.latest == nil { self.latest = buffer }
+                            self.queue.asyncAfter(deadline: .now() + 1 / Double(geometry.fps)) {
+                                guard generation == self.generation else { return }
+                                self.encodeLatest()
+                            }
+                            return
+                        case .failed:
                             self.jpegFallback = true
                             self.encoder = nil
                             self.sendJPEG(image, cx: cx, cy: cy, revision: geometry.revision)

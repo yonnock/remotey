@@ -1,5 +1,5 @@
 // Smoke test against a running agent: HTTP page, auth, pointer movement, live view flow control.
-// Usage: node scripts/smoke.mjs [--h264] [--capture=/tmp/view.h264]   (moves the cursor a little and back; sends no keystrokes)
+// Usage: node scripts/smoke.mjs [--h264] [--fps=120] [--capture=/tmp/view.h264]   (moves the cursor a little and back; sends no keystrokes)
 // Close Remotey on the phone first: the most recent viewer gets the live view, so an open phone takes it back.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -7,11 +7,13 @@ import { homedir } from 'node:os';
 
 const HTTP = 'http://127.0.0.1:47800', WS = 'ws://127.0.0.1:47801/ws';
 const codec = process.argv.includes('--h264') ? 'h264' : 'jpeg';
+const fps = Number(process.argv.find((arg) => arg.startsWith('--fps='))?.slice(6) || 60);
 const capture = process.argv.find((arg) => arg.startsWith('--capture='))?.slice(10);
 const packets = [];
 const token = readFileSync(`${homedir()}/Library/Application Support/Remotey/token`, 'utf8').trim();
 const fail = (msg) => { console.error('FAIL', msg); process.exit(1); };
 if (capture && codec !== 'h264') fail('--capture requires --h264');
+if (!Number.isInteger(fps) || fps < 30 || fps > 120) fail('--fps must be an integer from 30 to 120');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const cursorX = () => +execFileSync('osascript', ['-l', 'JavaScript', '-e', 'ObjC.import("AppKit"); $.NSEvent.mouseLocation.x']);
 
@@ -89,14 +91,14 @@ good.ws.onmessage = (e) => {
 };
 /** Moves the cursor in circles for a second so the screen keeps changing; ends where it started. */
 async function stir() {
-  for (let i = 0; i < 60; i++) {
-    const a = (i / 20) * 2 * Math.PI, b = ((i + 1) / 20) * 2 * Math.PI;
+  for (let i = 0; i < fps; i++) {
+    const a = (i / fps) * 6 * Math.PI, b = ((i + 1) / fps) * 6 * Math.PI;
     send({ t: 'm', dx: 30 * (Math.cos(b) - Math.cos(a)), dy: 30 * (Math.sin(b) - Math.sin(a)) });
-    await sleep(16);
+    await sleep(1000 / fps);
   }
   await sleep(200);
 }
-send({ t: 'view', on: true, w: 390, h: 844, zoom: 0.5, dpr: 3, codec });
+send({ t: 'view', on: true, w: 390, h: 844, zoom: 0.5, dpr: 3, codec, fps });
 await stir();
 if (denied) {
   console.log('skip view: no Screen Recording permission');
@@ -118,7 +120,7 @@ if (denied) {
     const startFrames = frames, startBytes = bytes, startTime = performance.now();
     await stir();
     const seconds = (performance.now() - startTime) / 1000;
-    console.log(`info ${codec}: received ${((frames - startFrames) / seconds).toFixed(1)} fps, ${((bytes - startBytes) * 8 / seconds / 1e6).toFixed(2)} Mbit/s (includes 200ms idle)`);
+    console.log(`info ${codec} (requested ${fps} fps): received ${((frames - startFrames) / seconds).toFixed(1)} fps, ${((bytes - startBytes) * 8 / seconds / 1e6).toFixed(2)} Mbit/s (includes 200ms idle)`);
     if (frames < 10) fail(`only ${frames} frames while answering each one`);
     console.log(`ok   view: stream runs while frames are answered (${frames} frames)`);
     // Frames captured while the view switches off are never answered; the next view must not wait for them.
@@ -128,12 +130,12 @@ if (denied) {
     frames = 0;
     expectKey = true;
     acking = true;
-    send({ t: 'view', on: true, w: 390, h: 844, zoom: 0.5, dpr: 3, codec });
+    send({ t: 'view', on: true, w: 390, h: 844, zoom: 0.5, dpr: 3, codec, fps });
     await stir();
     if (frames < 10) fail(`only ${frames} frames after switching the view off and on`);
     console.log(`ok   view: stream runs again after off and on (${frames} frames)`);
     const beforeResize = frames, keysBeforeResize = keyFrames;
-    send({ t: 'view', on: true, w: 420, h: 700, zoom: 1, dpr: 2, codec });
+    send({ t: 'view', on: true, w: 420, h: 700, zoom: 1, dpr: 2, codec, fps });
     await stir();
     if (frames - beforeResize < 10) fail('stream stalled after resize');
     if (codec === 'h264' && keyFrames === keysBeforeResize) fail('resized H.264 stream has no new IDR');

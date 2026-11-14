@@ -42,6 +42,7 @@ final class Server {
         var zoom: Double?
         var dpr: Double?
         var codec: String?
+        var fps: Int?
     }
 
     init(token: String, input: Input) {
@@ -198,7 +199,7 @@ final class Server {
     private func view(_ m: Message, for client: Client) {
         guard m.on == true, let width = m.w, let height = m.h,
               let request = ScreenView.Request(width: width, height: height, zoom: m.zoom ?? 1,
-                                               pixelRatio: m.dpr ?? 2, h264: m.codec == "h264") else {
+                                               pixelRatio: m.dpr ?? 2, h264: m.codec == "h264", fps: m.fps ?? 60) else {
             if viewer === client { stopView() }
             return
         }
