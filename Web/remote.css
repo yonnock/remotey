@@ -1,0 +1,251 @@
+/* A hardware remote: one graphite body, a recessed display you steer on, key caps that sink when pressed.
+   Amber is the only signal colour and always means "active": armed modifier, live view on, open tray,
+   pointer marker, the index line of a slider. Everything else is graphite, black and two greys. */
+:root {
+  --body: #25272c; --deep: #111214; --surface: #1b1d21; --cap: #31343a; --cap-hi: #464a53; --edge: #0a0b0c;
+  --line: #3e424a; --text: #eceef0; --muted: #8b8f98; --faint: #5e626b;
+  --accent: #f2b84b; --accent-ink: #231803; --bad: #ef6b5e; --ok: #6fcf7c;
+  /* Things that arrive decelerate into place; things that leave accelerate away and take less time. */
+  --enter-ms: 280ms; --exit-ms: 190ms;
+  --enter: var(--enter-ms) cubic-bezier(.16, 1, .3, 1); --exit: var(--exit-ms) cubic-bezier(.45, 0, .9, .35);
+  --snap: .24s cubic-bezier(.3, 1.35, .5, 1); /* the switch thumb overshoots into its detent */
+  --rail: 100px; --gap: 8px; --glass: rgb(16 17 19 / .76); --r-key: 10px; --r-chip: 8px;
+  --safe-top: env(safe-area-inset-top, 0px); --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-left: env(safe-area-inset-left, 0px);
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--body); color: var(--text); overflow: hidden;
+  font: 500 15px/1.2 -apple-system, system-ui, sans-serif; overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* Two fingers may zoom the page anywhere but on the live view; a double tap never does. */
+body { position: fixed; inset: 0; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  touch-action: manipulation; }
+button { font: inherit; color: var(--text); border: 0; padding: 0; margin: 0; background: none; touch-action: manipulation; }
+svg { width: 20px; height: 20px; fill: currentColor; pointer-events: none; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+/* Printed legends: small, wide-set capitals like the lettering on a real remote. */
+.legend { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
+/* Focus from a keyboard or switch control: an amber ring, never on a touch. */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The page lives in the visible part of the screen: above the keyboard, at the visual viewport's offset.
+   Upright: the display takes everything above the thumb's dock. */
+#app { position: absolute; left: 0; right: 0; top: var(--top, 0px); height: var(--vh, 100dvh);
+  display: grid; grid-template: "console" 1fr "dock" auto / minmax(0, 1fr); gap: var(--gap);
+  padding: max(10px, var(--safe-top)) max(10px, var(--safe-right)) max(10px, var(--safe-bottom)) max(10px, var(--safe-left)); }
+
+/* Display and trackpad in one: the live view shows the Mac around the pointer, the pad on top steers it.
+   The bezel clips: the tray comes out of the display's lower edge and goes back into it. */
+#console { grid-area: console; position: relative; min-height: 0; min-width: 0; display: flex; overflow: hidden;
+  border-radius: 16px; background: var(--edge); border: 2px solid var(--edge); }
+#screen { flex: 1; min-height: 60px; min-width: 0; position: relative; overflow: hidden; border-radius: 13px;
+  background-color: var(--surface); background-image: radial-gradient(var(--line) 1px, transparent 1.4px); background-size: 12px 12px; }
+/* Holds picture and pointer, so a zoom preview scales both alike. */
+#picture { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
+/* cover: while the display changes size, the last frame of the old size is cropped, never stretched. */
+#view { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--deep); }
+/* Shifted to the pointer's place, so its top left corner is the pointer. The Mac's pointer is not in the
+   picture: its image comes separately and is drawn here, inside the marker. */
+#aim { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; }
+#marker { position: absolute; left: -15px; top: -15px; width: 30px; height: 30px; border-radius: 50%;
+  border: 2px solid var(--accent); }
+#cursor { position: absolute; left: 0; top: 0; }
+#cursor:not([src]) { display: none; }
+#pad { position: absolute; inset: 0; touch-action: none; display: flex; align-items: center;
+  justify-content: center; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.5; padding: 32px; }
+#pad:not(:empty) { background: var(--surface); }
+
+/* Printed on the display's glass: dark chips that stay legible on any picture. Touches pass through to the
+   pad everywhere but on the zoom keys. */
+#hud { position: absolute; left: 0; right: 0; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px;
+  padding: 8px; pointer-events: none; }
+#hud > * { background: var(--glass); border-radius: var(--r-chip); }
+/* Connection LED: blinks amber while connecting, green when the Mac answers, red when it does not. */
+#status { flex: none; width: 26px; height: 26px; display: grid; place-items: center; }
+#status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  animation: blink 1s steps(2, jump-none) infinite; }
+#status.ok::before { background: var(--ok); animation: none; }
+#status.bad::before { background: var(--bad); animation: none; }
+@keyframes blink { to { opacity: .25; } }
+/* Readout for the live view: updates per second and the delay of a pointer move.
+   The number takes the colours of the connection LED: green good, amber middling, red poor. */
+#meter { flex: none; height: 26px; display: flex; align-items: center; gap: 8px; padding: 0 9px; color: var(--muted);
+  font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+#meter b { font-size: 13px; font-weight: 600; letter-spacing: 0; color: var(--ok); }
+#meter.mid b { color: var(--accent); }
+#meter.bad b { color: var(--bad); }
+#meter.idle b { color: var(--muted); }
+/* Lit while the view shows the text being typed instead of the pointer. Moving the pointer ends it. */
+#follow { height: 26px; display: flex; align-items: center; padding: 0 9px; color: var(--accent); font-size: 10px; }
+/* Zoom: two keys around a recessed readout, at the top corner away from the thumb. The readout returns to 1×. */
+#zoom { margin-left: auto; display: flex; align-items: center; gap: 3px; padding: 3px; pointer-events: auto; border-radius: 10px; }
+#zoom .key { width: 34px; min-width: 34px; height: 32px; padding: 0; font-size: 19px; font-weight: 400; border-radius: 7px; }
+.readout { width: 50px; height: 32px; border-radius: 6px; background: var(--deep); box-shadow: inset 0 1px 3px var(--edge);
+  font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); position: relative; }
+.readout::after { content: ''; position: absolute; inset: -6px -1px; }
+.readout.pressed { color: var(--accent); }
+body:not(.view) #zoom, body:not(.view) #meter { display: none; }
+
+/* Flat keys: on the glass and in the dock. Pressed, they go dark and lose their top light. */
+.key { position: relative; flex: none; height: 36px; min-width: 44px; padding: 0 12px; border-radius: var(--r-key); background: var(--cap);
+  display: grid; place-items: center; box-shadow: inset 0 1px 0 var(--cap-hi); }
+.key::after { content: ''; position: absolute; inset: -7px -4px; } /* a touch target larger than the key */
+.key.pressed, .key:active { background: var(--deep); box-shadow: inset 0 1px 3px var(--edge); }
+.key.on { color: var(--accent); }
+.key svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; }
+
+/* The dock under the thumb: mouse keys on top, then the keys that open things. */
+#dock { grid-area: dock; min-width: 0; display: flex; flex-direction: column; gap: var(--gap); }
+.mouse { display: flex; gap: 2px; border-radius: 14px; overflow: hidden; background: var(--edge); border: 2px solid var(--edge); }
+.mouse button { flex: 1; height: 54px; background: var(--cap); box-shadow: inset 0 1px 0 var(--cap-hi); color: var(--text); }
+.mouse button:first-child { flex: 1.7; }
+.mouse button.pressed, .mouse button:active { background: var(--surface); color: var(--accent); box-shadow: inset 0 3px 6px var(--edge); }
+.tools { display: flex; gap: var(--gap); }
+.tools .key { width: 60px; height: 48px; padding: 0; border-radius: 12px; }
+.tools .key svg { width: 20px; height: 20px; }
+/* The type key looks like the field it opens. */
+.slot { flex: 1; min-width: 0; height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-radius: 12px;
+  border: 1px solid var(--edge); background: var(--deep); color: var(--muted); font-size: 16px; box-shadow: inset 0 2px 5px var(--edge); }
+.slot span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slot svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.slot.pressed, .slot:active { border-color: var(--accent); color: var(--text); }
+
+/* The tray: comes up out of the display's lower edge and covers its lower part. The display keeps its size,
+   so the stream goes on. Closed, it waits below the edge, clipped by the bezel, and hides only once it is
+   out of sight; it takes no touches from the moment it starts to leave (inert). */
+#drawer { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 3; padding: 0 10px 10px;
+  display: flex; flex-direction: column; gap: 10px; border-radius: 14px; background: var(--body);
+  box-shadow: inset 0 1px 0 var(--cap-hi), 0 -6px 20px rgb(0 0 0 / .5);
+  max-height: calc(100% - 16px); overflow: hidden auto; overscroll-behavior: contain;
+  transform: translate3d(0, calc(100% + 12px), 0); visibility: hidden; will-change: transform;
+  transition: transform var(--exit), visibility 0s linear var(--exit-ms); }
+body.drawer #drawer { transform: translate3d(0, 0, 0); visibility: visible; transition: transform var(--enter); }
+/* Following a finger that pulls it down; let go, it drops or springs back. */
+body.drawer #drawer.held { transform: translate3d(0, var(--pull, 0px), 0); transition: none; }
+/* The grip: a slot to pull the tray down by. The tray's whole top edge takes the swipe. */
+.grip { flex: none; height: 14px; margin-bottom: -6px; display: grid; place-items: center; }
+.grip::before { content: ''; width: 36px; height: 4px; border-radius: 2px; background: var(--deep); box-shadow: inset 0 1px 1px var(--edge); }
+
+/* Slide switches: a recessed track, a raised thumb that travels to the chosen position. */
+.switch { position: relative; display: flex; border-radius: var(--r-key); background: var(--deep);
+  box-shadow: inset 0 1px 3px var(--edge); touch-action: none; }
+.switch > :not(i) { flex: 1; position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); transition: color .15s; }
+.switch > .on { color: var(--text); }
+.switch > i { position: absolute; top: 3px; bottom: 3px; left: calc(var(--i, 0) * 100% / var(--n) + 3px);
+  width: calc(100% / var(--n) - 6px); border-radius: 7px; background: var(--cap);
+  box-shadow: inset 0 1px 0 var(--cap-hi), 0 1px 2px var(--edge); transition: left var(--snap); }
+#pages { flex: none; --n: 3; --i: var(--page, 0); height: 40px; }
+
+/* Deck: three pages of keys, one shown at a time, all of the same height so the tray does not jump. */
+#deck { flex: none; min-width: 0; --page-h: 122px; }
+.page { height: var(--page-h); padding-bottom: 3px; animation: page-in .16s ease-out; }
+@keyframes page-in { from { opacity: 0; } }
+/* Key caps: a raised top with a light upper edge, standing on a dark base that shows below it. Pressed,
+   the top sinks onto the base. */
+.cap { position: relative; min-width: 0; border-radius: var(--r-key); background: var(--cap); display: grid; place-items: center;
+  box-shadow: inset 0 1px 0 var(--cap-hi), 0 3px 0 var(--edge); transition: transform .05s, box-shadow .05s, background-color .05s; }
+.cap.pressed, .cap:active { transform: translateY(2px); background: #2b2e34; box-shadow: inset 0 1px 0 var(--line), 0 1px 0 var(--edge); }
+/* An armed modifier stays latched down, on an amber edge, until the next key or click releases it. */
+.cap.on { color: var(--accent); background: var(--surface); transform: translateY(2px);
+  box-shadow: inset 0 2px 4px var(--edge), 0 1px 0 var(--accent); }
+.cap.accent { background: var(--accent); color: var(--accent-ink); box-shadow: inset 0 1px 0 rgb(255 255 255 / .3), 0 3px 0 #8a6215; }
+.cap.accent.pressed, .cap.accent:active { box-shadow: 0 1px 0 #8a6215; }
+
+.media { display: flex; gap: 8px; }
+.transport { flex: 1; min-width: 0; height: calc(100% - 3px); display: flex; align-items: center; border-radius: 60px; background: var(--cap);
+  box-shadow: inset 0 1px 0 var(--cap-hi), 0 3px 0 var(--edge); }
+.transport button { flex: 1; height: 100%; display: grid; place-items: center; }
+.transport .play { flex: none; width: 82px; height: 82px; border-radius: 50%; background: var(--deep);
+  box-shadow: inset 0 2px 5px var(--edge); }
+.transport svg { width: 22px; height: 22px; }
+.transport button.pressed, .transport button:active, .rocker button.pressed, .rocker button:active { color: var(--accent); }
+.transport .play.pressed, .transport .play:active { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
+.media .cap { flex: none; width: 58px; height: calc(100% - 3px); }
+.rocker { flex: none; width: 62px; height: calc(100% - 3px); display: flex; flex-direction: column; border-radius: 14px; background: var(--cap);
+  box-shadow: inset 0 1px 0 var(--cap-hi), 0 3px 0 var(--edge); overflow: hidden; }
+.rocker button { flex: 1; font-size: 24px; font-weight: 400; }
+.rocker button + button { border-top: 2px solid var(--edge); }
+
+.keys { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); grid-template-rows: 1fr 1fr; gap: 10px 6px; }
+.keys .cap:not(.legend) { font-size: 18px; }
+.keys .legend { font-size: 10px; letter-spacing: .06em; }
+.keys .wide { grid-column: span 2; }
+
+/* Regler: each a legend with its value over a slider. The finger sets the value where it touches and while
+   it slides; the thumb snaps from detent to detent. The longer tick marks the default. */
+.settings { display: grid; grid-template: repeat(3, minmax(0, 1fr)) / minmax(0, 1fr) 46px; gap: 4px 10px; }
+.setting { grid-column: 1; min-width: 0; display: grid; grid-template-columns: 58px minmax(0, 1fr); align-items: center; gap: 6px; }
+.setting .name { display: flex; flex-direction: column; gap: 3px; }
+.setting .name .legend { font-size: 10px; color: var(--muted); }
+.setting output { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.slider { --inset: 12px;
+  position: relative; height: 100%; min-height: 36px; touch-action: none; cursor: pointer; border-radius: 8px; }
+.slider::before { content: ''; position: absolute; left: var(--inset); right: var(--inset); top: 50%; height: 4px; margin-top: -2px;
+  border-radius: 2px; background: var(--deep); box-shadow: inset 0 1px 1px var(--edge); }
+.slider i, .slider b { left: calc(var(--inset) + var(--at, 0) * (100% - 2 * var(--inset))); }
+.slider i { position: absolute; top: calc(50% + 7px); width: 1px; height: 4px; background: var(--faint); }
+.slider i.std { top: calc(50% + 6px); height: 7px; background: var(--muted); }
+.slider b { position: absolute; top: 50%; width: 24px; height: 30px; margin: -16px 0 0 -12px; border-radius: 7px;
+  background: var(--cap); box-shadow: inset 0 1px 0 var(--cap-hi), 0 3px 0 var(--edge); transition: left .08s ease-out; }
+.slider b::after { content: ''; position: absolute; left: 11px; top: 8px; width: 2px; height: 14px; border-radius: 1px; background: var(--accent); }
+.slider.pressed b { transform: translateY(2px); box-shadow: inset 0 1px 0 var(--cap-hi), 0 1px 0 var(--edge); }
+.settings .reset { grid-column: 2; grid-row: 1 / -1; height: calc(100% - 3px); font-size: 10px; letter-spacing: .06em; }
+
+/* Typing: the field and the keys the iOS keyboard lacks, right above it. Out of sight the field stays
+   rendered, so iOS can still focus it. */
+#typebar { grid-area: dock; min-width: 0; display: grid; grid-template: "acc acc" auto "slot done" 44px / minmax(0, 1fr) auto; gap: 8px; }
+body:not(.typing) #typebar { position: absolute; left: 0; right: 0; bottom: 0; opacity: 0; pointer-events: none; }
+body.typing #dock { display: none; }
+body.typing #drawer { display: none; }
+#accessory { grid-area: acc; display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); grid-auto-rows: 40px; gap: 5px; padding-bottom: 3px; }
+#accessory .cap { font-size: 16px; border-radius: 8px; }
+#accessory .legend { font-size: 10px; letter-spacing: .04em; }
+@media (max-width: 359px) { #accessory { grid-template-columns: repeat(5, minmax(0, 1fr)); grid-auto-rows: 36px; } }
+#slot { grid-area: slot; min-width: 0; }
+#field { width: 100%; height: 44px; padding: 0 14px; border-radius: var(--r-key); border: 1px solid var(--edge);
+  background: var(--deep); color: var(--text); font-size: 16px; outline: none; box-shadow: inset 0 2px 5px var(--edge);
+  caret-color: var(--accent); -webkit-user-select: text; user-select: text; }
+#field:focus { border-color: var(--accent); }
+#done { grid-area: done; width: 92px; height: 41px; }
+
+/* A phone on its side: the display takes the width, the dock stands as a rail beside it, under the right
+   thumb, and the tray opens at the display's right, next to the rail. */
+body.wide #app { grid-template: "console dock" 1fr / minmax(0, 1fr) var(--rail);
+  padding-top: max(8px, var(--safe-top)); padding-bottom: max(8px, var(--safe-bottom)); }
+body.wide .mouse { flex: 1; flex-direction: column; }
+body.wide .mouse button { height: auto; min-height: 44px; }
+body.wide .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+body.wide .tools .key, body.wide .slot { width: auto; height: 44px; }
+body.wide .slot { justify-content: center; padding: 0; }
+body.wide .slot span { display: none; }
+body.wide #viewBtn { grid-column: 1 / -1; }
+body.wide #drawer { left: auto; width: min(380px, calc(100% - 16px)); }
+/* Typing on its side: one row above the keyboard when it fits, the display above it. */
+body.wide.typing #app { grid-template: "console" 1fr "dock" auto / minmax(0, 1fr); }
+@media (min-width: 640px) {
+  body.wide #typebar { grid-template: "slot acc done" 40px / minmax(120px, 1fr) auto auto; }
+  body.wide #accessory { grid-template-columns: repeat(10, 40px); grid-auto-rows: 37px; padding: 0; }
+  body.wide #field { height: 40px; }
+  body.wide #done { height: 37px; }
+}
+/* A narrow phone: the media keys give the transport room, so the play key does not crowd its neighbours. */
+@media (max-width: 359px) {
+  .media .cap { width: 48px; }
+  .rocker { width: 52px; }
+  .transport .play { width: 66px; height: 66px; }
+}
+/* A short display on its side: the tray's pages give up some height so it still fits under the zoom keys. */
+@media (max-height: 360px) { #deck { --page-h: 108px; } .transport .play { width: 72px; height: 72px; } }
+
+/* The keyboard covers the home indicator, so its inset is not needed above it. */
+body.keyboard #app { padding-bottom: 8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cap, .switch > i, .slider b, #drawer, body.drawer #drawer { transition: none; }
+  .page { animation: none; }
+  #status::before { animation: none; }
+}

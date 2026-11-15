@@ -42,4 +42,42 @@ final class InputTests: XCTestCase {
         input.releaseAll()
         XCTAssertEqual(posted, [name(.leftMouseDown, "ctrl"), name(.leftMouseUp, "ctrl")])
     }
+
+    private var scrolls: [String] {
+        events.filter { $0.type == .scrollWheel }.map { event in
+            let phase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
+            return "\(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)) \(phase)"
+        }
+    }
+
+    /// The page sends fractions of a pixel; none is lost, and the gesture has a beginning and an end.
+    func testAScrollIsOneGestureFromItsFirstWholePixelToItsEnd() {
+        input.scroll(dx: 0, dy: 0.6)
+        input.scroll(dx: 0, dy: 0.6)
+        input.scroll(dx: 0, dy: 2.9)
+        input.endScroll()
+        XCTAssertEqual(scrolls, ["1 1", "3 2", "0 4"])
+    }
+
+    func testARestOfAPixelDoesNotCarryIntoTheNextScroll() {
+        input.scroll(dx: 0, dy: 1.9)
+        input.endScroll()
+        input.scroll(dx: 0, dy: -1.2)
+        input.endScroll()
+        input.endScroll()
+        XCTAssertEqual(scrolls, ["1 1", "0 4", "-1 1", "0 4"])
+    }
+
+    func testADisconnectEndsAScroll() {
+        input.scroll(dx: 0, dy: 5)
+        input.releaseAll()
+        XCTAssertEqual(scrolls, ["5 1", "0 4"])
+    }
+
+    /// Fractional moves add up, so a slow finger reaches the Mac in full.
+    func testFractionsOfAPointAddUp() {
+        for _ in 0..<10 { input.move(dx: 0.25, dy: 0) }
+        let steps = events.filter { $0.type == .mouseMoved }.map { $0.getIntegerValueField(.mouseEventDeltaX) }
+        XCTAssertEqual(steps.reduce(0, +), 2)
+    }
 }

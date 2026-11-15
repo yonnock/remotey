@@ -3,7 +3,10 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-export const HTTP = 'http://127.0.0.1:47800', WS = 'ws://127.0.0.1:47801/ws';
+/** REMOTEY_PORT names the agent to talk to, as it does for the agent itself; the socket is on the port after it. */
+const port = /^\d+$/.test(process.env.REMOTEY_PORT ?? '') ? Number(process.env.REMOTEY_PORT) : 0;
+export const PORT = port > 0 && port < 65535 ? port : 47800; // as Server.swift reads it
+export const HTTP = `http://127.0.0.1:${PORT}`, WS = `ws://127.0.0.1:${PORT + 1}/ws`;
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const fail = (msg) => { console.error('FAIL', msg); process.exit(1); };
 /** The agent writes the pairing token when it first starts. */

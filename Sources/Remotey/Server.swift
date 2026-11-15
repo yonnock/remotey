@@ -1,11 +1,13 @@
 import AppKit
 import Network
 
-/// Two loopback-only listeners: plain HTTP for the web UI and a WebSocket for input.
-/// Nothing is reachable from the network directly; `tailscale serve` puts TLS in front of both.
+/// Two loopback-only listeners: plain HTTP for the web UI on `port` and a WebSocket for input on the port after it,
+/// which the page derives from its own. Nothing is reachable from the network directly; `tailscale serve` puts
+/// TLS in front of both.
 final class Server {
-    static let httpPort: UInt16 = 47800
-    static let wsPort: UInt16 = 47801
+    /// `REMOTEY_PORT` moves both, so a development build can run beside the installed app.
+    static let port: UInt16 = ProcessInfo.processInfo.environment["REMOTEY_PORT"].flatMap(UInt16.init)
+        .flatMap { $0 < .max ? $0 : nil } ?? 47800
 
     /// Clients are authenticated against the current token, so replacing it drops all of them.
     var token: String { didSet { clients.values.forEach { $0.connection.cancel() } } }
@@ -38,11 +40,10 @@ final class Server {
     private let pendingTimeout: TimeInterval
     private let ports: (http: UInt16, ws: UInt16)
 
-    init(token: String, input: Input, httpPort: UInt16 = Server.httpPort, wsPort: UInt16 = Server.wsPort,
-         pendingTimeout: TimeInterval = 5) {
+    init(token: String, input: Input, port: UInt16 = Server.port, pendingTimeout: TimeInterval = 5) {
         self.token = token
         self.input = input
-        self.ports = (httpPort, wsPort)
+        self.ports = (port, port + 1)
         self.pendingTimeout = pendingTimeout
     }
 
@@ -104,6 +105,7 @@ final class Server {
             self?.settle(connection)
             guard let data else { return connection.cancel() }
             let requestLine = String(data: data, encoding: .utf8)?.components(separatedBy: "\r\n").first ?? ""
+            if ScreenView.statsOn { FileHandle.standardError.write(Data("http \(requestLine)\n".utf8)) }
             let parts = requestLine.split(separator: " ")
             let path = parts.count > 1 ? String(parts[1].split(separator: "?").first ?? "") : ""
 
@@ -119,9 +121,9 @@ final class Server {
                 "Cache-Control: no-cache",
                 "X-Content-Type-Options: nosniff",
                 "Referrer-Policy: no-referrer",
-                "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; "
-                    + "script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:; "
-                    + "frame-ancestors 'none'",
+                // Styles and scripts are files of the page only. Scripts set styles through the CSSOM, which this allows.
+                "Content-Security-Policy: default-src 'none'; style-src 'self'; script-src 'self'; "
+                    + "connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'",
             ].joined(separator: "\r\n") + "\r\n\r\n"
             connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in
                 connection.cancel()
@@ -186,12 +188,27 @@ final class Server {
         case .move(let dx, let dy, let sequence):
             input.move(dx: dx, dy: dy)
             // The view follows at once instead of waiting for the screen to show the move.
-            if viewer === client { screen.pointerMoved(applied: sequence) }
-        case .scroll(let dx, let dy): input.scroll(dx: dx, dy: dy)
-        case .click(let button, let mods): input.click(button, mods: mods)
-        case .button(let button, let down, let mods): input.button(button, down: down, mods: mods)
-        case .text(let text): input.type(text)
-        case .key(let key, let mods, let count): input.key(key, mods: mods, count: count)
+            if viewer === client {
+                screen.followText(false)
+                screen.pointerMoved(applied: sequence)
+            }
+        case .scroll(let dx, let dy):
+            if viewer === client { screen.followText(false) } // scrolling moves the text away from where it was
+            input.scroll(dx: dx, dy: dy)
+        case .scrollEnded: input.endScroll()
+        case .click(let button, let mods):
+            if viewer === client { screen.followText(false) } // the view shows where the click lands
+            input.click(button, mods: mods)
+        case .button(let button, let down, let mods):
+            if viewer === client { screen.followText(false) }
+            input.button(button, down: down, mods: mods)
+        case .text(let text):
+            input.type(text)
+            if viewer === client { screen.followText(true) }
+        case .key(let key, let mods, let count):
+            input.key(key, mods: mods, count: count)
+            // Escape and shortcuts act on the app, not on the text, so the view stays where the user looks.
+            if viewer === client, key != "escape", !mods.contains("cmd") { screen.followText(true) }
         case .media(let key): input.media(key)
         case .view(let request): view(request, for: client)
         case .shown(let number): if viewer === client { screen.frameShown(number) }

@@ -8,7 +8,9 @@ enum Wire {
         case auth(token: String)
         /// `sequence` numbers the move, so that the page can time it until a `LiveUpdate` includes it.
         case move(dx: Double, dy: Double, sequence: UInt32?)
+        /// Part of a two-finger scroll; the first one after `scrollEnded` begins a new gesture.
         case scroll(dx: Double, dy: Double)
+        case scrollEnded
         /// `mods` are the modifiers held during the click, named as for `key`.
         case click(CGMouseButton, mods: [String])
         /// A press names its `mods`; the agent keeps them until the release.
@@ -16,7 +18,8 @@ enum Wire {
         case text(String)
         case key(String, mods: [String], count: Int)
         case media(String)
-        /// Nil switches the live view off. The page asks for 30 to 120 frames per second, as it measures its display.
+        /// Nil switches the live view off. The page asks for 30 to 120 frames per second, as it measures its display,
+        /// and numbers its requests: every update names the one it was cut for.
         case view(ScreenView.Request?)
         /// The page has drawn or discarded the picture with this number.
         case shown(UInt32)
@@ -43,6 +46,7 @@ enum Wire {
         var codec: String?
         var fps: Int?
         var q: UInt32?
+        var v: UInt32?
     }
 
     private static let decoder = JSONDecoder()
@@ -59,6 +63,7 @@ enum Wire {
         case "auth": m.token.map { .auth(token: $0) }
         case "m": delta.map { .move(dx: $0.dx, dy: $0.dy, sequence: m.q) }
         case "s": delta.map { .scroll(dx: $0.dx, dy: $0.dy) }
+        case "se": .scrollEnded
         case "c": .click(button, mods: m.mods ?? [])
         case "b": m.d.map { .button(button, down: $0, mods: m.mods ?? []) }
         case "text": m.s.flatMap { $0.count <= 2000 ? .text($0) : nil }
@@ -74,7 +79,8 @@ enum Wire {
     private static func view(_ m: Fields) -> ScreenView.Request? {
         guard m.on == true, let width = m.w, let height = m.h, let zoom = m.zoom, let pixelRatio = m.dpr,
               let codec = m.codec, let fps = m.fps else { return nil }
-        return ScreenView.Request(width: width, height: height, zoom: zoom, pixelRatio: pixelRatio, h264: codec == "h264", fps: fps)
+        return ScreenView.Request(width: width, height: height, zoom: zoom, pixelRatio: pixelRatio, h264: codec == "h264",
+                                  fps: fps, number: m.v ?? 0)
     }
 
     /// The token was right. `page` is `Web.version`: a page that was loaded from an older agent reloads itself.
@@ -97,10 +103,11 @@ enum Wire {
 }
 
 extension LiveUpdate {
-    static let headerSize = 22
+    static let headerSize = 35
 
     /// One binary message, little endian: UInt8 kind (0 pointer only, 1 JPEG, 2 H.264), UInt8 frames per second,
-    /// Float32 pointer x, Float32 pointer y, Float32 width, UInt32 sequence, UInt32 picture number, then the picture.
+    /// UInt8 flags (1: the view follows the text caret), Float32 pointer x and y, Float32 focus x and y, Float32 width,
+    /// UInt32 sequence, UInt32 number of the view request, UInt32 picture number, then the picture.
     var data: Data {
         let (kind, payload): (UInt8, Data) = switch picture?.content {
         case nil: (0, Data())
@@ -110,8 +117,9 @@ extension LiveUpdate {
         var data = Data(capacity: Self.headerSize + payload.count)
         data.append(kind)
         data.append(UInt8(clamping: framesPerSecond))
-        for value in [Float32(pointer.x).bitPattern, Float32(pointer.y).bitPattern, Float32(width).bitPattern,
-                      sequence, picture?.number ?? 0] {
+        data.append(followsText ? 1 : 0)
+        for value in [Float32(pointer.x).bitPattern, Float32(pointer.y).bitPattern, Float32(focus.x).bitPattern,
+                      Float32(focus.y).bitPattern, Float32(width).bitPattern, sequence, request, picture?.number ?? 0] {
             withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
         }
         data.append(payload)

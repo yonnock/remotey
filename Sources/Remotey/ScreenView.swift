@@ -13,6 +13,12 @@ struct LiveUpdate {
 
     /// The pointer's place, 0...1 inside the picture.
     var pointer: CGPoint
+    /// The place the view is cut around, 0...1 inside the picture: the pointer, or the text caret while the phone types.
+    var focus: CGPoint
+    /// The view follows the text caret instead of the pointer.
+    var followsText: Bool
+    /// Number of the view request the picture was cut for.
+    var request: UInt32
     /// Width of the picture in points, which gives the pointer's size on the phone.
     var width: Double
     /// The rate the view runs at: the phone's wish, bounded by the codec and the Mac's displays.
@@ -45,9 +51,11 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let pixelRatio: Double
         let h264: Bool
         let framesPerSecond: Int32
+        /// The page's number for this request. Every update names it, so the page knows which zoom a picture has.
+        let number: UInt32
 
         /// Nil for a size no phone display has.
-        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool, fps: Int) {
+        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool, fps: Int, number: UInt32 = 0) {
             guard (50...4000).contains(width), (50...4000).contains(height) else { return nil }
             self.width = width
             self.height = height
@@ -55,6 +63,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             self.pixelRatio = min(max(pixelRatio, 1), ScreenView.maxPixelRatio)
             self.h264 = h264
             self.framesPerSecond = h264 ? Int32(min(max(fps, 30), 120)) : 30
+            self.number = number
         }
     }
 
@@ -102,6 +111,8 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         }
 
         var stream: SCStream?
+        /// Runs instead of `stream` while `TestPattern.on`.
+        var pattern: TestPattern?
         /// What the stream runs with.
         var settings: Settings?
         /// The second argument holds the changed areas in pixels of the buffer, or nil if all of it may have changed.
@@ -151,6 +162,8 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private static let idleFramesPerSecond: Int32 = 5
     /// A display runs at the full rate this many points before the view reaches it.
     private static let leadIn = 200.0
+    /// While typing, the view moves only once the caret comes this close to an edge, as a share of the view.
+    private static let textMargin = 0.2
 
     // Main queue state.
     private var request: Request?
@@ -169,6 +182,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     /// The pointer picture the phone has.
     private var cursorSent: Pointer.Picture?
     private var cursorCheck = (scheduled: false, again: false)
+    private lazy var textFocus = TextFocus { [weak self] target in self?.setText(target) }
 
     // Frame queue state.
     private let queue = DispatchQueue(label: "remotey.frames", qos: .userInteractive)
@@ -182,7 +196,11 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     /// The picture inside the view changed since the last encode.
     private var stale = false
     /// What the phone was last told. A move that leaves the view where it is sends the pointer's place only.
-    private var sent: (cursor: CGPoint, view: CGRect)?
+    private var sent: (cursor: CGPoint, view: CGRect, focus: CGPoint)?
+    /// Where typed text lands, while the view follows it.
+    private var text: TextFocus.Target?
+    /// The view cut around the text, kept while the caret stays well inside it.
+    private var textView: CGRect?
     /// Number of the last pointer move the phone sent. It returns with the next message, so the phone can time the round trip.
     private var sequence: UInt32 = 0
     /// The displays in or near the view that the main queue was last told about.
@@ -192,13 +210,41 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private var waiting = false
     private var generation = UUID()
     private var encoder: H264Encoder?
-    /// The hardware encoder takes one picture at a time; composing the next one meanwhile gains nothing.
+    /// One picture at a time, composed and encoded. For a 756 × 1136 view on an M3 Max that takes 6 to 9 ms, of
+    /// which composing is about 5 ms (`REMOTEY_STATS`): plenty for the 60 fps Safari draws at, short of 120 fps.
     private var encoding = false
     private var jpegFallback = false
     private var window = SendWindow()
+    private var stats = Stats()
+    static var statsOn: Bool { Stats.on }
+
+    /// What each stage of the live view did in the last second, written to standard error once a second
+    /// while `REMOTEY_STATS` is set. For measuring the stream on the Mac's side; frame queue only.
+    private struct Stats {
+        static let on = ProcessInfo.processInfo.environment["REMOTEY_STATS"] != nil // HTTP requests are written too
+        var captured = 0, inView = 0, encoded = 0, dropped = 0, encodeTime = 0.0, renderTime = 0.0, blocked = 0, pictures = 0, places = 0
+        var bytes = 0, answered = 0
+        var since = ProcessInfo.processInfo.systemUptime
+        var active: Bool { captured + places + pictures + answered > 0 }
+
+        mutating func report(_ extra: String) {
+            let now = ProcessInfo.processInfo.systemUptime, seconds = now - since
+            guard Self.on, seconds >= 1 else { return }
+            if active {
+                let line = String(format: "stats %.1fs captured %d in-view %d encoded %d (%.1f ms each, %.1f ms of it composing) dropped %d window-shut %d "
+                    + "pictures %d pointer-only %d %.2f Mbit/s answered %d %@\n", seconds, captured, inView, encoded,
+                    encoded > 0 ? encodeTime / Double(encoded) * 1000 : 0,
+                    encoded > 0 ? renderTime / Double(encoded) * 1000 : 0, dropped, blocked, pictures, places,
+                    Double(bytes) * 8 / seconds / 1e6, answered, extra)
+                FileHandle.standardError.write(Data(line.utf8))
+            }
+            self = Stats(since: now)
+        }
+    }
 
     func update(_ request: Request?) {
         guard request != self.request else { return }
+        if Stats.on { FileHandle.standardError.write(Data("request \(request.map { "\($0)" } ?? "off")\n".utf8)) }
         revision += 1
         let restarting = self.request == nil || self.request?.h264 != request?.h264
         queue.async {
@@ -210,6 +256,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         }
         self.request = request
         if restarting { cursorSent = nil }
+        if request == nil { followText(false) }
         watchMouse(request != nil)
         sendCursorIfChanged()
         configure()
@@ -219,6 +266,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     func frameShown(_ number: UInt32) {
         queue.async {
             guard self.window.answered(number, now: ProcessInfo.processInfo.systemUptime) else { return }
+            self.stats.answered += 1
             self.encodeLatest()
         }
     }
@@ -231,11 +279,41 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         }
     }
 
+    /// While on, the view is cut around the text caret instead of the pointer: the phone types.
+    /// Off again with any use of the pointer, from the phone or the Mac's own mouse.
+    func followText(_ on: Bool) {
+        if on, request != nil {
+            textFocus.start()
+            locateText()
+            // The app may take the key a moment after it was posted; its notifications may not come.
+            textFocus.locateSoon()
+        } else if !on, textFocus.isWatching {
+            textFocus.stop()
+            setText(nil)
+        }
+    }
+
+    private func locateText() {
+        setText(textFocus.locate())
+    }
+
+
+    private func setText(_ target: TextFocus.Target?) {
+        queue.async {
+            guard target != self.text else { return }
+            self.text = target
+            self.encodeLatest()
+        }
+    }
+
     private func watchMouse(_ on: Bool) {
         if on, mouseMonitor == nil {
             mouseMonitor = NSEvent.addGlobalMonitorForEvents(
-                matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
-            ) { [weak self] _ in self?.pointerMoved() }
+                matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]
+            ) { [weak self] _ in
+                self?.followText(false)
+                self?.pointerMoved()
+            }
         } else if !on, let monitor = mouseMonitor {
             NSEvent.removeMonitor(monitor)
             mouseMonitor = nil
@@ -274,6 +352,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
                 do {
                     try await apply()
                 } catch {
+                    if Stats.on { FileHandle.standardError.write(Data("capture failed: \(error)\n".utf8)) }
                     await teardown()
                     if request != nil {
                         try? await Task.sleep(for: .seconds(1))
@@ -313,6 +392,9 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             for (capture, display) in zip(captures, layout) {
                 let wanted = settings(display)
                 guard capture.settings != wanted else { continue }
+                if let pattern = capture.pattern {
+                    queue.async { pattern.size = (wanted.width, wanted.height, wanted.framesPerSecond) }
+                }
                 try await capture.stream?.updateConfiguration(wanted.configuration)
                 capture.settings = wanted
             }
@@ -323,9 +405,21 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             let epoch = self.epoch
             // Queued before any capture starts, so the first frame of a static display is not lost.
             queue.async { self.liveEpoch = epoch }
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let content = TestPattern.on ? nil : try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             for display in displays {
-                guard let source = content.displays.first(where: { $0.displayID == display.id }) else {
+                if TestPattern.on {
+                    let wanted = settings(display), capture = Capture { _, _ in }
+                    capture.pattern = TestPattern(width: wanted.width, height: wanted.height, framesPerSecond: wanted.framesPerSecond,
+                                                  queue: queue) { [weak self] buffer in
+                        self?.captured(buffer, dirty: nil, from: display.id, epoch: epoch)
+                    }
+                    capture.settings = wanted
+                    captures.append(capture)
+                    layout.append(display)
+                    continue
+                }
+                guard let source = content?.displays.first(where: { $0.displayID == display.id }) else {
+                    if Stats.on { FileHandle.standardError.write(Data("no capture of display \(display.id) among \(content?.displays.map(\.displayID) ?? [])\n".utf8)) }
                     throw DisplayUnavailable()
                 }
                 let id = display.id
@@ -368,6 +462,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             self.resetFrames()
         }
         for capture in old {
+            capture.pattern?.stop()
             try? await capture.stream?.stopCapture()
         }
     }
@@ -378,6 +473,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         geometry = nil
         stale = false
         sent = nil
+        textView = nil
         reported = nil
         encoder = nil
         encoding = false
@@ -389,7 +485,8 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
             else { return nil }
             return Display(id: id, bounds: CGDisplayBounds(id), backingScale: screen.backingScaleFactor,
-                           framesPerSecond: Int32(max(1, screen.maximumFramesPerSecond)))
+                           // The test pattern runs at any rate, so a measurement does not depend on the display the pointer is on.
+                           framesPerSecond: TestPattern.on ? 120 : Int32(max(1, screen.maximumFramesPerSecond)))
         }
     }
 
@@ -435,6 +532,31 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
 
     // MARK: Frames (frame queue)
 
+    /// The view and the point it is cut around: the text caret while the phone types, else the pointer.
+    private func framing(_ geometry: Geometry, cursor: CGPoint) -> (view: CGRect, focus: CGPoint, text: Bool) {
+        if let text, let view = Self.textView(for: text, held: textView, around: geometry.view(around:)) {
+            textView = view
+            return (view, CGPoint(x: text.rect.midX, y: text.rect.midY), true)
+        }
+        textView = nil
+        return (geometry.view(around: cursor), cursor, false)
+    }
+
+    /// The view for typed text, or nil if the text gives no place to show (then the pointer's view is shown).
+    /// `held` is the view shown for the text so far; it stays while the caret is well inside it, so the text
+    /// does not slide with every key. An element's frame only counts if it fits: a large text view says
+    /// nothing about where the typing is.
+    static func textView(for text: TextFocus.Target, held: CGRect?, around view: (CGPoint) -> CGRect) -> CGRect? {
+        let focus = CGPoint(x: text.rect.midX, y: text.rect.midY)
+        let fresh = view(focus)
+        guard text.exact || (text.rect.width <= fresh.width && text.rect.height <= fresh.height) else { return nil }
+        if let held, held.size == fresh.size,
+           held.insetBy(dx: held.width * textMargin, dy: held.height * textMargin).contains(focus) {
+            return held
+        }
+        return fresh
+    }
+
     /// Whether a capture changed the picture inside `view`. `dirty` is in pixels of the capture, `display` and `view` in global points.
     static func changes(_ dirty: [CGRect]?, pixelsPerPoint density: Double, on display: CGRect, touch view: CGRect) -> Bool {
         guard let dirty else { return true }
@@ -446,15 +568,16 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
 
     private func captured(_ buffer: CVPixelBuffer, dirty: [CGRect]?, from id: CGDirectDisplayID, epoch: UInt64) {
         guard epoch == liveEpoch else { return }
+        stats.captured += 1
+        stats.report(window.description)
         let width = CVPixelBufferGetWidth(buffer)
         // The first capture, or the first at a new density after a zoom.
         let fresh = frames.updateValue(buffer, forKey: id).map { CVPixelBufferGetWidth($0) != width } ?? true
         guard let geometry, let display = geometry.displays.first(where: { $0.id == id }) else { return }
-        let cursor = Pointer.location
-        let view = geometry.view(around: cursor)
-        // Measured around the cursor, not the view: a view as tall as its display lies against the
-        // neighbour all the time, but shows it only once the cursor is within half a view of the seam.
-        let reach = CGRect(x: cursor.x - view.width / 2, y: cursor.y - view.height / 2, width: view.width, height: view.height)
+        let (view, focus, _) = framing(geometry, cursor: Pointer.location)
+        // Measured around the focus, not the view: a view as tall as its display lies against the
+        // neighbour all the time, but shows it only once the focus is within half a view of the seam.
+        let reach = CGRect(x: focus.x - view.width / 2, y: focus.y - view.height / 2, width: view.width, height: view.height)
             .insetBy(dx: -Self.leadIn, dy: -Self.leadIn)
         let near = Set(geometry.displays.filter { $0.bounds.intersects(reach) }.map(\.id))
         if near != reported {
@@ -466,6 +589,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         guard display.bounds.intersects(view),
               fresh || Self.changes(dirty, pixelsPerPoint: Double(width) / display.bounds.width, on: display.bounds, touch: view)
         else { return }
+        stats.inView += 1
         // While the phone is busy only the newest frame is kept, so a slow link or phone lowers the
         // frame rate instead of building up delay, and the last frame of a movement always arrives.
         stale = true
@@ -496,17 +620,22 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         // Also holds back the pointer's place alone: it must not overtake the picture being encoded, which shows an older one.
         guard !encoding, let geometry else { return }
         let cursor = Pointer.location, sequence = self.sequence
-        let view = geometry.view(around: cursor)
+        let (view, focus, followsText) = framing(geometry, cursor: cursor)
         let picture = stale || view != sent?.view
-        guard picture || cursor != sent?.cursor else { return }
-        if picture, !window.isOpen(framesPerSecond: geometry.framesPerSecond) { return }
+        guard picture || cursor != sent?.cursor || focus != sent?.focus else { return }
+        if picture, !window.isOpen(now: ProcessInfo.processInfo.systemUptime) { stats.blocked += 1; return }
         guard takeSlot(framesPerSecond: geometry.framesPerSecond) else { return }
         func deliver(_ picture: LiveUpdate.Picture?) {
-            sent = (cursor, view)
-            let pointer = CGPoint(x: (cursor.x - view.minX) / view.width, y: (cursor.y - view.minY) / view.height)
+            sent = (cursor, view, focus)
+            func inside(_ point: CGPoint) -> CGPoint {
+                CGPoint(x: (point.x - view.minX) / view.width, y: (point.y - view.minY) / view.height)
+            }
             let numbered = picture.map { (number: window.send(now: ProcessInfo.processInfo.systemUptime), content: $0) }
-            self.deliver(LiveUpdate(pointer: pointer, width: view.width, framesPerSecond: geometry.framesPerSecond,
-                                    sequence: sequence, picture: numbered), revision: geometry.revision)
+            if numbered == nil { stats.places += 1 } else { stats.pictures += 1 }
+            self.deliver(LiveUpdate(pointer: inside(cursor), focus: inside(focus), followsText: followsText,
+                                    request: geometry.request.number, width: view.width,
+                                    framesPerSecond: geometry.framesPerSecond, sequence: sequence, picture: numbered),
+                         revision: geometry.revision)
         }
         // The pointer moved inside a view held by its display's edges: the picture on the phone stays as it is.
         guard picture else { return deliver(nil) }
@@ -540,7 +669,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let generation = self.generation
         func deliverJPEG() {
             // Without a JPEG the picture stays owed.
-            if let data = jpeg(image) { deliver(.jpeg(data)) } else { stale = true }
+            if let data = jpeg(image) { stats.bytes += data.count; deliver(.jpeg(data)) } else { stale = true }
         }
         if geometry.request.h264 && !jpegFallback {
             do {
@@ -548,14 +677,19 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
                     encoder = try H264Encoder(width: width, height: height, framesPerSecond: geometry.framesPerSecond)
                 }
                 encoding = true
+                let started = ProcessInfo.processInfo.systemUptime
                 try encoder!.encode(image, context: ciContext) { output in
                     self.queue.async {
                         guard generation == self.generation else { return }
                         self.encoding = false
                         switch output {
                         case .frame(let payload):
+                            self.stats.encoded += 1
+                            self.stats.encodeTime += ProcessInfo.processInfo.systemUptime - started
+                            self.stats.bytes += payload.count
                             deliver(.h264(payload))
                         case .dropped:
+                            self.stats.dropped += 1
                             // Keep the last changed image even if the screen becomes idle after a rate-control drop.
                             self.stale = true
                             self.queue.asyncAfter(deadline: .now() + 1 / Double(geometry.framesPerSecond)) {
@@ -571,6 +705,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
                         self.encodeLatest()
                     }
                 }
+                stats.renderTime += ProcessInfo.processInfo.systemUptime - started
                 return
             } catch {
                 encoding = false

@@ -4,21 +4,24 @@ import XCTest
 /// The layout Web/live-view.js reads. scripts/live-view.test.mjs builds the same bytes for the page's half.
 final class WireTests: XCTestCase {
     func testLayoutOfAnUpdateWithAPicture() {
-        let update = LiveUpdate(pointer: CGPoint(x: 0.5, y: 0.25), width: 614, framesPerSecond: 120, sequence: 0x0102_0304,
+        let update = LiveUpdate(pointer: CGPoint(x: 0.5, y: 0.25), focus: CGPoint(x: 0.75, y: 1.5), followsText: true,
+                                request: 9, width: 614, framesPerSecond: 120, sequence: 0x0102_0304,
                                 picture: (number: 7, content: .h264(Data([66, 192, 31, 1]))))
         let data = update.data
         func float(_ offset: Int) -> Float32 {
             Float32(bitPattern: data.subdata(in: offset..<offset + 4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }.littleEndian)
         }
-        XCTAssertEqual(Array(data[0..<2]), [2, 120])
-        XCTAssertEqual([float(2), float(6), float(10)], [0.5, 0.25, 614])
-        XCTAssertEqual(Array(data[14..<22]), [4, 3, 2, 1, 7, 0, 0, 0])
+        XCTAssertEqual(Array(data[0..<3]), [2, 120, 1])
+        XCTAssertEqual([float(3), float(7), float(11), float(15), float(19)], [0.5, 0.25, 0.75, 1.5, 614])
+        XCTAssertEqual(Array(data[23..<35]), [4, 3, 2, 1, 9, 0, 0, 0, 7, 0, 0, 0])
         XCTAssertEqual(Array(data[LiveUpdate.headerSize...]), [66, 192, 31, 1])
     }
 
     func testKinds() {
-        var update = LiveUpdate(pointer: .zero, width: 614, framesPerSecond: 60, sequence: 1, picture: nil)
-        XCTAssertEqual(Array(update.data), [0, 60] + [UInt8](repeating: 0, count: 8) + [0, 0x80, 0x19, 0x44, 1, 0, 0, 0, 0, 0, 0, 0],
+        var update = LiveUpdate(pointer: .zero, focus: .zero, followsText: false, request: 0, width: 614,
+                                framesPerSecond: 60, sequence: 1, picture: nil)
+        XCTAssertEqual(Array(update.data), [0, 60, 0] + [UInt8](repeating: 0, count: 16) + [0, 0x80, 0x19, 0x44]
+                       + [1, 0, 0, 0] + [UInt8](repeating: 0, count: 8),
                        "only the pointer moved: a header and nothing else")
         update.picture = (number: 1, content: .jpeg(Data([0xff, 0xd8])))
         XCTAssertEqual(update.data[0], 1)
@@ -53,6 +56,7 @@ final class WireTests: XCTestCase {
         guard case .move(dx: 3.5, dy: -2, sequence: 7) = try command(#"{"t":"m","dx":3.5,"dy":-2,"q":7}"#) else { return XCTFail("move") }
         guard case .move(dx: 1, dy: 1, sequence: nil) = try command(#"{"t":"m","dx":1,"dy":1}"#) else { return XCTFail("move without a number") }
         guard case .scroll(dx: 0, dy: 12) = try command(#"{"t":"s","dx":0,"dy":12}"#) else { return XCTFail("scroll") }
+        guard case .scrollEnded = try command(#"{"t":"se"}"#) else { return XCTFail("end of a scroll") }
         guard case .click(.right, mods: []) = try command(#"{"t":"c","b":"right"}"#) else { return XCTFail("click") }
         guard case .click(.left, mods: ["alt"]) = try command(#"{"t":"c","b":"left","mods":["alt"]}"#) else { return XCTFail("click with a modifier") }
         guard case .button(.left, down: true, mods: ["cmd", "shift"]) = try command(#"{"t":"b","b":"left","d":true,"mods":["cmd","shift"]}"#) else { return XCTFail("button") }
@@ -64,9 +68,9 @@ final class WireTests: XCTestCase {
     }
 
     func testViewRequest() throws {
-        let on = #"{"t":"view","on":true,"w":390,"h":844,"zoom":0.5,"dpr":3,"codec":"h264","fps":120}"#
+        let on = #"{"t":"view","on":true,"w":390,"h":844,"zoom":0.5,"dpr":3,"codec":"h264","fps":120,"v":4}"#
         guard case .view(let request?) = try command(on) else { return XCTFail("view on") }
-        XCTAssertEqual(request, ScreenView.Request(width: 390, height: 844, zoom: 0.5, pixelRatio: 3, h264: true, fps: 120))
+        XCTAssertEqual(request, ScreenView.Request(width: 390, height: 844, zoom: 0.5, pixelRatio: 3, h264: true, fps: 120, number: 4))
         guard case .view(let jpeg?) = try command(on.replacingOccurrences(of: "h264", with: "jpeg")) else { return XCTFail("jpeg") }
         XCTAssertFalse(jpeg.h264)
         for off in [#"{"t":"view","on":false}"#, #"{"t":"view","on":true,"w":390,"h":844}"#,

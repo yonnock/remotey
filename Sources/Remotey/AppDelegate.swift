@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             try server.start()
         } catch {
-            alert("Remotey konnte nicht starten", "Port \(Server.httpPort)/\(Server.wsPort) ist belegt: \(error.localizedDescription)")
+            alert("Remotey konnte nicht starten", "Port \(Server.port)/\(Server.port + 1) ist belegt: \(error.localizedDescription)")
             NSApp.terminate(nil)
         }
         // Shows the system prompt once if the permission is missing.

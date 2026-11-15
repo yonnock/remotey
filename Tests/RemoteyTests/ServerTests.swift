@@ -13,7 +13,7 @@ final class ServerTests: XCTestCase {
         (httpPort, wsPort) = (Self.nextPort, Self.nextPort + 1)
         Self.nextPort += 2
         server = Server(token: "test-token-test-token-test-token-test", input: Input(),
-                        httpPort: httpPort, wsPort: wsPort, pendingTimeout: 0.5)
+                        port: httpPort, pendingTimeout: 0.5)
         try server.start()
         // Listeners come up asynchronously. NWConnection waits for them, URLSession would not.
         let probes = [idle(port: httpPort), idle(port: wsPort)]

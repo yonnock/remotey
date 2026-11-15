@@ -15,7 +15,8 @@ enum Web {
     }()
 
     private static let types = [
-        "html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8", "png": "image/png",
+        "html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8",
+        "png": "image/png",
     ]
 
     /// A file of the folder by its name. Nil for anything else, such as a path that leads out of the folder.

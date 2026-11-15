@@ -1,11 +1,13 @@
 // Measures the live view of a running agent: delay from a pointer move to the message that shows it,
 // delivered frame rate, CPU time, and whether a burst of pointer moves arrives complete.
-// Usage: node scripts/bench.mjs [--fps=120] [--size=366x420] [--move-rate=240] [--ack-delay=30] [--jpeg]   (moves the pointer for about 20 seconds and puts it back)
+// Usage: node scripts/bench.mjs [--fps=120] [--size=366x420] [--move-rate=240] [--ack-delay=30 | --link=wifi | --link=3mbit] [--jpeg] [--still]
+// Moves the pointer for about 20 seconds and puts it back. --still leaves the pointer alone and measures the stream
+// for 8 seconds only: meant for an agent started with REMOTEY_TEST_PATTERN, whose picture moves by itself.
 // Close Remotey on the phone first: the most recent viewer gets the live view.
 // Frames are answered on arrival, so the numbers are the Mac's side: no decoding, no network.
 import { execFileSync } from 'node:child_process';
 import { POINTER, parseUpdate } from '../Web/live-view.js';
-import { fail, open, pointer, sleep, token } from './agent.mjs';
+import { PORT, fail, open, pointer, sleep, token } from './agent.mjs';
 
 const codec = process.argv.includes('--jpeg') ? 'jpeg' : 'h264';
 const fps = Number(process.argv.find((arg) => arg.startsWith('--fps='))?.slice(6) || 120);
@@ -15,6 +17,31 @@ const moveRate = Number(process.argv.find((arg) => arg.startsWith('--move-rate='
 const [width, height] = (process.argv.find((arg) => arg.startsWith('--size='))?.slice(7) || '390x844').split('x').map(Number);
 /** Answers every frame this late, like a phone that needs time to receive, decode and draw it. */
 const ackDelay = Number(process.argv.find((arg) => arg.startsWith('--ack-delay='))?.slice(12) || 0);
+/**
+ * --link=wifi answers every frame after a round trip drawn from `tailscale ping` to an iPhone on the same Wi-Fi
+ * (30 pings, direct connection, in ms), in order: an answer never overtakes the one before, as on one connection.
+ */
+const WIFI = [170, 213, 23, 224, 38, 141, 231, 106, 96, 102, 72, 159, 115, 17, 333, 67, 69, 16, 117, 64, 136, 104, 777, 46, 135, 18, 17, 16, 20, 19];
+/** --link=2mbit: a link that carries this many Mbit/s, one message after the other, with a round trip of 20 ms. */
+const link = process.argv.find((arg) => arg.startsWith('--link='))?.slice(7);
+const mbit = /^(\d+(?:\.\d+)?)mbit$/.exec(link ?? '')?.[1];
+if (link && link !== 'wifi' && !mbit) fail('--link is wifi or a rate such as 2mbit');
+let lastAnswer = 0, lastArrival = 0;
+/**
+ * When a message of `bytes` that left the agent `now` reaches the phone, and when the phone's answer reaches the
+ * agent. Without --link the phone gets it at once and answers after --ack-delay.
+ */
+function modelled(now, bytes) {
+  if (mbit) {
+    // `lastArrival` is when the link is free again; then the message travels 10 ms, and so does the answer.
+    lastArrival = Math.max(lastArrival, now) + bytes * 8 / (Number(mbit) * 1000);
+    return { arrival: lastArrival + 10, answer: lastArrival + 20 };
+  }
+  if (!link) return { arrival: now, answer: now + ackDelay };
+  lastAnswer = Math.max(lastAnswer, now + WIFI[Math.floor(Math.random() * WIFI.length)]);
+  lastArrival = Math.max(lastArrival, now + (lastAnswer - now) / 2);
+  return { arrival: lastArrival, answer: lastAnswer };
+}
 const sh = (cmd, ...args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
 const pid = (name) => sh('pgrep', '-x', name).split('\n')[0];
 /** CPU seconds a process has used so far. */
@@ -22,14 +49,19 @@ function cpu(id) {
   const [rest, minutes] = sh('ps', '-o', 'cputime=', '-p', id).split(':').reverse();
   return Number(minutes) * 60 + Number(rest);
 }
-const agent = pid('Remotey'), windowServer = pid('WindowServer');
+// The agent that listens on the port, not any process named Remotey: a development build may run beside the app.
+const agent = (() => { try { return sh('lsof', '-t', `-iTCP:${PORT}`, '-sTCP:LISTEN').split('\n')[0]; } catch { return fail(`no agent listens on ${PORT}`); } })();
+const windowServer = pid('WindowServer');
 const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
 
 const agentSocket = open({ t: 'auth', token }), send = agentSocket.send;
 const hello = await agentSocket.reply;
 if (hello?.t !== 'ok') fail(hello ? 'token refused' : 'agent not running');
 if (!hello.ax) fail('no Accessibility permission');
+const still = process.argv.includes('--still');
 let frames = 0, moves = 0, bytes = 0, onUpdate = null, moveNumber = 0;
+/** For each picture: when it left the agent and when it reached the phone (the modelled link, queueing included). */
+const travel = [];
 agentSocket.onMessage = (e) => {
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data);
@@ -39,15 +71,18 @@ agentSocket.onMessage = (e) => {
   }
   const update = parseUpdate(e.data);
   bytes += e.data.byteLength;
-  onUpdate?.(update.q);
+  const now = performance.now(), { arrival, answer } = modelled(now, e.data.byteLength);
+  const reached = () => onUpdate?.(update.q);
+  if (arrival > now) setTimeout(reached, arrival - now); else reached();
   if (update.kind === POINTER) { moves++; return; } // the pointer moved inside the view: no picture, no answer
   frames++;
-  if (ackDelay) setTimeout(() => send({ t: 'shown', n: update.n }), ackDelay); else send({ t: 'shown', n: update.n });
+  travel.push({ sent: now, arrival });
+  if (answer > now) setTimeout(() => send({ t: 'shown', n: update.n }), answer - now); else send({ t: 'shown', n: update.n });
 };
 
 /** Runs `work` and reports frame rate, bit rate and CPU use over that time. */
 async function measure(label, work) {
-  const before = { frames, moves, bytes, agent: cpu(agent), windowServer: cpu(windowServer), time: performance.now() };
+  const before = { frames, moves, bytes, travel: travel.length, agent: cpu(agent), windowServer: cpu(windowServer), time: performance.now() };
   await work();
   const seconds = (performance.now() - before.time) / 1000;
   const percent = (id, was) => ((cpu(id) - was) / seconds * 100).toFixed(0).padStart(3);
@@ -55,6 +90,21 @@ async function measure(label, work) {
     + `${((moves - before.moves) / seconds).toFixed(1).padStart(5)} pointer-only/s  `
     + `${((bytes - before.bytes) * 8 / seconds / 1e6).toFixed(2).padStart(5)} Mbit/s  `
     + `agent ${percent(agent, before.agent)} % CPU  WindowServer ${percent(windowServer, before.windowServer)} % CPU`);
+  if (link) {
+    // What a phone that draws at 60 Hz shows: at every refresh, the newest picture that has arrived. Pictures that
+    // arrive in one burst are one update; the age of the picture on screen is what the user sees as delay.
+    const pictures = travel.slice(before.travel).sort((a, b) => a.arrival - b.arrival), ages = [];
+    let shown = 0, next = 0, newest = null, lastShown = null;
+    for (let t = before.time + 1000; t < before.time + seconds * 1000; t += 1000 / 60) {
+      while (next < pictures.length && pictures[next].arrival <= t) newest = pictures[next++];
+      if (!newest) continue;
+      if (newest !== lastShown) { shown++; lastShown = newest; }
+      ages.push(t - newest.sent);
+    }
+    ages.sort((a, b) => a - b);
+    console.log(`${''.padEnd(22)} the phone shows ${(shown / (seconds - 1)).toFixed(1)} new pictures/s; age of the picture on screen `
+      + `median ${quantile(ages, 0.5).toFixed(0)} ms, p90 ${quantile(ages, 0.9).toFixed(0)} ms`);
+  }
 }
 
 /** Circles at the phone's cadence: with the view on, every frame pans the whole picture. */
@@ -68,13 +118,22 @@ async function circles() {
   }
 }
 
+if (still) {
+  send({ t: 'view', on: true, w: width, h: height, zoom: 0.5, dpr: 3, codec, fps });
+  await sleep(1500);
+  await measure(`${codec} ${fps} fps, ${link ?? `answers after ${ackDelay} ms`}`, () => sleep(8000));
+  send({ t: 'view', on: false });
+  await sleep(100);
+  agentSocket.close();
+  process.exit(0);
+}
 const [startX, startY] = pointer();
 // The reference: what the Mac spends on a still and on a moving pointer without the live view.
 await measure('view off', () => sleep(4000));
 await measure('view off, circles', circles);
 send({ t: 'view', on: true, w: width, h: height, zoom: 0.5, dpr: 3, codec, fps });
 await sleep(1500);
-console.log(`${codec}, ${fps} fps requested, frames answered after ${ackDelay} ms`);
+console.log(`${codec}, ${fps} fps requested, frames answered after ${link === 'wifi' ? 'a Wi-Fi round trip' : mbit ? `crossing ${mbit} Mbit/s` : `${ackDelay} ms`}`);
 
 await measure('idle, view on', () => sleep(4000));
 
@@ -89,7 +148,7 @@ const timed = async (label, vertical = false) => {
     const q = ++moveNumber, sent = performance.now();
     const seen = new Promise((resolve) => { onUpdate = (included) => { if (included === q) resolve(performance.now() - sent); }; });
     send({ t: 'm', dx: vertical ? 0 : i % 2 ? -24 : 24, dy: i % 2 ? -24 : 24, q });
-    const delay = await Promise.race([seen, sleep(500).then(() => null)]);
+    const delay = await Promise.race([seen, sleep(1500).then(() => null)]);
     if (delay !== null) delays.push(delay);
     await sleep(40 + Math.random() * 30); // not in step with the display
   }

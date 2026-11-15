@@ -29,9 +29,9 @@ The stream is built for a short way from finger to picture and for doing nothing
 - A pointer move needs no screen capture. The agent cuts the new view from the frames it already holds the moment it posts the move. A move inside a view held by the display's edges sends 22 bytes and no picture.
 - A still screen sends nothing, and neither does a change outside the view, such as a clock in the menu bar.
 - One key frame starts the stream. The link is reliable, so no later one interrupts it.
-- Pictures await a draw acknowledgement: two at first, up to six for a phone whose answers take several frame intervals even at their best. A slow connection lowers the frame rate instead of building up a queue.
+- Pictures await a draw acknowledgement: two at first, then the agent sends while the oldest unanswered picture is younger than the fastest answer plus 200 ms. A jittery link keeps its frame rate, a slow one lowers it instead of building up a queue.
 
-The agent is a small Swift menu bar app with no dependencies. The UI is an HTML page with a small decoder module (labels are in German).
+The agent is a small Swift menu bar app with no dependencies. The UI is an HTML page with a stylesheet and a few modules, split by what they change for: gestures (`touchpad.js`), the visible area and keyboard (`viewport.js`), the text field (`typing.js`), decoding and drawing (`live-view.js`) and the wiring (`remote.js`). Labels are in German.
 
 ## Security
 
@@ -72,17 +72,23 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 |---|---|
 | One finger | Move the pointer |
 | Tap | Click |
-| Two fingers | Scroll |
+| Two fingers together | Scroll. Lifting one finger ends the scroll; the other one does not move the pointer |
+| Two fingers apart | Zoom the live view (pinch). The point the view is cut around stays in place |
 | Two-finger tap | Right click |
+| Three fingers | Drag: the left button is held while they move and let go when one lifts |
 | Hold "Links" and swipe with a second finger | Drag |
 | ⌘ ⌥ ⌃ ⇧ | Applies to the next key or click, e.g. ⌘ then `w`, or ⌥ then a tap. Armed before holding "Links", it stays for the whole drag |
 | "Bild" | Live view: the trackpad shows the screen around the pointer, so you steer on the picture itself |
-| Zoom switch | Tap a position or slide across them (0.25× to 2×) |
-| Readout next to "Bild" | Updates of the live view per second and the delay of a pointer move in milliseconds, measured from sending the move until the picture that shows it is drawn. Green is good, amber middling, red poor; grey while the screen is still |
-| Full view key | The keys fold away and the display takes the phone; the keyboard key opens typing. Turning the phone sideways does the same with the controls beside the display |
-| "Medien" / "Tasten" | Slides between the media keys and the key page (Esc, Tab, modifiers, arrows) |
+| − / + (top right of the display) | Zoom the live view in steps from 0.25× to 4×; the readout between them shows the zoom, tap it for 1× |
+| "Folgt Text" | While you type, the live view shows the text cursor on the Mac (or the focused field, if the app reports no cursor), and waits until the cursor nears an edge. Moving the pointer or clicking ends it. Neither the pointer nor the focus on the Mac moves |
+| Readout at the top left of the display | Updates of the live view per second and the delay of a pointer move in milliseconds, measured from sending the move until the picture that shows it is drawn. Green is good, amber middling, red poor; grey while the screen is still |
+| Dock | Under the thumb: "Links" and "Rechts", then "Tippen…", the grid key and "Bild". Sideways it stands as a rail right of the display |
+| Grid key | Opens media keys, key page and Regler as a tray that comes up out of the display's lower edge; the display keeps its size, so the live view runs on. Put it away with the grid key, a tap on the display (no click reaches the Mac) or a swipe down from its top edge |
+| "Tippen…" | Opens the keyboard. Esc, Tab, ⌘ ⌥ ⌃ ⇧ and the arrows sit in a row right above it |
+| "Medien" / "Tasten" / "Regler" | Slides between the media keys, the key page (Esc, Tab, modifiers, arrows) and the settings |
+| "Regler" | Three sliders: pointer speed, acceleration (how much further a fast move reaches; "aus" is linear) and scroll speed. Touch the track where you want the value or slide along it; the thumb snaps to the detents, the longer tick marks the default. Each counts from the next move and is kept on the phone. "Std." restores the defaults |
 
-The dot left of the zoom switch is the connection: blinking amber while connecting, green when connected, red when not. The screenshots above show a placeholder instead of a real Mac screen.
+The dot at the top left of the display is the connection: blinking amber while connecting, green when connected, red when not. The screenshots above show a placeholder instead of a real Mac screen.
 
 Text typed on the iOS keyboard is replayed on the Mac key by key.
 
@@ -90,8 +96,10 @@ Text typed on the iOS keyboard is replayed on the Mac key by key.
 
 ```sh
 swift run                          # agent from the source tree, Web/ is re-read on every request
-swift test                         # encoder, pointer, view, send window, wire format; server: auth and limits
-node --test scripts/live-view.test.mjs  # client decode, acknowledgements, pointer, readout and JPEG fallback
+REMOTEY_PORT=47820 swift run       # beside the installed app: page on 47820, socket on 47821
+swift test                         # encoder, pointer, input, view, send window, wire format; server: auth and limits
+node --test scripts/               # client decode, pointer, zoom preview, gestures, viewport, text field
+node scripts/ui-verify.mjs         # the page in headless Chromium: reachable controls, pinch, keyboard, pointer, scroll, Regler, tray
 node scripts/smoke.mjs              # running agent: HTTP, auth, pointer and JPEG flow control
 node scripts/smoke.mjs --h264       # same checks for H.264, including IDR after restart/resize
 node scripts/smoke.mjs --h264 --fps=120  # request 120 fps (requires a 120 Hz source display)
@@ -100,7 +108,7 @@ node scripts/bench.mjs --fps=60     # running agent: frame rate, delay from move
 
 `Sources/Remotey/Wire.swift` and `Web/live-view.js` are the two halves of what agent and page say to each other; a change to one belongs in the other. Every file in `Web/` is served and bundled. A page that was loaded from an older agent reloads itself when it reconnects.
 
-The smoke tests and the benchmark move the pointer, so keep your hands off the mouse while they run. Close Remotey on the phone first, since the most recent viewer owns the stream. They measure the Mac's side: received frames, not displayed frames on the phone. The 4 Mbit/s setting is an average target, not a hard cap; the readout on the phone shows the frame rate and delay that actually arrive there.
+The scripts talk to the agent on `REMOTEY_PORT` (default 47800). The smoke tests and the benchmark move the pointer, so keep your hands off the mouse while they run. Close Remotey on the phone first, since the most recent viewer owns the stream. They measure the Mac's side: received frames, not displayed frames on the phone. The 4 Mbit/s setting is an average target, not a hard cap; the readout on the phone shows the frame rate and delay that actually arrive there.
 
 The hardware encoder takes one picture at a time. On an M3 Max a picture for a full phone display (780 × 1688 pixels) needs about 7 ms to encode and 2.5 ms to compose, so that size tops out at 90 to 100 fps; the smaller display above the keys reaches 120 fps.
 

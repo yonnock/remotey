@@ -2,596 +2,136 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Remotey">
 <meta name="theme-color" content="#25272c">
 <link rel="apple-touch-icon" href="/icon.png">
+<link rel="stylesheet" href="remote.css">
 <title>Remotey</title>
-<style>
-  /* A hardware remote: one graphite body, a display you steer on, key caps that sink when pressed.
-     Amber is the only accent and always means "active": armed modifier, live view on, pointer marker. */
-  :root {
-    --body: #25272c; --deep: #111214; --surface: #1c1e22; --cap: #30333a; --edge: #0a0b0c; --line: #41454e;
-    --text: #eceef0; --muted: #8b8f98; --accent: #f2b84b; --accent-ink: #231803; --bad: #ef6b5e; --ok: #6fcf7c;
-    --slide: .3s cubic-bezier(.2, .8, .2, 1); --snap: .26s cubic-bezier(.3, 1.4, .5, 1); /* the thumb overshoots into its detent */
-  }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  [hidden] { display: none !important; }
-  html, body { margin: 0; height: 100%; background: var(--body); color: var(--text); overflow: hidden;
-    font: 500 15px/1.2 -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
-  body { position: fixed; inset: 0; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  button { font: inherit; color: var(--text); border: 0; padding: 0; margin: 0; background: none; touch-action: none; }
-  svg { width: 20px; height: 20px; fill: currentColor; pointer-events: none; }
-  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  /* Printed legends: small, wide-set capitals like the lettering on a real remote. */
-  .legend { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-
-  #app { position: absolute; top: 0; left: 0; right: 0; height: var(--vh, 100dvh); display: flex;
-    flex-direction: column; gap: 10px;
-    padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
-             max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
-
-  /* Console: display, control strip and mouse keys are one part. The 1px gaps show the body as seams. */
-  #console { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1px; overflow: hidden;
-    border-radius: 14px; background: var(--edge); border: 2px solid var(--edge); }
-  /* Display and trackpad in one: the live view shows the Mac around the pointer, the pad on top steers it. */
-  #screen { flex: 1; min-height: 60px; position: relative; overflow: hidden; background-color: var(--surface);
-    background-image: radial-gradient(var(--line) 1px, transparent 1.4px); background-size: 12px 12px; }
-  /* cover: while the display changes size, the last frame of the old size is cropped, never stretched. */
-  #view { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--deep); }
-  /* Covers the display and is shifted to the pointer's place, so its top left corner is the pointer.
-     The Mac's pointer is not in the picture: its image comes separately and is drawn here, inside the marker. */
-  #aim { position: absolute; inset: 0; pointer-events: none; will-change: transform; }
-  #marker { position: absolute; left: -15px; top: -15px; width: 30px; height: 30px; border-radius: 50%;
-    border: 2px solid var(--accent); }
-  #cursor { position: absolute; left: 0; top: 0; }
-  #cursor:not([src]) { display: none; }
-  #pad { position: absolute; inset: 0; touch-action: none; display: flex; align-items: center;
-    justify-content: center; text-align: center; color: var(--text); font-size: 14px; line-height: 1.45; padding: 32px; }
-  #pad:not(:empty) { background: var(--surface); }
-
-  #side { display: flex; flex-direction: column; gap: 1px; }
-  #strip { height: 50px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 14px; background: var(--surface); }
-  /* Connection LED: blinks amber while connecting, green when the Mac answers, red when it does not. */
-  #status { flex: none; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--accent);
-    animation: blink 1s steps(2, jump-none) infinite; }
-  #status.ok { background: var(--ok); animation: none; }
-  #status.bad { background: var(--bad); animation: none; }
-  @keyframes blink { to { opacity: .25; } }
-
-  /* Slide switches: a recessed track, a raised thumb that travels to the chosen position. */
-  .switch { position: relative; display: flex; border-radius: 8px; background: var(--deep);
-    box-shadow: inset 0 1px 3px var(--edge); touch-action: none; outline: none; }
-  .switch > :not(i) { flex: 1; position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
-    color: var(--muted); transition: color .15s; }
-  .switch > .on { color: var(--text); }
-  .switch > i { position: absolute; top: 3px; bottom: 3px; left: calc(var(--i, 0) * 100% / var(--n) + 2px);
-    width: calc(100% / var(--n) - 4px); border-radius: 6px; background: var(--cap);
-    box-shadow: inset 0 1px 0 var(--line), 0 1px 2px var(--edge); transition: left var(--snap), top var(--snap); }
-  #zoom { --n: 5; flex: 0 1 200px; min-width: 0; height: 36px; margin-right: auto; }
-  #zoom span { pointer-events: none; letter-spacing: 0; }
-  #zoom span::after { content: '×'; }
-  body:not(.view) #zoom, body:not(.view) #meter { visibility: hidden; }
-  /* Readout for the live view: updates per second above, delay of a pointer move below.
-     The upper number takes the colours of the connection LED: green good, amber middling, red poor. */
-  #meter { flex: none; min-width: 38px; display: grid; justify-items: end; gap: 3px; color: var(--muted);
-    font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: .03em; font-variant-numeric: tabular-nums; }
-  #meter b { font-size: 15px; font-weight: 600; letter-spacing: 0; color: var(--ok); }
-  #meter.mid b { color: var(--accent); }
-  #meter.bad b { color: var(--bad); }
-  #meter.idle b { color: var(--muted); }
-
-  .key { position: relative; flex: none; height: 36px; min-width: 44px; padding: 0 12px; border-radius: 7px; background: var(--cap);
-    display: grid; place-items: center; box-shadow: inset 0 1px 0 var(--line); }
-  .key::after { content: ''; position: absolute; inset: -7px -4px; } /* touch target reaches the strip's edges */
-  .key.pressed, .key:active { background: var(--deep); box-shadow: none; }
-  .key.on { color: var(--accent); }
-  .key svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
-    stroke-linecap: round; stroke-linejoin: round; }
-  .full-only, body.full .ico-open, .ico-close { display: none; }
-  body.full .full-only { display: grid; }
-  body.full .ico-close { display: block; }
-
-  .mouse { display: flex; gap: 1px; }
-  .mouse button { flex: 1; height: 48px; background: var(--cap); box-shadow: inset 0 1px 0 var(--line); }
-  .mouse button:first-child { flex: 1.7; }
-  .mouse button.pressed, .mouse button:active { background: var(--surface); color: var(--accent); box-shadow: inset 0 3px 6px var(--edge); }
-
-  /* Deck: two pages of keys. Only one shows; the switch in the bottom bar slides the other one in. */
-  #deck { flex: none; overflow: hidden; }
-  .track { display: flex; gap: 24px; width: calc(200% + 24px); transition: transform var(--slide); }
-  body.keys .track, body.kb .track { transform: translateX(calc(-50% - 12px)); }
-  .page { flex: 1; min-width: 0; height: 106px; padding-bottom: 4px; }
-  .cap { min-width: 0; border-radius: 9px; background: var(--cap); display: grid; place-items: center;
-    box-shadow: inset 0 1px 0 var(--line), 0 4px 0 var(--edge); transition: transform .05s, box-shadow .05s; }
-  .cap.pressed, .cap:active { transform: translateY(3px); box-shadow: inset 0 1px 0 var(--line), 0 1px 0 var(--edge); }
-  /* An armed modifier stays latched down, on an amber edge, until the next key or click releases it. */
-  .cap.on { color: var(--accent); background: var(--surface); transform: translateY(3px);
-    box-shadow: inset 0 2px 4px var(--edge), 0 1px 0 var(--accent); }
-  .cap.accent { background: var(--accent); color: var(--accent-ink); box-shadow: 0 4px 0 var(--edge); }
-
-  .media { display: flex; gap: 8px; }
-  .media > * { height: 102px; }
-  .transport { flex: 1; display: flex; align-items: center; border-radius: 51px; background: var(--cap);
-    box-shadow: inset 0 1px 0 var(--line), 0 4px 0 var(--edge); }
-  .transport button { flex: 1; height: 100%; display: grid; place-items: center; }
-  .transport .play { flex: none; width: 78px; height: 78px; border-radius: 50%; background: var(--deep);
-    box-shadow: inset 0 2px 4px var(--edge); }
-  .transport svg { width: 22px; height: 22px; }
-  .transport button.pressed, .transport button:active, .rocker button.pressed, .rocker button:active { color: var(--accent); }
-  .transport .play.pressed, .transport .play:active { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
-  .media .cap { flex: none; width: 58px; }
-  .rocker { flex: none; width: 62px; display: flex; flex-direction: column; border-radius: 12px; background: var(--cap);
-    box-shadow: inset 0 1px 0 var(--line), 0 4px 0 var(--edge); }
-  .rocker button { flex: 1; font-size: 24px; font-weight: 400; }
-  .rocker button + button { border-top: 1px solid var(--edge); }
-
-  .keys { display: grid; grid-template-columns: repeat(8, 1fr); grid-auto-rows: 46px; gap: 10px 6px; }
-  .keys .cap:not(.legend) { font-size: 17px; }
-  .keys .wide { grid-column: span 2; }
-
-  /* Bottom bar: the text slot, and next to it the page switch (or "Fertig" while the iOS keyboard is open). */
-  #bar { display: flex; gap: 8px; align-items: flex-start; }
-  /* The field always holds an invisible sentinel, so a native placeholder would never show. */
-  #slot { flex: 1; min-width: 0; position: relative; }
-  #slot span { position: absolute; left: 15px; top: 0; line-height: 44px; font-size: 16px; color: var(--muted); pointer-events: none; }
-  body.kb #slot span { display: none; }
-  #field { width: 100%; height: 44px; padding: 0 14px; border-radius: 9px; border: 1px solid var(--edge);
-    background: var(--deep); color: var(--text); font-size: 16px; outline: none; box-shadow: inset 0 2px 5px var(--edge);
-    -webkit-user-select: text; user-select: text; }
-  #field:focus { border-color: var(--accent); }
-  #pages { --n: 2; flex: none; width: 164px; height: 44px; border-radius: 9px; }
-  body.keys #pages { --i: 1; }
-  #done { display: none; flex: none; width: 96px; height: 40px; }
-  body.kb #pages, body.kb .mouse { display: none; }
-  body.kb #done { display: grid; }
-
-  /* Full view: the keys fold away and the console takes the whole phone. Landscape always uses it, with the
-     controls in a column beside the display. The bar stays rendered but invisible so iOS can still focus the field. */
-  body.full #app { gap: 0; padding-left: 0; padding-right: 0; }
-  body.full #strip { padding-left: 10px; }
-  body.full #status { margin-right: 2px; }
-  body.full #console { border: 0; border-radius: 0; }
-  body.full #deck { margin: 10px 12px 0; }
-  body.full #bar { margin: 10px 12px 0; }
-  body.full:not(.kb) #deck, body.wide #deck { display: none; }
-  body.full:not(.kb) #bar { position: absolute; left: 0; right: 0; bottom: 0; opacity: 0; pointer-events: none; }
-  body.wide #app { padding-top: 0; padding-bottom: 0; }
-  body.wide #console { flex-direction: row; }
-  body.wide #side { width: calc(76px + env(safe-area-inset-right)); padding-right: env(safe-area-inset-right); background: var(--surface); }
-  body.wide #strip { flex: none; height: auto; flex-direction: column; padding: 12px 0 10px; }
-  body.wide #status { margin: 0 0 4px; }
-  body.wide #zoom { flex: none; flex-direction: column; width: 52px; height: 160px; margin: 0; }
-  body.wide #meter { justify-items: center; margin: 2px 0; }
-  body.wide #zoom i { left: 2px; width: calc(100% - 4px); bottom: auto; top: calc(var(--i, 0) * 100% / var(--n) + 3px);
-    height: calc(100% / var(--n) - 6px); }
-  body.wide .key { width: 52px; padding: 0; }
-  body.wide [data-act=full] { display: none; }
-  body.wide .mouse { flex: 1; flex-direction: column; }
-  body.wide .mouse button { height: auto; }
-  body.wide.kb #console { display: none; }
-  body.wide.kb #bar { margin-top: auto; margin-bottom: 8px; }
-  @media (prefers-reduced-motion: reduce) { .cap, .track, .switch > i { transition: none; } #status { animation: none; } }
-</style>
+<script type="module" src="remote.js"></script>
 </head>
-<body>
+<body data-page="media">
 <div id="app">
   <div id="console">
     <div id="screen">
-      <canvas id="view" hidden></canvas>
-      <div id="aim" hidden><div id="marker"></div><img id="cursor" alt=""></div>
+      <div id="picture">
+        <canvas id="view" hidden></canvas>
+        <div id="aim" hidden><div id="marker"></div><img id="cursor" alt=""></div>
+      </div>
       <div id="pad" aria-label="Trackpad"></div>
-    </div>
-    <div id="side">
-      <div id="strip">
+      <!-- Printed on the display's glass: state on the left, zoom on the right. Only the keys take touches. -->
+      <div id="hud">
         <span id="status" role="status"><span class="sr">Verbinde…</span></span>
-        <div id="zoom" class="switch legend" role="slider" tabindex="0" aria-label="Zoom des Live-Bilds"
-             aria-valuemin="0" aria-valuemax="4">
-          <i></i><span>0,25</span><span>0,5</span><span>1</span><span>1,5</span><span>2</span>
-        </div>
         <div id="meter" class="idle" role="img" aria-label="Live-Bild: noch keine Messung">
           <span><b>0</b> fps</span><span>– ms</span>
         </div>
-        <button class="key legend" id="viewBtn" data-act="view" aria-label="Live-Bild ein oder aus">Bild</button>
-        <button class="key full-only" data-act="type" aria-label="Tastatur öffnen">
-          <svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M7 10h.01M12 10h.01M17 10h.01M8 14h8"/></svg>
-        </button>
-        <button class="key" data-act="full" aria-label="Vollbild ein oder aus">
-          <svg class="ico-open" viewBox="0 0 24 24"><path d="M4 9V4h5M20 15v5h-5M15 4h5v5M9 20H4v-5"/></svg>
-          <svg class="ico-close" viewBox="0 0 24 24"><path d="M9 4v5H4M15 20v-5h5M20 9h-5V4M4 15h5v5"/></svg>
-        </button>
+        <span id="follow" class="legend" hidden>Folgt Text</span>
+        <div id="zoom" role="group" aria-label="Zoom des Live-Bilds">
+          <button class="key" data-act="zoom" data-step="-1" aria-label="Verkleinern">−</button>
+          <button class="readout" data-act="zoom-reset" aria-label="Zoom 0,5×, antippen für 1×"><span id="zoomValue">0,5×</span></button>
+          <button class="key" data-act="zoom" data-step="1" aria-label="Vergrößern">+</button>
+        </div>
       </div>
-      <div class="mouse">
-        <button class="legend" data-hold="left" aria-label="Linke Maustaste, halten zum Ziehen">Links</button>
-        <button class="legend" data-click="right" aria-label="Rechte Maustaste">Rechts</button>
+    </div>
+    <!-- The tray: slides up out of the display's lower edge, so the live view keeps its size. -->
+    <div id="drawer">
+      <div class="grip" aria-hidden="true"></div>
+      <div id="pages" class="switch legend" role="group" aria-label="Tastenseite">
+        <i></i>
+        <button class="legend" data-act="page" data-page="media">Medien</button>
+        <button class="legend" data-act="page" data-page="keys">Tasten</button>
+        <button class="legend" data-act="page" data-page="settings">Regler</button>
+      </div>
+      <div id="deck">
+        <div class="track">
+          <div class="page media" data-page="media" role="group" aria-label="Medien">
+            <div class="transport">
+              <button data-media="prev" aria-label="Vorheriger Titel"><svg viewBox="0 0 24 24"><path d="M5 5h3v14H5zM20 5v14l-10-7z"/></svg></button>
+              <button class="play" data-media="play" aria-label="Play/Pause"><svg viewBox="0 0 24 24"><path d="M3 5l9 7-9 7zM14 5h3v14h-3zM19 5h3v14h-3z"/></svg></button>
+              <button data-media="next" aria-label="Nächster Titel"><svg viewBox="0 0 24 24"><path d="M16 5h3v14h-3zM4 5l10 7-10 7z"/></svg></button>
+            </div>
+            <button class="cap" data-media="mute" aria-label="Stumm">
+              <svg viewBox="0 0 24 24"><path d="M3 9h4l5-4v14l-5-4H3zM15.3 9.3l1.4-1.4L19 10.2l2.3-2.3 1.4 1.4-2.3 2.3 2.3 2.3-1.4 1.4-2.3-2.3-2.3 2.3-1.4-1.4 2.3-2.3z"/></svg>
+            </button>
+            <div class="rocker" role="group" aria-label="Lautstärke">
+              <button data-media="volup" data-repeat aria-label="Lauter">+</button>
+              <button data-media="voldown" data-repeat aria-label="Leiser">−</button>
+            </div>
+          </div>
+          <div class="page keys" data-page="keys" role="group" aria-label="Tasten">
+            <button class="cap legend" data-key="escape">Esc</button>
+            <button class="cap legend" data-key="tab">Tab</button>
+            <button class="cap legend wide" data-key="space">Leer</button>
+            <button class="cap wide" data-key="backspace" data-repeat aria-label="Löschen">⌫</button>
+            <button class="cap wide" data-key="return" aria-label="Enter">↵</button>
+            <button class="cap" data-mod="cmd" aria-label="Command">⌘</button>
+            <button class="cap" data-mod="alt" aria-label="Option">⌥</button>
+            <button class="cap" data-mod="ctrl" aria-label="Control">⌃</button>
+            <button class="cap" data-mod="shift" aria-label="Shift">⇧</button>
+            <button class="cap" data-key="left" data-repeat aria-label="Links">←</button>
+            <button class="cap" data-key="down" data-repeat aria-label="Runter">↓</button>
+            <button class="cap" data-key="up" data-repeat aria-label="Hoch">↑</button>
+            <button class="cap" data-key="right" data-repeat aria-label="Rechts">→</button>
+          </div>
+          <div class="page settings" data-page="settings" role="group" aria-label="Regler">
+            <div class="setting" data-setting="speed">
+              <span class="name"><span class="legend">Tempo</span><output></output></span>
+              <div class="slider" role="slider" tabindex="0" aria-label="Zeigertempo"><b></b></div>
+            </div>
+            <div class="setting" data-setting="acceleration">
+              <span class="name"><span class="legend">Beschl.</span><output></output></span>
+              <div class="slider" role="slider" tabindex="0" aria-label="Beschleunigung: schnelle Bewegungen reichen weiter"><b></b></div>
+            </div>
+            <div class="setting" data-setting="scroll">
+              <span class="name"><span class="legend">Scroll</span><output></output></span>
+              <div class="slider" role="slider" tabindex="0" aria-label="Scrolltempo"><b></b></div>
+            </div>
+            <button class="cap legend reset" data-act="settings-reset" aria-label="Regler zurücksetzen">Std.</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
-  <div id="deck">
-    <div class="track">
-      <div class="page media" data-page="media" role="group" aria-label="Medien">
-        <div class="transport">
-          <button data-media="prev" aria-label="Vorheriger Titel"><svg viewBox="0 0 24 24"><path d="M5 5h3v14H5zM20 5v14l-10-7z"/></svg></button>
-          <button class="play" data-media="play" aria-label="Play/Pause"><svg viewBox="0 0 24 24"><path d="M3 5l9 7-9 7zM14 5h3v14h-3zM19 5h3v14h-3z"/></svg></button>
-          <button data-media="next" aria-label="Nächster Titel"><svg viewBox="0 0 24 24"><path d="M16 5h3v14h-3zM4 5l10 7-10 7z"/></svg></button>
-        </div>
-        <button class="cap" data-media="mute" aria-label="Stumm">
-          <svg viewBox="0 0 24 24"><path d="M3 9h4l5-4v14l-5-4H3zM15.3 9.3l1.4-1.4L19 10.2l2.3-2.3 1.4 1.4-2.3 2.3 2.3 2.3-1.4 1.4-2.3-2.3-2.3 2.3-1.4-1.4 2.3-2.3z"/></svg>
-        </button>
-        <div class="rocker" role="group" aria-label="Lautstärke">
-          <button data-media="volup" data-repeat aria-label="Lauter">+</button>
-          <button data-media="voldown" data-repeat aria-label="Leiser">−</button>
-        </div>
-      </div>
-      <div class="page keys" data-page="keys" role="group" aria-label="Tasten">
-        <button class="cap legend" data-key="escape">Esc</button>
-        <button class="cap legend" data-key="tab">Tab</button>
-        <button class="cap legend wide" data-key="space">Leer</button>
-        <button class="cap wide" data-key="backspace" data-repeat aria-label="Löschen">⌫</button>
-        <button class="cap wide" data-key="return" aria-label="Enter">↵</button>
-        <button class="cap" data-mod="cmd" aria-label="Command">⌘</button>
-        <button class="cap" data-mod="alt" aria-label="Option">⌥</button>
-        <button class="cap" data-mod="ctrl" aria-label="Control">⌃</button>
-        <button class="cap" data-mod="shift" aria-label="Shift">⇧</button>
-        <button class="cap" data-key="left" data-repeat aria-label="Links">←</button>
-        <button class="cap" data-key="down" data-repeat aria-label="Runter">↓</button>
-        <button class="cap" data-key="up" data-repeat aria-label="Hoch">↑</button>
-        <button class="cap" data-key="right" data-repeat aria-label="Rechts">→</button>
-      </div>
+  <!-- Under the thumb: mouse keys, then the keys that open things. -->
+  <div id="dock">
+    <div class="mouse">
+      <button class="legend" data-hold="left" aria-label="Linke Maustaste, halten zum Ziehen">Links</button>
+      <button class="legend" data-click="right" aria-label="Rechte Maustaste">Rechts</button>
+    </div>
+    <div class="tools">
+      <button class="slot" data-act="type" aria-label="Tastatur öffnen">
+        <svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M7 10h.01M12 10h.01M17 10h.01M8 14h8"/></svg>
+        <span>Tippen…</span>
+      </button>
+      <button class="key" data-act="deck" aria-label="Medien, Tasten und Regler" aria-expanded="false">
+        <svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg>
+      </button>
+      <button class="key legend" id="viewBtn" data-act="view" aria-label="Live-Bild ein oder aus">Bild</button>
     </div>
   </div>
-  <div id="bar">
+  <!-- While typing: the keys the iOS keyboard lacks sit right above it, next to the field. -->
+  <div id="typebar">
+    <div id="accessory" role="group" aria-label="Sondertasten">
+      <button class="cap legend" data-key="escape">Esc</button>
+      <button class="cap legend" data-key="tab">Tab</button>
+      <button class="cap" data-mod="cmd" aria-label="Command">⌘</button>
+      <button class="cap" data-mod="alt" aria-label="Option">⌥</button>
+      <button class="cap" data-mod="ctrl" aria-label="Control">⌃</button>
+      <button class="cap" data-mod="shift" aria-label="Shift">⇧</button>
+      <button class="cap" data-key="left" data-repeat aria-label="Links">←</button>
+      <button class="cap" data-key="down" data-repeat aria-label="Runter">↓</button>
+      <button class="cap" data-key="up" data-repeat aria-label="Hoch">↑</button>
+      <button class="cap" data-key="right" data-repeat aria-label="Rechts">→</button>
+    </div>
     <div id="slot">
       <input id="field" type="text" inputmode="text" enterkeyhint="send"
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Text an den Mac senden">
-      <span aria-hidden="true">Tippen…</span>
-    </div>
-    <div id="pages" class="switch legend" role="group" aria-label="Tastenseite">
-      <i></i>
-      <button class="legend" data-act="page" data-page="media">Medien</button>
-      <button class="legend" data-act="page" data-page="keys">Tasten</button>
     </div>
     <button id="done" class="cap accent legend" data-act="done">Fertig</button>
   </div>
 </div>
-<script type="module">
-import { Cadence, LiveView, Meter } from './live-view.js';
-const $ = (s) => document.querySelector(s);
-const statusEl = $('#status'), pad = $('#pad'), field = $('#field');
-
-// ---- Token: arrives in the URL fragment (never sent to the server). The fragment stays in the URL
-// so "Zum Home-Bildschirm" keeps it; localStorage is the fallback for plain Safari tabs.
-let token = decodeURIComponent(location.hash.slice(1));
-try {
-  if (token) localStorage.setItem('remotey-token', token);
-  else token = localStorage.getItem('remotey-token') || '';
-} catch {}
-
-// ---- Connection
-let ws = null, liveView = null, ready = false, denied = false, retryTimer = 0;
-let served = null; // names the page the agent served when this one first connected
-// The LED carries the state; the text is for screen readers. state: '' (connecting), 'ok' or 'bad'.
-function setStatus(text, state = '') { statusEl.className = state; statusEl.firstElementChild.textContent = text; }
-
-function connect() {
-  clearTimeout(retryTimer);
-  if (!token) { pad.textContent = 'Kein Zugangsschlüssel. Am Mac im Remotey-Menü „iPhone koppeln“ wählen und den QR-Code scannen.'; return setStatus('Nicht gekoppelt', 'bad'); }
-  if (denied) return;
-  setStatus('Verbinde…');
-  liveView?.close();
-  if (ws) { ws.onclose = null; ws.close(); }
-  ready = false;
-  const url = location.protocol === 'https:' ? `wss://${location.host}/ws` : `ws://${location.hostname}:47801`;
-  const socket = ws = new WebSocket(url);
-  socket.binaryType = 'arraybuffer';
-  const player = liveView = new LiveView(view, { aim, cursor: $('#cursor') }, {
-    shown: (n) => { if (socket === ws && socket.readyState === 1) socket.send(JSON.stringify({ t: 'shown', n })); },
-    placed: (update) => { meter.placed(update, performance.now()); showMeter(); },
-    fallback: () => { if (socket === ws) syncView(); },
-  });
-  socket.onopen = () => socket.send(JSON.stringify({ t: 'auth', token }));
-  socket.onmessage = (e) => {
-    if (socket !== ws) return;
-    if (typeof e.data !== 'string') { player.receive(e.data); return; }
-    const m = JSON.parse(e.data);
-    if (m.t === 'ok') {
-      // The agent was updated while this page stayed open: load the page it serves now.
-      if (served !== null && m.page !== served) return location.reload();
-      served = m.page;
-      ready = true;
-      pad.textContent = m.ax ? '' : 'Am Mac fehlt die Bedienungshilfen-Freigabe für Remotey (Systemeinstellungen, Datenschutz & Sicherheit).';
-      setStatus(m.ax ? 'Verbunden' : 'Freigabe fehlt', m.ax ? 'ok' : 'bad');
-      sentView = '';
-      syncView();
-      if (viewOn) cadence.measure(); // low power mode may have changed it while the page was away
-    } else if (m.t === 'cursor') {
-      player.setCursor(m);
-    } else if (m.t === 'view' && m.ok === false) {
-      setView(false);
-      pad.textContent = 'Am Mac fehlt die Freigabe „Bildschirmaufnahme“ für Remotey. Dort erlauben, Remotey neu starten, dann „Bild“ erneut antippen.';
-    } else if (m.t === 'denied') {
-      denied = true;
-      pad.textContent = 'Zugangsschlüssel ungültig. Am Mac neu koppeln und den QR-Code scannen.';
-      setStatus('Abgelehnt', 'bad');
-    }
-  };
-  socket.onclose = () => {
-    if (socket !== ws) return;
-    ready = false;
-    player.close();
-    if (denied) return;
-    setStatus('Getrennt', 'bad');
-    pad.textContent = 'Keine Verbindung zum Mac.';
-    if (document.visibilityState === 'visible') retryTimer = setTimeout(connect, 1000);
-  };
-}
-function send(msg) { if (ready && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
-
-// iOS suspends sockets in the background without closing them, so reconnect on every return.
-let wakeLock = null;
-async function keepAwake() {
-  try { if (!wakeLock || wakeLock.released) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
-}
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { connect(); keepAwake(); }
-});
-
-// ---- Sticky modifiers (apply to the next key or click, then release)
-const mods = new Set();
-function takeMods() {
-  const list = [...mods];
-  mods.clear();
-  document.querySelectorAll('[data-mod]').forEach((b) => b.classList.remove('on'));
-  return list;
-}
-function sendKey(k) { send({ t: 'key', k, mods: takeMods(), n: 1 }); }
-function sendClick(b) { send({ t: 'c', b, mods: takeMods() }); }
-
-// ---- Trackpad: 1 finger moves, 2 fingers scroll, tap = click, 2-finger tap = right click
-const TAP_MS = 250, TAP_SLOP = 8;
-const points = new Map();
-const meter = new Meter();
-let gesture = null, moveNumber = 0;
-pad.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  keepAwake();
-  if (!points.size) gesture = { start: e.timeStamp, travel: 0, fingers: 0 };
-  for (const t of e.changedTouches) points.set(t.identifier, { x: t.clientX, y: t.clientY, time: e.timeStamp });
-  gesture.fingers = Math.max(gesture.fingers, points.size);
-}, { passive: false });
-pad.addEventListener('touchmove', (e) => {
-  e.preventDefault();
-  let dx = 0, dy = 0, dt = 16;
-  for (const t of e.changedTouches) {
-    const p = points.get(t.identifier);
-    if (!p) continue;
-    dx += t.clientX - p.x; dy += t.clientY - p.y;
-    dt = Math.max(1, e.timeStamp - p.time);
-    p.x = t.clientX; p.y = t.clientY; p.time = e.timeStamp;
-  }
-  const dist = Math.hypot(dx, dy);
-  if (!gesture || !dist) return;
-  const wasTap = gesture.travel < TAP_SLOP;
-  gesture.travel += dist;
-  if (wasTap && gesture.travel < TAP_SLOP) return; // dead zone so a tap does not nudge the cursor
-  // Sent at once: the browser delivers touches once per frame already, waiting for the next would only add delay.
-  if (points.size === 1) {
-    const gain = 1 + Math.min(3.5, (dist / dt) * 2.2); // slow = precise, fast = far
-    // The Mac returns the number with the first picture that shows the move, which times the round trip.
-    moveNumber = (moveNumber + 1) >>> 0;
-    send({ t: 'm', dx: dx * gain, dy: dy * gain, q: moveNumber });
-    if (viewOn && ready) meter.moved(moveNumber, performance.now());
-  } else {
-    send({ t: 's', dx: (dx / points.size) * 1.6, dy: (dy / points.size) * 1.6 });
-  }
-}, { passive: false });
-function padEnd(e) {
-  e.preventDefault();
-  for (const t of e.changedTouches) points.delete(t.identifier);
-  if (points.size || !gesture) return;
-  if (e.type === 'touchend' && gesture.travel < TAP_SLOP && e.timeStamp - gesture.start < TAP_MS) {
-    sendClick(gesture.fingers >= 2 ? 'right' : 'left');
-  }
-  gesture = null;
-}
-pad.addEventListener('touchend', padEnd, { passive: false });
-pad.addEventListener('touchcancel', padEnd, { passive: false });
-
-// ---- Live view: the Mac streams the screen region around the cursor into the display, and the
-// trackpad lies on top of it. Without the live view the same surface is a plain trackpad.
-const screenEl = $('#screen'), view = $('#view'), aim = $('#aim'), zoomEl = $('#zoom'), meterEl = $('#meter');
-const ZOOMS = [0.25, 0.5, 1, 1.5, 2];
-const wide = matchMedia('(orientation: landscape) and (max-height: 540px)'); // a phone on its side
-const cadence = new Cadence(() => syncView());
-let viewOn = false, full = false, zoom = 0.5, sentView = '';
-try {
-  viewOn = localStorage.getItem('remotey-view') === '1';
-  if (ZOOMS.includes(+localStorage.getItem('remotey-zoom'))) zoom = +localStorage.getItem('remotey-zoom');
-} catch {}
-function syncView() {
-  document.body.classList.toggle('view', viewOn);
-  document.body.classList.toggle('wide', wide.matches);
-  document.body.classList.toggle('full', full || wide.matches);
-  view.hidden = !viewOn;
-  $('#viewBtn').classList.toggle('on', viewOn);
-  const step = ZOOMS.indexOf(zoom);
-  zoomEl.style.setProperty('--i', step);
-  zoomEl.setAttribute('aria-valuenow', step);
-  zoomEl.setAttribute('aria-valuetext', String(zoom).replace('.', ',') + '×');
-  zoomEl.querySelectorAll('span').forEach((label, i) => label.classList.toggle('on', i === step));
-  try { localStorage.setItem('remotey-view', viewOn ? '1' : '0'); localStorage.setItem('remotey-zoom', zoom); } catch {}
-  if (!liveView) return; // not paired
-  liveView.show(viewOn);
-  liveView.fitCursor();
-  if (!ready || ws.readyState !== 1) return;
-  const r = screenEl.getBoundingClientRect(); // measured after the layout change above
-  const request = JSON.stringify({ t: 'view', on: viewOn, w: r.width, h: r.height, zoom,
-    dpr: window.devicePixelRatio || 2, codec: liveView.codec, fps: cadence.framesPerSecond });
-  // Layout observers call this freely; an unchanged request must not restart the stream.
-  if (request !== sentView) { sentView = request; ws.send(request); }
-}
-// The readout follows the stream: written twice a second while messages arrive, and once more when they stop.
-let meterTimer = 0, meterText = '';
-function showMeter() {
-  if (meterTimer) return;
-  meterTimer = setTimeout(() => {
-    meterTimer = 0;
-    const { fps, ms, level } = meter.read(performance.now());
-    const text = `${fps}|${ms ?? '–'}|${level}`;
-    if (text !== meterText) {
-      meterText = text;
-      meterEl.className = level === 'ok' ? '' : level;
-      meterEl.firstElementChild.firstElementChild.textContent = fps;
-      meterEl.lastElementChild.textContent = `${ms ?? '–'} ms`;
-      meterEl.setAttribute('aria-label', `Live-Bild: ${fps} Bilder pro Sekunde`
-        + (ms === null ? '' : `, ${ms} Millisekunden Verzögerung`));
-    }
-    if (fps && viewOn) showMeter();
-  }, 500);
-}
-function setView(on) {
-  viewOn = on;
-  syncView();
-  if (on) cadence.measure(); else cadence.stop();
-}
-function setFull(on) {
-  full = on;
-  if (on) field.blur();
-  syncView();
-}
-wide.addEventListener('change', syncView);
-// Keyboard, full view and rotation all resize the display; the captured region must follow.
-new ResizeObserver(syncView).observe(screenEl);
-
-// Zoom switch: tap a position or slide across them. It runs top to bottom when the phone is on its side.
-function zoomAt(e) {
-  e.preventDefault();
-  const p = e.touches ? e.touches[0] : e, r = zoomEl.getBoundingClientRect();
-  const along = r.height > r.width ? (p.clientY - r.top) / r.height : (p.clientX - r.left) / r.width;
-  setZoom(Math.floor(along * ZOOMS.length));
-}
-function setZoom(step) {
-  const next = ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, step))];
-  if (next === zoom) return;
-  zoom = next;
-  syncView();
-}
-zoomEl.addEventListener('touchstart', zoomAt, { passive: false });
-zoomEl.addEventListener('touchmove', zoomAt, { passive: false });
-zoomEl.addEventListener('click', zoomAt);
-zoomEl.addEventListener('keydown', (e) => {
-  const dir = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
-  if (dir) { e.preventDefault(); setZoom(ZOOMS.indexOf(zoom) + dir); }
-});
-
-// ---- Deck pages. While the iOS keyboard is open the keys page shows, whatever the switch says.
-let page = 'media';
-try { if (localStorage.getItem('remotey-page') === 'keys') page = 'keys'; } catch {}
-function syncPage() {
-  document.body.classList.toggle('keys', page === 'keys');
-  const shown = document.body.classList.contains('kb') ? 'keys' : page;
-  document.querySelectorAll('.page').forEach((el) => { el.inert = el.dataset.page !== shown; });
-  document.querySelectorAll('[data-act=page]').forEach((b) => {
-    b.classList.toggle('on', b.dataset.page === page);
-    b.setAttribute('aria-pressed', b.dataset.page === page);
-  });
-  try { localStorage.setItem('remotey-page', page); } catch {}
-}
-syncPage();
-// The page switch also follows a finger sliding across it, like a real slide switch.
-$('#pages').addEventListener('touchmove', (e) => {
-  const r = e.currentTarget.getBoundingClientRect();
-  const next = e.touches[0].clientX < r.left + r.width / 2 ? 'media' : 'keys';
-  if (next !== page) { page = next; syncPage(); }
-}, { passive: true });
-
-// ---- Buttons. preventDefault on touchstart keeps the iOS keyboard open.
-function fire(b) {
-  const d = b.dataset;
-  if (d.act === 'view') setView(!viewOn);
-  else if (d.act === 'page') { page = d.page; syncPage(); }
-  else if (d.act === 'full') setFull(!full);
-  else if (d.act === 'done') field.blur();
-  else if (d.act === 'type') field.focus();
-  else if (d.key) sendKey(d.key);
-  else if (d.media) send({ t: 'media', k: d.media });
-  else if (d.click) sendClick(d.click);
-  else if (d.mod) { mods.has(d.mod) ? mods.delete(d.mod) : mods.add(d.mod); b.classList.toggle('on', mods.has(d.mod)); }
-}
-document.querySelectorAll('button').forEach((b) => {
-  let delay = 0, repeat = 0;
-  const stop = () => { clearTimeout(delay); clearInterval(repeat); };
-  b.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    keepAwake();
-    b.classList.add('pressed');
-    // The Mac keeps the modifiers of the press until the release, so a drag carries them.
-    if (b.dataset.hold) return send({ t: 'b', b: b.dataset.hold, d: true, mods: takeMods() });
-    if (b.dataset.act === 'type') return; // iOS opens the keyboard only for a focus made on touchend
-    fire(b);
-    if ('repeat' in b.dataset) delay = setTimeout(() => { repeat = setInterval(() => fire(b), 70); }, 400);
-  }, { passive: false });
-  const end = (e) => {
-    e.preventDefault();
-    stop();
-    b.classList.remove('pressed');
-    if (b.dataset.hold) send({ t: 'b', b: b.dataset.hold, d: false });
-    if (b.dataset.act === 'type' && e.type === 'touchend') field.focus();
-  };
-  b.addEventListener('touchend', end, { passive: false });
-  b.addEventListener('touchcancel', end, { passive: false });
-  // Mouse/keyboard fallback for desktop browsers and assistive tech.
-  b.addEventListener('click', () => { if (b.dataset.hold) sendClick(b.dataset.hold); else fire(b); });
-});
-
-// ---- Keyboard: the field mirrors what was typed; every change is diffed and replayed on the Mac.
-// A zero-width sentinel keeps the field non-empty so backspace still produces an input event.
-const SENTINEL = '​';
-const segmenter = window.Intl && Intl.Segmenter ? new Intl.Segmenter() : null;
-const graphemes = (s) => (segmenter ? [...segmenter.segment(s)].length : Array.from(s).length);
-let prev = SENTINEL;
-function resetField() { field.value = prev = SENTINEL; }
-resetField();
-
-field.addEventListener('input', (e) => {
-  if (e.isComposing) return;
-  const cur = field.value;
-  let p = 0;
-  const max = Math.min(prev.length, cur.length);
-  while (p < max && prev[p] === cur[p]) p++;
-  if (p > 0 && prev.charCodeAt(p - 1) >= 0xd800 && prev.charCodeAt(p - 1) <= 0xdbff) p--; // keep surrogate pairs whole
-  const removed = prev.slice(p).replace(SENTINEL, ''), added = cur.slice(p).replace(SENTINEL, '');
-  const deleting = prev.length > p;
-  if (deleting) send({ t: 'key', k: 'backspace', mods: [], n: Math.max(1, graphemes(removed)) });
-  if (added) {
-    if (mods.size && graphemes(added) === 1) { sendKey(added.toLowerCase()); return resetField(); }
-    send({ t: 'text', s: added });
-  }
-  prev = cur;
-  if (!cur.startsWith(SENTINEL) || (cur.length > 60 && cur.endsWith(' '))) resetField();
-});
-field.addEventListener('compositionend', () => field.dispatchEvent(new Event('input')));
-field.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); sendKey('return'); resetField(); }
-});
-field.addEventListener('focus', () => { keepAwake(); document.body.classList.add('kb'); syncPage(); });
-field.addEventListener('blur', () => { document.body.classList.remove('kb'); syncPage(); resetField(); });
-
-// ---- Layout follows the visible viewport so the keyboard shrinks the trackpad instead of covering it.
-function fit() {
-  const h = window.visualViewport ? visualViewport.height : innerHeight;
-  document.documentElement.style.setProperty('--vh', h + 'px');
-  scrollTo(0, 0);
-}
-if (window.visualViewport) { visualViewport.addEventListener('resize', fit); visualViewport.addEventListener('scroll', fit); }
-addEventListener('resize', fit);
-document.addEventListener('gesturestart', (e) => e.preventDefault());
-fit();
-connect();
-keepAwake();
-</script>
 </body>
 </html>

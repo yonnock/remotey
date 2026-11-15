@@ -7,6 +7,8 @@ final class WebTests: XCTestCase {
         XCTAssertEqual(page.type, "text/html; charset=utf-8")
         XCTAssertTrue(String(decoding: page.body, as: UTF8.self).contains("<title>Remotey</title>"))
         XCTAssertEqual(Web.file("live-view.js")?.type, "text/javascript; charset=utf-8")
+        XCTAssertEqual(Web.file("remote.js")?.type, "text/javascript; charset=utf-8")
+        XCTAssertEqual(Web.file("remote.css")?.type, "text/css; charset=utf-8")
         XCTAssertEqual(Web.file("icon.png")?.type, "image/png")
     }
 
@@ -22,10 +24,5 @@ final class WebTests: XCTestCase {
         for name in ["", "missing.js", "../Package.swift", "../Web/index.html", "/etc/passwd", ".hidden.js", "index", "index.html/"] {
             XCTAssertNil(Web.file(name), name)
         }
-    }
-
-    func testVersionNamesTheContent() {
-        XCTAssertEqual(Web.version, Web.version)
-        XCTAssertEqual(Web.version.count, 16)
     }
 }

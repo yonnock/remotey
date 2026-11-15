@@ -76,4 +76,29 @@ final class ScreenViewTests: XCTestCase {
         XCTAssertEqual(ScreenView.viewport(request, displays: [large], around: CGPoint(x: 2559, y: 5)),
                        CGRect(x: 2560 - 390, y: 0, width: 390, height: 844))
     }
+
+    func testTypedTextIsCentredAndTheViewWaitsUntilTheCaretNearsAnEdge() throws {
+        let request = try XCTUnwrap(ScreenView.Request(width: 400, height: 200, zoom: 1, pixelRatio: 2, h264: true, fps: 60))
+        let display = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let around = { ScreenView.viewport(request, displays: [display], around: $0) }
+        func caret(_ x: Double, _ y: Double) -> TextFocus.Target { .init(rect: CGRect(x: x, y: y, width: 0, height: 16), exact: true) }
+
+        let first = try XCTUnwrap(ScreenView.textView(for: caret(800, 500), held: nil, around: around))
+        XCTAssertEqual(first, CGRect(x: 600, y: 408, width: 400, height: 200))
+        // A few characters further the view stays where it is.
+        XCTAssertEqual(ScreenView.textView(for: caret(900, 500), held: first, around: around), first)
+        // Close to its right edge it centres the caret again.
+        XCTAssertEqual(ScreenView.textView(for: caret(940, 500), held: first, around: around)?.midX, 940)
+        // At the display's edge it stays on the display.
+        XCTAssertEqual(ScreenView.textView(for: caret(5, 5), held: nil, around: around)?.origin, .zero)
+    }
+
+    func testAFocusedElementCountsOnlyIfItFitsTheView() throws {
+        let request = try XCTUnwrap(ScreenView.Request(width: 400, height: 200, zoom: 1, pixelRatio: 2, h264: true, fps: 60))
+        let around = { ScreenView.viewport(request, displays: [CGRect(x: 0, y: 0, width: 1728, height: 1117)], around: $0) }
+        let field = TextFocus.Target(rect: CGRect(x: 100, y: 300, width: 240, height: 24), exact: false)
+        XCTAssertEqual(ScreenView.textView(for: field, held: nil, around: around)?.midX, 220)
+        let editor = TextFocus.Target(rect: CGRect(x: 0, y: 40, width: 1200, height: 900), exact: false)
+        XCTAssertNil(ScreenView.textView(for: editor, held: nil, around: around), "the pointer's view instead")
+    }
 }

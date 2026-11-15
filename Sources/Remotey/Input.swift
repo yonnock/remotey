@@ -10,6 +10,8 @@ final class Input {
     private var lastClick: (time: TimeInterval, point: CGPoint, button: CGMouseButton, count: Int64)?
     private var moveRemainder = CGPoint.zero
     private var scrollRemainder = CGPoint.zero
+    /// A two-finger scroll is under way: its first event said `began`, the last one will say `ended`.
+    private var scrolling = false
 
     private static let namedKeys: [String: Int] = [
         "return": kVK_Return, "tab": kVK_Tab, "space": kVK_Space, "backspace": kVK_Delete, "escape": kVK_Escape,
@@ -95,11 +97,14 @@ final class Input {
         button(b, down: false)
     }
 
-    /// Called when a client disconnects so a drag never stays stuck.
+    /// Called when a client disconnects so a drag or a scroll never stays stuck.
     func releaseAll() {
         for raw in held.keys { if let b = CGMouseButton(rawValue: raw) { button(b, down: false) } }
+        endScroll()
     }
 
+    /// Part of a two-finger scroll, in pixels. Like a trackpad's, the events carry a phase, so apps
+    /// see one gesture: they lock it to an axis and know when it ends.
     func scroll(dx: Double, dy: Double) {
         scrollRemainder.x += dx
         scrollRemainder.y += dy
@@ -107,8 +112,24 @@ final class Input {
         guard step != .zero else { return }
         scrollRemainder.x -= step.x
         scrollRemainder.y -= step.y
-        CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
-                wheel1: Int32(step.y), wheel2: Int32(step.x), wheel3: 0)?.post(tap: .cghidEventTap)
+        postScroll(step, phase: scrolling ? .changed : .began)
+        scrolling = true
+    }
+
+    /// The fingers left the glass or the gesture was cancelled. Nothing scrolls after this.
+    func endScroll() {
+        scrollRemainder = .zero
+        guard scrolling else { return }
+        scrolling = false
+        postScroll(.zero, phase: .ended)
+    }
+
+    private func postScroll(_ step: CGPoint, phase: CGScrollPhase) {
+        guard let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
+                              wheel1: Int32(step.y), wheel2: Int32(step.x), wheel3: 0) else { return }
+        e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        e.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+        post(e)
     }
 
     // MARK: Keyboard
@@ -164,7 +185,7 @@ final class Input {
                 guard let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
                 e.flags = flags
                 e.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-                e.post(tap: .cghidEventTap)
+                post(e)
             }
         }
     }
@@ -173,7 +194,7 @@ final class Input {
         for down in [true, false] {
             guard let e = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { continue }
             e.flags = flags
-            e.post(tap: .cghidEventTap)
+            post(e)
         }
     }
 
@@ -208,11 +229,11 @@ final class Input {
         guard let key = Self.mediaKeys[name] else { return }
         for down in [true, false] {
             let state = down ? 0xA : 0xB
-            NSEvent.otherEvent(with: .systemDefined, location: .zero,
-                               modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(state << 8)),
-                               timestamp: 0, windowNumber: 0, context: nil, subtype: 8,
-                               data1: (key << 16) | (state << 8), data2: -1)?
-                .cgEvent?.post(tap: .cghidEventTap)
+            guard let e = NSEvent.otherEvent(with: .systemDefined, location: .zero,
+                                             modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(state << 8)),
+                                             timestamp: 0, windowNumber: 0, context: nil, subtype: 8,
+                                             data1: (key << 16) | (state << 8), data2: -1)?.cgEvent else { continue }
+            post(e)
         }
     }
 }

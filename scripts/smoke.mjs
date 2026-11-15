@@ -18,10 +18,19 @@ if (page.status !== 200 || !(await page.text()).includes('<title>Remotey</title>
 const icon = await fetch(`${HTTP}/icon.png`);
 if (icon.status !== 200 || (await icon.arrayBuffer()).byteLength < 500) fail('icon');
 if ((await fetch(`${HTTP}/etc/passwd`)).status !== 404) fail('404');
-const decoderModule = await fetch(`${HTTP}/live-view.js`);
-if (decoderModule.status !== 200 || !decoderModule.headers.get('content-type')?.startsWith('text/javascript')
-    || !(await decoderModule.text()).includes('export class LiveView')) fail('decoder module');
-console.log('ok   http: page, decoder module, icon, 404');
+const html = await (await fetch(`${HTTP}/`)).text();
+// Every file the page names, with the type it needs: a stylesheet served as text/plain is not applied.
+const files = [...html.matchAll(/(?:src|href)="\/?([\w.-]+\.(js|css|png))"/g)].map(([, name, ext]) => [name, ext]);
+for (const name of ['touchpad.js', 'viewport.js', 'typing.js', 'live-view.js']) files.push([name, 'js']); // imported by remote.js
+const types = { js: 'text/javascript', css: 'text/css', png: 'image/png' };
+for (const [name, ext] of files) {
+  const response = await fetch(`${HTTP}/${name}`);
+  if (response.status !== 200 || !response.headers.get('content-type')?.startsWith(types[ext])) fail(`${name}: ${response.status} ${response.headers.get('content-type')}`);
+}
+if (!files.some(([n]) => n === 'remote.css') || !files.some(([n]) => n === 'remote.js')) fail('page names no stylesheet or script');
+const csp = page.headers.get('content-security-policy') ?? '';
+if (csp.includes('unsafe-inline') || !csp.includes("script-src 'self'")) fail(`content security policy: ${csp}`);
+console.log(`ok   http: page, ${files.length} files with their types, icon, 404, no inline code allowed`);
 
 const within = (promise, ms) => Promise.race([promise.then(() => true), sleep(ms).then(() => false)]);
 
@@ -58,8 +67,9 @@ if (hello.ax) {
 
 // Live view: the agent may only have a bounded number of frames under way until the client reports
 // them shown. Otherwise frames pile up in buffers on a slow link and the picture lags behind.
-// Two until the first answer. After that the agent allows for the time an answer takes, up to six pictures.
-const MAX_IN_FLIGHT = 2, MAX_WINDOW = 6;
+// Two until the first answer. After that pictures leave while the oldest one under way is younger than the
+// fastest answer plus SLACK seconds (SendWindow.swift).
+const MAX_IN_FLIGHT = 2, SLACK = 0.2;
 let frames = 0, bytes = 0, acking = false, denied = false, held = [], expectKey = true, keyFrames = 0, cursors = 0;
 const shown = (n) => send({ t: 'shown', n });
 good.onMessage = (e) => {
@@ -107,16 +117,21 @@ if (denied) {
   if (cursors < 1) fail('no pointer picture for a new view');
   console.log('ok   view: pointer picture arrives separately');
   if (hello.ax) {
-    // An out-of-order answer releases only that frame, not every earlier reference picture.
-    // It comes more than a second late, so the window opens all the way: one picture answered, the first still not.
+    // An out-of-order answer releases only that frame, not every earlier reference picture. It comes more than a
+    // second late, which allows for answers that slow: pictures leave until the unanswered first one is older than
+    // that answer took plus the slack, then the stream waits for it.
     const later = held.at(-1);
     shown(later);
     send({ t: 'shown', n: later + 1000 });
     await stir();
+    const released = frames;
     shown(later); // duplicate answers cannot create more send credit
     await stir();
-    if (frames > MAX_WINDOW + 1) fail(`duplicate, future, or out-of-order answers bypassed the frame window: ${frames} frames`);
-    console.log(`ok   view: answers release only their own frame (${frames} frames, at most ${MAX_WINDOW} unanswered)`);
+    if (frames > released) fail(`a duplicate answer released ${frames - released} more frames`);
+    // At most the two before, and the slack's worth of frames with a few for timer jitter.
+    const most = MAX_IN_FLIGHT + Math.ceil(SLACK * fps) + 4;
+    if (frames > most) fail(`future or out-of-order answers bypassed the frame window: ${frames} frames, expected at most ${most}`);
+    console.log(`ok   view: answers release only their own frame (${frames} frames, then none while the oldest stays unanswered)`);
     acking = true;
     held.forEach(shown);
     const startFrames = frames, startBytes = bytes, startTime = performance.now();
