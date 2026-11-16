@@ -101,7 +101,11 @@ body:not(.view) #zoom, body:not(.view) #meter { display: none; }
 #dock { grid-area: dock; min-width: 0; display: flex; flex-direction: column; gap: var(--gap); }
 .mouse { display: flex; gap: 2px; border-radius: 14px; overflow: hidden; background: var(--edge); border: 2px solid var(--edge); }
 .mouse button { flex: 1; height: 54px; background: var(--cap); box-shadow: inset 0 1px 0 var(--cap-hi); color: var(--text); }
-.mouse button:first-child { flex: 1.7; }
+.mouse [data-hold] { flex: 1.7; }
+/* The side buttons: back and forward, a narrow pair where a mouse has them, beside the left key. */
+.side { flex: none; display: flex; gap: 2px; }
+.side button { flex: none; width: 48px; display: grid; place-items: center; }
+.side svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .mouse button.pressed, .mouse button:active { background: var(--surface); color: var(--accent); box-shadow: inset 0 3px 6px var(--edge); }
 .tools { display: flex; gap: var(--gap); }
 .tools .key { width: 60px; height: 48px; padding: 0; border-radius: 12px; }
@@ -218,6 +222,7 @@ body.wide #app { grid-template: "console dock" 1fr / minmax(0, 1fr) var(--rail);
   padding-top: max(8px, var(--safe-top)); padding-bottom: max(8px, var(--safe-bottom)); }
 body.wide .mouse { flex: 1; flex-direction: column; }
 body.wide .mouse button { height: auto; min-height: 44px; }
+body.wide .side button { flex: 1; width: auto; height: 44px; }
 body.wide .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 body.wide .tools .key, body.wide .slot { width: auto; height: 44px; }
 body.wide .slot { justify-content: center; padding: 0; }

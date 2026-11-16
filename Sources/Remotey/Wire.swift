@@ -11,7 +11,8 @@ enum Wire {
         /// Part of a two-finger scroll; the first one after `scrollEnded` begins a new gesture.
         case scroll(dx: Double, dy: Double)
         case scrollEnded
-        /// `mods` are the modifiers held during the click, named as for `key`.
+        /// `mods` are the modifiers held during the click, named as for `key`. Besides left and right, the page
+        /// clicks a mouse's side buttons, `back` and `forward`.
         case click(CGMouseButton, mods: [String])
         /// A press names its `mods`; the agent keeps them until the release.
         case button(CGMouseButton, down: Bool, mods: [String])
@@ -58,7 +59,12 @@ enum Wire {
             guard let dx = m.dx, let dy = m.dy, dx.isFinite, dy.isFinite, abs(dx) <= 5000, abs(dy) <= 5000 else { return nil }
             return (dx, dy)
         }
-        let button: CGMouseButton = m.b == "right" ? .right : .left
+        let button: CGMouseButton = switch m.b {
+        case "right": .right
+        case "back": .back
+        case "forward": .forward
+        default: .left
+        }
         let command: Command? = switch m.t {
         case "auth": m.token.map { .auth(token: $0) }
         case "m": delta.map { .move(dx: $0.dx, dy: $0.dy, sequence: m.q) }

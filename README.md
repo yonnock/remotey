@@ -77,12 +77,13 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 | Two-finger tap | Right click |
 | Three fingers | Drag: the left button is held while they move and let go when one lifts |
 | Hold "Links" and swipe with a second finger | Drag |
+| ‹ › | Back and forward, clicked as a mouse's side buttons (buttons 4 and 5). Chromium browsers and Firefox navigate on them; Safari and Finder ignore these buttons from any mouse unless a helper app translates them |
 | ⌘ ⌥ ⌃ ⇧ | Applies to the next key or click, e.g. ⌘ then `w`, or ⌥ then a tap. Armed before holding "Links", it stays for the whole drag |
 | "Bild" | Live view: the trackpad shows the screen around the pointer, so you steer on the picture itself |
 | − / + (top right of the display) | Zoom the live view in steps from 0.25× to 4×; the readout between them shows the zoom, tap it for 1× |
 | "Folgt Text" | While you type, the live view shows the text cursor on the Mac (or the focused field, if the app reports no cursor), and waits until the cursor nears an edge. Moving the pointer or clicking ends it. Neither the pointer nor the focus on the Mac moves |
 | Readout at the top left of the display | Updates of the live view per second and the delay of a pointer move in milliseconds, measured from sending the move until the picture that shows it is drawn. Green is good, amber middling, red poor; grey while the screen is still |
-| Dock | Under the thumb: "Links" and "Rechts", then "Tippen…", the grid key and "Bild". Sideways it stands as a rail right of the display |
+| Dock | Under the thumb: ‹ and ›, "Links" and "Rechts", then "Tippen…", the grid key and "Bild". Sideways it stands as a rail right of the display |
 | Grid key | Opens media keys, key page and Regler as a tray that comes up out of the display's lower edge; the display keeps its size, so the live view runs on. Put it away with the grid key, a tap on the display (no click reaches the Mac) or a swipe down from its top edge |
 | "Tippen…" | Opens the keyboard. Esc, Tab, ⌘ ⌥ ⌃ ⇧ and the arrows sit in a row right above it |
 | "Medien" / "Tasten" / "Regler" | Slides between the media keys, the key page (Esc, Tab, modifiers, arrows) and the settings |
@@ -99,7 +100,7 @@ swift run                          # agent from the source tree, Web/ is re-read
 REMOTEY_PORT=47820 swift run       # beside the installed app: page on 47820, socket on 47821
 swift test                         # encoder, pointer, input, view, send window, wire format; server: auth and limits
 node --test scripts/               # client decode, pointer, zoom preview, gestures, viewport, text field
-node scripts/ui-verify.mjs         # the page in headless Chromium: reachable controls, pinch, keyboard, pointer, scroll, Regler, tray
+node scripts/ui-verify.mjs         # the page in headless Chromium: reachable controls, pinch, keyboard, pointer, scroll, Regler, tray, side buttons
 node scripts/smoke.mjs              # running agent: HTTP, auth, pointer and JPEG flow control
 node scripts/smoke.mjs --h264       # same checks for H.264, including IDR after restart/resize
 node scripts/smoke.mjs --h264 --fps=120  # request 120 fps (requires a 120 Hz source display)
