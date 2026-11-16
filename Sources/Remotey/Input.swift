@@ -1,6 +1,12 @@
 import AppKit
 import Carbon.HIToolbox
 
+/// The side buttons of a mouse, which browsers take as back and forward. CoreGraphics names only the first three.
+extension CGMouseButton {
+    static let back = CGMouseButton(rawValue: 3)!
+    static let forward = CGMouseButton(rawValue: 4)!
+}
+
 /// Injects mouse, keyboard and media events. Needs the Accessibility permission. Main thread only.
 final class Input {
     private let source = CGEventSource(stateID: .hidSystemState)
@@ -82,9 +88,11 @@ final class Input {
         } else {
             held[button.rawValue] = nil
         }
-        let type: CGEventType = button == .left
-            ? (down ? .leftMouseDown : .leftMouseUp)
-            : (down ? .rightMouseDown : .rightMouseUp)
+        let type: CGEventType = switch button {
+        case .left: down ? .leftMouseDown : .leftMouseUp
+        case .right: down ? .rightMouseDown : .rightMouseUp
+        default: down ? .otherMouseDown : .otherMouseUp // the event names its button by number
+        }
         guard let e = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
                               mouseButton: button) else { return }
         e.setIntegerValueField(.mouseEventClickState, value: lastClick?.count ?? 1)

@@ -59,6 +59,8 @@ final class WireTests: XCTestCase {
         guard case .scrollEnded = try command(#"{"t":"se"}"#) else { return XCTFail("end of a scroll") }
         guard case .click(.right, mods: []) = try command(#"{"t":"c","b":"right"}"#) else { return XCTFail("click") }
         guard case .click(.left, mods: ["alt"]) = try command(#"{"t":"c","b":"left","mods":["alt"]}"#) else { return XCTFail("click with a modifier") }
+        guard case .click(.back, mods: []) = try command(#"{"t":"c","b":"back"}"#) else { return XCTFail("back") }
+        guard case .click(.forward, mods: ["cmd"]) = try command(#"{"t":"c","b":"forward","mods":["cmd"]}"#) else { return XCTFail("forward") }
         guard case .button(.left, down: true, mods: ["cmd", "shift"]) = try command(#"{"t":"b","b":"left","d":true,"mods":["cmd","shift"]}"#) else { return XCTFail("button") }
         guard case .button(.left, down: false, mods: []) = try command(#"{"t":"b","b":"left","d":false}"#) else { return XCTFail("release") }
         guard case .text("hä") = try command(#"{"t":"text","s":"hä"}"#) else { return XCTFail("text") }

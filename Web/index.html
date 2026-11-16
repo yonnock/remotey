@@ -95,9 +95,14 @@
       </div>
     </div>
   </div>
-  <!-- Under the thumb: mouse keys, then the keys that open things. -->
+  <!-- Under the thumb: mouse keys with the side buttons for back and forward, then the keys that open things. -->
   <div id="dock">
     <div class="mouse">
+      <!-- A mouse's side buttons, on the side where the thumb finds them on a mouse. -->
+      <div class="side" role="group" aria-label="Seitentasten der Maus">
+        <button data-click="back" aria-label="Zurück"><svg viewBox="0 0 24 24"><path d="M14.5 5.5L8 12l6.5 6.5"/></svg></button>
+        <button data-click="forward" aria-label="Vorwärts"><svg viewBox="0 0 24 24"><path d="M9.5 5.5L16 12l-6.5 6.5"/></svg></button>
+      </div>
       <button class="legend" data-hold="left" aria-label="Linke Maustaste, halten zum Ziehen">Links</button>
       <button class="legend" data-click="right" aria-label="Rechte Maustaste">Rechts</button>
     </div>

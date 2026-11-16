@@ -28,6 +28,14 @@ final class InputTests: XCTestCase {
                                 name(.rightMouseDown), name(.rightMouseUp)])
     }
 
+    /// Browsers go back and forward on a mouse's fourth and fifth button. An armed modifier goes with them as with any click.
+    func testTheSideButtonsClickAsButtonsFourAndFive() {
+        input.click(.back)
+        input.click(.forward, mods: ["cmd"])
+        XCTAssertEqual(posted, [name(.otherMouseDown), name(.otherMouseUp), name(.otherMouseDown, "cmd"), name(.otherMouseUp, "cmd")])
+        XCTAssertEqual(events.map { $0.getIntegerValueField(.mouseEventButtonNumber) }, [3, 3, 4, 4])
+    }
+
     func testADragKeepsTheModifiersOfItsPressUntilTheRelease() {
         input.button(.left, down: true, mods: ["alt"])
         input.move(dx: 3, dy: 0)

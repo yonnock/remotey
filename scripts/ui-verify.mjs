@@ -13,7 +13,8 @@ import { extname, join, resolve } from 'node:path';
 // 3: also a 320 px phone (Display Zoom), and the full view key upright.
 // 4: no full view key (the dock leaves the display the height it had); reports the display's share upright too.
 // 5: T6 sets the pointer speed on the Regler page and checks the next move; T7 opens and closes the tray.
-export const VERIFIER_VERSION = 5;
+// 6: the side buttons (back, forward) count as main actions; T8 taps them.
+export const VERIFIER_VERSION = 6;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -154,7 +155,8 @@ async function reachable(page, selector, visible) {
 }
 
 const CONTROLS = {
-  'Links (Drag)': '[data-hold=left]', 'Rechts': '[data-click=right]', 'Bild': '[data-act=view]',
+  'Links (Drag)': '[data-hold=left]', 'Rechts': '[data-click=right]', 'Zurück': '[data-click=back]',
+  'Vorwärts': '[data-click=forward]', 'Bild': '[data-act=view]',
   'Zoom': '#zoom, [data-act=zoom-in]', 'Tastatur': '#field, [data-act=type]', 'Play': '[data-media=play]',
   'Lauter': '[data-media=volup]', 'Esc': '[data-key=escape]', 'Einstellungen': '[data-setting], [data-page=settings]',
 };
@@ -438,6 +440,23 @@ await task('T7', async () => {
   const swipe = { closed: !(await isOpen()) };
   await page.close();
   return { close, tap, swipe };
+});
+
+// T8: the side buttons. A tap is one click of that button; an armed modifier goes with the next click only.
+await task('T8', async () => {
+  const page = await openPage(375, 812);
+  await page.clear();
+  await page.tap('[data-click=back]');
+  await page.tap('[data-click=forward]');
+  await page.tap('[data-act=deck]'); await sleep(450);
+  await page.tap('[data-act=page][data-page=keys]'); await sleep(250);
+  await page.tap('[data-mod=cmd]');
+  await page.tap('[data-click=back]');
+  await page.tap('[data-click=back]');
+  const sent = await page.sent();
+  const clicks = sent.filter((m) => m.t === 'c').map((m) => [m.b, ...m.mods].join(' '));
+  await page.close();
+  return { clicks, others: sent.length - clicks.length, ok: clicks.join() === 'back,forward,back cmd,back' && sent.length === clicks.length };
 });
 
 socket.close();
