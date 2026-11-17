@@ -20,12 +20,19 @@ export function diff(before, after) {
 /**
  * Relays `field` to the Mac. `out` gets text(s), backspace(n), and key(k) for Enter and for a single
  * character typed while a modifier is armed (`armed()` says so), which becomes a shortcut.
+ *
+ * While `secret()` says so the field holds a password: nothing of it is relayed as it is typed or filled
+ * in, and Enter hands the whole of it to `submit(s)`. A `submit` that returns false did not take it: the
+ * field keeps it for the next Enter. Returns a function that empties the field, for when what it holds
+ * stops counting.
  */
 export function relay(field, out) {
   let before = SENTINEL;
-  const reset = () => { field.value = before = SENTINEL; };
+  // A password field shows the sentinel as a character, and needs none: nothing in it is diffed.
+  const reset = () => { field.value = before = out.secret() ? '' : SENTINEL; };
   reset();
   field.addEventListener('input', (e) => {
+    if (out.secret()) return;
     if (e.isComposing) return; // a composition (Japanese, dictation, dead keys) counts once it ends
     const after = field.value, { removed, added } = diff(before, after);
     if (removed) out.backspace(removed);
@@ -38,7 +45,12 @@ export function relay(field, out) {
   });
   field.addEventListener('compositionend', () => field.dispatchEvent(new Event('input')));
   field.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); out.key('return'); reset(); }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (!out.secret()) out.key('return');
+    else if (!field.value || out.submit(field.value) === false) return;
+    reset();
   });
   field.addEventListener('blur', reset);
+  return reset;
 }

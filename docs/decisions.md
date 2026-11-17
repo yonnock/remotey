@@ -254,6 +254,58 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
      wird bei jedem Öffnen gefragt, das Blatt schließt nach der Wahl). Die App im Vordergrund steht oben links, wie
      bei Command-Tab; näher am Daumen wäre die unterste Reihe, das bricht aber die Leserichtung.
 
+11. Gesperrter Mac (Issue 6: „eval ob möglich mit gesperrtem Bildschirm", dazu „den Mac dann auch remote entsperren").
+   Gemessen mit einem Messprogramm als Nutzerprozess auf macOS 27.0.1 (MacBook Pro, internes Display und zwei externe),
+   das sperrt, eingibt, aufnimmt und nie Return drückt; danach mit dem Agenten selbst (`scripts/lock.mjs`).
+   - Sperre erkennen: `CGSSessionScreenIsLocked` im Sitzungsverzeichnis ist beim Sperren 0,25 s nach dem Kürzel gesetzt,
+     die Benachrichtigung `com.apple.screenIsLocked` kommt 0,6 s danach. Beim Entsperren ist es umgekehrt: die
+     Benachrichtigung kommt zuerst, das Verzeichnis sagte 0,2 s später noch „gesperrt". Der Schlüssel fehlt, wenn offen.
+   - Eingabe: Zeigerbewegung (+60/+40 Punkte, angekommen), Tasten per Tastencode (drei Punkte im Passwortfeld), ein
+     Zeichen als Unicode-Text (vierter Punkt), Umschalt+1 (fünfter), acht Rückschritte (leer). Alles über denselben
+     `CGEvent`-Weg wie sonst. Accessibility meldet das Feld als `AXSecureTextField` von `com.apple.loginwindow` mit Fokus.
+   - Bild: ScreenCaptureKit liefert den Sperrbildschirm, mit einem Strom von vor dem Sperren wie mit einem, der
+     gesperrt startet; beide laufen über Sperren und Entsperren weiter.
+   - Display aus: Esc auf dem Sperrbildschirm schaltet es nach 0,2 s ab. Beide Ströme enden mit `SCStreamError` -3815,
+     `SCShareableContent` nennt keine Displays mehr (ohne Fehler), `NSScreen.screens` weiter drei. Eine gepostete
+     Bewegung und eine gepostete Taste weckten es in je 2 s nicht. `IOPMAssertionDeclareUserActivity` weckte es in
+     unter 0,5 s; die alten Ströme bleiben tot, ein neuer liefert sofort. Das erklärt die Notiz aus Runde 7
+     („Mac gesperrt, ScreenCaptureKit lieferte keine Displays"): nicht die Sperre, das schlafende Display.
+   - Entscheidung Wecken: jede Eingabe vom Telefon (Bewegung, Scrollen, Klick, Taste, Text, App-Wechsel, Entsperren)
+     und das Einschalten des Live-Bilds melden Nutzeraktivität, höchstens einmal je Sekunde, bei schlafendem Display
+     sofort (`UserActivity.swift`). Die Medientasten nicht: Musik anhalten soll ein dunkles Display dunkel lassen.
+     Den Neuaufbau der Aufnahme gab es schon (jede Sekunde ein Versuch, solange das Bild gewünscht ist).
+     Verworfen: das Display wach halten, solange das Live-Bild läuft. Die Meldung setzt auch die Leerlaufzeit zurück,
+     ein offen liegendes Telefon würde die automatische Sperre des Macs aushebeln.
+   - Entscheidung Entsperren: macOS hat keinen Aufruf dafür, also tippt der Agent das Passwort ins Feld und drückt
+     Return (`LockScreen.swift`), wie es auch RustDesk tut. Getippt wird nur, wenn das Passwortfeld von loginwindow den
+     Fokus hat und ein Display an ist; darauf wartet er bis 5 s und weckt dabei das Display. Bei den ersten beiden
+     Messläufen war der Mac 2 s nach dem Sperren wieder offen (von Hand entsperrt): ein Passwort, das dann Taste für Taste
+     ankommt, stünde in der App im Vordergrund. Was im Feld steht, wird vorher gelöscht. Bleibt der Mac 6 s nach Return
+     gesperrt, hört die Seite `unlock` mit dem Grund (`field`: nichts getippt, `password`: getippt und abgelehnt).
+   - Entscheidung Seite: kein eigenes Blatt. Ist der Mac gesperrt (`lock`, nach dem `ok` und bei jedem Wechsel), öffnet
+     die Tipptaste dasselbe Feld als Passwortfeld: Vorhängeschloss und „Entsperren…" statt Tastatur und „Tippen…". iOS
+     verdeckt die Eingabe, lernt sie nicht und bietet das gespeicherte Passwort der Seite an. Nichts geht Taste für
+     Taste hinaus, die Sendetaste schickt alles in einer Nachricht. Das Layout beim Tippen (Live-Bild über der
+     Tastatur, Sondertasten) bleibt, wie es gemessen ist; das Live-Bild zeigt dabei das Passwortfeld des Macs
+     („Folgt Text"). Verworfen: ein Hinweis im Display, der bei 320 px neben „Folgt Text" keinen Platz hat.
+   - Gemessen mit dem Agenten (ein Lauf, JPEG, Entwicklungs-Build): Sperre nach 0,8 s gemeldet; gesperrt folgt der
+     Zeiger, 59 Bilder in 1,3 s Bewegung; Display per `pmset displaysleepnow` aus, eine Bewegung vom „Telefon" weckt es
+     (0,13 s), das nächste Bild kommt 0,34 s nach der Bewegung (der Neuaufbau läuft im Sekundentakt, also bis etwa
+     1,5 s); falsches Passwort: Feld leer gemeldet, getippt, nach 6,1 s als abgelehnt gemeldet; Entsperren von Hand
+     gemeldet, Bild läuft weiter (41 Bilder). Das Stromprotokoll (`pmset -g log`) bestätigt: Display aus 22:37:44, an
+     22:37:46 durch die Meldung von Remotey, wieder aus 22:38:19.
+   - Daraus: der Sperrbildschirm schaltet das Display etwa 30 s nach der letzten Eingabe ab, wenn keine App das
+     verhindert (im Messlauf davor hielt ein Browser es 110 s an). Das Bild auf dem Telefon bleibt dann stehen, bis
+     die nächste Eingabe weckt. Am Mac war das Display nach dem Test schwarz, bis zum Entsperren von Hand (22:41:03).
+   - Verifier v10 (T10): gesperrt wird das Feld zum Passwortfeld, sechs getippte Zeichen senden nichts, Enter sendet
+     eine Nachricht `unlock`, eine Absage steht rot im Feld, nach `lock: false` ist es wieder das Textfeld und leitet
+     weiter. T1 bis T9 unverändert (Display-Anteil 69/73/80 % hochkant, 72/76/82 % quer, 12/12 erreichbar).
+   - Nach dem Review (ein Leser, zwei Runden): der Agent nimmt ein Passwort zur Zeit und antwortet auf ein falsches
+     erst nach 6 s. Ein korrigiertes, das in dieser Zeit abgeschickt wurde, verwarf er stumm, und die Seite hatte das
+     Feld schon geleert. Jetzt hält die Seite es im Feld, bis der Mac geantwortet hat (T10: zweites Enter sendet
+     nichts, nach der Absage sendet Enter es), und der Agent sagt einem zweiten Telefon sofort ab. Nicht geändert:
+     mehr als 100 Zeichen im Feld löscht er nicht ganz (`Input.key` begrenzt), das Feld hält nur, was ein Versuch ließ.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -276,3 +328,9 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   Vollbild-Fenster wurde nicht ausgelöst (er hätte den Bildschirm des Nutzers umgeschaltet); er folgt aus dem
   dokumentierten Verhalten von `activate` und `openApplication`. Mehrere Displays: der Zeigersprung ist nur auf einem
   Display gemessen.
+- Runde 11: das richtige Passwort hat der Agent nie getippt (nur ein falsches, derselbe Weg). Offen sind damit
+  Zeichen, die im aktiven Layout keine Taste ohne Umschalten haben: sie gehen als Umschalt+Taste oder als
+  Unicode-Text, und im Passwortfeld ist nur zu sehen, dass ein Zeichen ankommt, nicht welches. Kein iPhone: ob Safari
+  das Feld beim Wechsel zum Passwortfeld richtig umstellt und das gespeicherte Passwort anbietet, ist offen. Nicht
+  geprüft: Bildschirmschoner über der Sperre, Entsperren per Apple Watch, schneller Benutzerwechsel, ein Mac, dessen
+  Display beim Wecken länger braucht als die 5 s, die der Agent auf das Feld wartet.

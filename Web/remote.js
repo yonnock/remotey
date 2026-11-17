@@ -66,6 +66,10 @@ function connect() {
       syncView();
       if (viewOn) cadence.measure(); // low power mode may have changed it while the page was away
       if (sheet === 'apps') askApps(); // the Mac is back while the switcher is open
+    } else if (m.t === 'lock') {
+      setLocked(m.on === true);
+    } else if (m.t === 'unlock' && m.ok === false) {
+      unlockFailed(m.why);
     } else if (m.t === 'cursor') {
       player.setCursor(m);
     } else if (m.t === 'view' && m.ok === false) {
@@ -85,6 +89,7 @@ function connect() {
   socket.onclose = () => {
     if (socket !== ws) return;
     ready = false;
+    unlocking = false; // the answer to a password went with the connection
     player.close();
     if (denied) return;
     setStatus('Getrennt', 'bad');
@@ -473,13 +478,51 @@ document.querySelectorAll('button').forEach((b) => {
   b.addEventListener('click', () => { if (b.dataset.hold) sendClick(b.dataset.hold); else fire(b); });
 });
 
-// ---- Keyboard: what the iOS keyboard types goes to the Mac, see typing.js.
-relay(field, {
+// ---- Keyboard: what the iOS keyboard types goes to the Mac, see typing.js. While the Mac is locked the
+// field takes its password instead: as a password field, so iOS masks it, keeps it out of what the keyboard
+// learns and offers the one saved for this page. The Mac types it into its lock screen and says `lock` once
+// it is open, or `unlock` with the reason why it is not.
+let locked = false, unlocking = false; // unlocking: the Mac has a password and has not answered yet
+const emptyField = relay(field, {
   text: (s) => send({ t: 'text', s }),
   backspace: (n) => send({ t: 'key', k: 'backspace', mods: [], n }),
   key: (k) => sendKey(k),
   armed: () => mods.size > 0,
+  secret: () => locked,
+  submit(s) {
+    // The Mac takes one password at a time. A corrected one stays in the field until it has answered.
+    if (unlocking) return false;
+    unlocking = ready;
+    send({ t: 'unlock', s });
+    hint(ready ? 'Entsperre…' : 'Keine Verbindung zum Mac');
+  },
 });
+/** What the empty field says while the Mac is locked. `failed`: the last try did not open it. */
+function hint(text, failed = false) {
+  field.placeholder = text;
+  field.classList.toggle('failed', failed);
+}
+field.addEventListener('input', () => { if (locked) hint('Passwort des Macs'); });
+function setLocked(on) {
+  unlocking = false;
+  if (on === locked) return;
+  // A field that changes its kind while it has the keyboard keeps the old keyboard: it is put away first.
+  field.blur();
+  locked = on;
+  body.classList.toggle('locked', on);
+  field.type = on ? 'password' : 'text';
+  field.autocomplete = on ? 'current-password' : 'off';
+  field.enterKeyHint = on ? 'go' : 'send';
+  field.setAttribute('aria-label', on ? 'Passwort zum Entsperren des Macs' : 'Text an den Mac senden');
+  hint(on ? 'Passwort des Macs' : '');
+  $('#typeLabel').textContent = on ? 'Entsperren…' : 'Tippen…';
+  $('[data-act=type]').setAttribute('aria-label', on ? 'Mac entsperren' : 'Tastatur öffnen');
+  emptyField();
+}
+function unlockFailed(why) {
+  unlocking = false;
+  if (locked) hint(why === 'field' ? 'Mac nicht bereit, nochmal?' : 'Nicht entsperrt, nochmal?', true);
+}
 // The tray comes back after typing; the switcher does not, its list would be old by then.
 field.addEventListener('focus', () => { keepAwake(); typing = true; if (sheet === 'apps') sheet = ''; syncView(); });
 field.addEventListener('blur', () => { typing = false; syncView(); });

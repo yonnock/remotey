@@ -17,7 +17,8 @@ import { extname, join, resolve } from 'node:path';
 // 7: T2 also zooms out, upright and sideways: by pinch, by the − key, and up to the limit a fake Mac answers with.
 // 8: T2 also turns the phone and back: each way of holding it keeps its own zoom.
 // 9: the Apps key counts as a main action; T9 opens the switcher, with a socket that answers `apps`.
-export const VERIFIER_VERSION = 9;
+// 10: T10 locks the fake Mac: the type key's field takes the password and sends it whole.
+export const VERIFIER_VERSION = 10;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -680,6 +681,58 @@ await task('T9', async () => {
       && again === 12 && tap.closed && tap.clicks === 0 && swipe.closed && swipe.fromIcon.closed && swipe.fromIcon.sent === 0
       && resumed.tappable === 0 && resumed.sent === 0 && resumed.open && resumed.after === 12
       && sheets === 'drawer' && typed.closed };
+});
+
+// T10: a locked Mac. The type key opens the same field for the password: nothing of it leaves before Enter,
+// then all of it in one message. A refusal shows in the field, and an open Mac gets its keyboard back.
+await task('T10', async () => {
+  const page = await openPage(...PHONES.small);
+  const say = (m) => page.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify(m))} })`);
+  const state = () => page.evaluate(`(() => { const f = document.querySelector('#field'), shown = (s) => getComputedStyle(document.querySelector(s)).display !== 'none';
+    return { type: f.type, autocomplete: f.autocomplete, label: document.querySelector('#typeLabel').textContent, hint: f.placeholder,
+      failed: f.classList.contains('failed'), focused: document.activeElement === f, value: f.value,
+      padlock: shown('.slot .shut'), keys: shown('.slot .open'), name: document.querySelector('[data-act=type]').getAttribute('aria-label') }; })()`);
+  const type = (text) => page.evaluate(`(() => { const f = document.querySelector('#field'); f.focus();
+    f.setRangeText(${JSON.stringify(text)}, f.value.length, f.value.length, 'end'); f.dispatchEvent(new InputEvent('input', { inputType: 'insertText' })); })()`);
+  const enter = () => page.evaluate(`document.querySelector('#field').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+  const input = async () => (await page.sent()).filter((m) => m.t !== 'view').map(({ at, ...m }) => m);
+  const open = await state();
+  await say({ t: 'lock', on: true });
+  const locked = await state();
+  await page.clear();
+  await type('ge'); await type('heim');
+  const typed = { ...(await state()), sent: await input() };
+  await enter();
+  const sent = { ...(await state()), sent: await input() };
+  // A corrected password while the Mac is still at the first: held in the field, sent once the Mac has answered.
+  await type('neu'); await enter();
+  const early = { ...(await state()), sent: (await input()).length };
+  await say({ t: 'unlock', ok: false, why: 'password' });
+  const refused = await state();
+  await enter();
+  const second = { ...(await state()), sent: await input() };
+  await say({ t: 'unlock', ok: false, why: 'field' });
+  const unready = await state();
+  await type('x');
+  const retry = await state();
+  // The Mac opens, here while the field still holds a try.
+  await say({ t: 'lock', on: false });
+  await page.clear();
+  const opened = await state();
+  await type('hi'); await enter();
+  const relayed = await input();
+  await page.close();
+  return { open, locked, typed, sent, early, refused, second, unready, retry, opened, relayed,
+    ok: open.type === 'text' && open.keys && !open.padlock && open.label === 'Tippen…'
+      && locked.type === 'password' && locked.autocomplete === 'current-password' && locked.padlock && !locked.keys
+      && locked.label === 'Entsperren…' && locked.name === 'Mac entsperren' && locked.value === '' && locked.hint === 'Passwort des Macs'
+      && typed.value === 'geheim' && typed.sent.length === 0
+      && JSON.stringify(sent.sent) === '[{"t":"unlock","s":"geheim"}]' && sent.value === '' && sent.focused && sent.hint === 'Entsperre…'
+      && early.value === 'neu' && early.sent === 1 && refused.failed && refused.hint === 'Nicht entsperrt, nochmal?' && refused.value === 'neu'
+      && JSON.stringify(second.sent.at(-1)) === '{"t":"unlock","s":"neu"}' && second.sent.length === 2 && second.value === ''
+      && unready.failed && unready.hint === 'Mac nicht bereit, nochmal?' && !retry.failed && retry.hint === 'Passwort des Macs'
+      && opened.type === 'text' && !opened.focused && !opened.failed && opened.hint === '' && opened.label === 'Tippen…' && opened.keys
+      && JSON.stringify(relayed) === '[{"t":"text","s":"hi"},{"t":"key","k":"return","mods":[],"n":1}]' };
 });
 
 socket.close();

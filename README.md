@@ -45,6 +45,8 @@ The live view sends screen content only to an authenticated client, only while i
 
 Connections that have not authenticated are closed after five seconds and limited to 32 at a time, so nobody without the token can exhaust the agent's sockets. The app is signed with the hardened runtime, so other processes on the Mac cannot load code into it and borrow its Accessibility and Screen Recording permissions.
 
+A locked Mac stays within reach: the pointer, the keys and the live view work on its lock screen as on the desktop, so whoever holds the token can try passwords there, as someone at its keyboard can. Unlocking needs the password of the Mac's user. The phone sends it over the same TLS connection, the agent types it into the lock screen's password field and keeps no copy; it is in no log and no file on the Mac. Nothing is typed unless that field has the keyboard, so the password cannot land in an app on a Mac that is open.
+
 Known limit: the token is a file in `~/Library/Application Support/Remotey`, readable by every unsandboxed process running as you. Such a process can connect to the loopback port and gets the same input and screen access as the phone.
 
 ## Setup
@@ -89,6 +91,8 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 | After switching | With the live view on, the pointer goes to the middle of the window that came forward, unless it is inside it already, so the view shows that window. Without the live view the pointer stays where it is |
 | Grid key | Opens media keys, key page and Regler as a tray that comes up out of the display's lower edge; the display keeps its size, so the live view runs on. Put it away with the grid key, a tap on the display (no click reaches the Mac) or a swipe down from its top edge |
 | "Tippen…" | Opens the keyboard. Esc, Tab, ⌘ ⌥ ⌃ ⇧ and the arrows sit in a row right above it |
+| "Entsperren…" (a padlock) | The Mac is locked, and the same key opens the field for its password. iOS masks it and offers the one saved for this page. Nothing leaves the phone while you type; the send key hands it to the Mac, which types it into its lock screen. The key says "Tippen…" again once the Mac is open; if it stays locked, the field says so. With the live view on you see the password field of the Mac meanwhile |
+| A Mac whose display sleeps | Any move, click, scroll or key from the phone, and switching the live view on, wakes the display as a key on the Mac's keyboard does. The media keys leave it dark |
 | "Medien" / "Tasten" / "Regler" | Slides between the media keys, the key page (Esc, Tab, modifiers, arrows) and the settings |
 | "Regler" | Three sliders: pointer speed, acceleration (how much further a fast move reaches; "aus" is linear) and scroll speed. Touch the track where you want the value or slide along it; the thumb snaps to the detents, the longer tick marks the default. Each counts from the next move and is kept on the phone. "Std." restores the defaults |
 
@@ -101,14 +105,15 @@ Text typed on the iOS keyboard is replayed on the Mac key by key.
 ```sh
 swift run                          # agent from the source tree, Web/ is re-read on every request
 REMOTEY_PORT=47820 swift run       # beside the installed app: page on 47820, socket on 47821
-swift test                         # encoder, pointer, input, view, send window, wire format, order of apps; server: auth, limits, list of apps
+swift test                         # encoder, pointer, input, view, send window, wire format, order of apps, unlocking; server: auth, limits, list of apps
 node --test scripts/               # client decode, pointer, zoom preview, gestures, viewport, text field, switcher
-node scripts/ui-verify.mjs         # the page in headless Chromium: reachable controls, pinch, keyboard, pointer, scroll, Regler, tray, side buttons, switcher
+node scripts/ui-verify.mjs         # the page in headless Chromium: reachable controls, pinch, keyboard, pointer, scroll, Regler, tray, side buttons, switcher, locked Mac
 node scripts/smoke.mjs              # running agent: HTTP, auth, pointer, list of apps and JPEG flow control
 node scripts/smoke.mjs --focus      # also brings another app's window to the front and the one before back
 node scripts/smoke.mjs --h264       # same checks for H.264, including IDR after restart/resize
 node scripts/smoke.mjs --h264 --fps=120  # request 120 fps (requires a 120 Hz source display)
 node scripts/bench.mjs --fps=60     # running agent: frame rate, delay from move to picture, CPU, bursts of moves
+node scripts/lock.mjs               # running agent: locks the Mac, then pointer, live view, display wake and a refused password on the lock screen; you unlock at the end
 ```
 
 `Sources/Remotey/Wire.swift` holds the agent's half of what agent and page say to each other. On the page each message lives in the module it serves: `Web/live-view.js` reads the live view's updates, `Web/apps.js` the switcher's lists, and `Web/remote.js` sends the commands and routes what arrives. A change to one half belongs in the other. Every file in `Web/` is served and bundled. A page that was loaded from an older agent reloads itself when it reconnects.
@@ -117,7 +122,7 @@ The scripts talk to the agent on `REMOTEY_PORT` (default 47800). The smoke tests
 
 The hardware encoder takes one picture at a time. On an M3 Max a picture for a full phone display (780 × 1688 pixels) needs about 7 ms to encode and 2.5 ms to compose, so that size tops out at 90 to 100 fps; the smaller display above the keys reaches 120 fps.
 
-Known limits: untested on the Mac lock screen, and characters without a key in the active layout (emoji, for example) are sent as Unicode events, which some terminals ignore. The switcher learns an app's windows from Accessibility, which reports those of the current Space and the minimized ones. An app whose windows are on another Space or in full screen shows no number; a tap brings it forward as a click in the Dock does, which switches to its Space, and from there the switcher lists its windows.
+Known limits: characters without a key in the active layout (emoji, for example) are sent as Unicode events, which some terminals ignore. On the lock screen, Esc puts the display to sleep, and macOS does so itself about 30 seconds after the last input; the picture on the phone then stands still until the next input wakes the display. A Mac that sleeps itself, not only its display, is out of reach until something wakes it. After a restart nothing runs before the first login, so the login window (and FileVault's) cannot be reached. A screen saver over the lock screen is untested. The switcher learns an app's windows from Accessibility, which reports those of the current Space and the minimized ones. An app whose windows are on another Space or in full screen shows no number; a tap brings it forward as a click in the Dock does, which switches to its Space, and from there the switcher lists its windows.
 
 ## License
 
