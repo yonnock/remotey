@@ -59,7 +59,8 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             guard (50...4000).contains(width), (50...4000).contains(height) else { return nil }
             self.width = width
             self.height = height
-            self.zoom = min(max(zoom, 0.25), 4)
+            // How far out the view really goes is set by the displays (see `region`); this only bounds the arithmetic.
+            self.zoom = min(max(zoom, 0.02), 4)
             self.pixelRatio = min(max(pixelRatio, 1), ScreenView.maxPixelRatio)
             self.h264 = h264
             self.framesPerSecond = h264 ? Int32(min(max(fps, 30), 120)) : 30
@@ -497,12 +498,29 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         configure()
     }
 
-    /// Region size in points: the pad's aspect, shrunk until it fits on every display.
-    /// So the view never exceeds a display, and away from a seam it shows one display only.
+    /// Region size in points: the pad's aspect at the requested zoom, but no larger than it takes to show
+    /// every display at once. So zooming out ends at the whole desktop, whichever way the phone is held.
+    /// The size follows from the request and the displays alone, not from where the pointer is.
     private static func region(_ request: Request, fitting displays: [CGRect]) -> CGSize {
         let width = request.width / request.zoom, height = request.height / request.zoom
-        let fit = min(1, displays.map(\.width).min()! / width, displays.map(\.height).min()! / height)
+        let all = displays.reduce(CGRect.null) { $0.union($1) }
+        let fit = min(1, max(all.width / width, all.height / height))
         return CGSize(width: width * fit, height: height * fit)
+    }
+
+    /// Where a view of one length lies along one axis: `limits` is the cursor's display (grown towards a
+    /// neighbour the cursor is near), `all` the box around every display.
+    ///
+    /// A view that fits its limits is centred on `centre` and held inside them. A longer one cannot follow
+    /// the cursor: it holds still with its limits in the middle, and moves off that only to show a
+    /// neighbouring display instead of empty space. One longer than the whole desktop has it in its middle.
+    private static func origin(of length: Double, around centre: Double, limits: ClosedRange<Double>,
+                               all: ClosedRange<Double>) -> Double {
+        if length <= limits.upperBound - limits.lowerBound {
+            return min(max(limits.lowerBound, centre - length / 2), limits.upperBound - length)
+        }
+        guard length < all.upperBound - all.lowerBound else { return (all.lowerBound + all.upperBound - length) / 2 }
+        return min(max(all.lowerBound, (limits.lowerBound + limits.upperBound - length) / 2), all.upperBound - length)
     }
 
     /// The region shown for a cursor position, in global points.
@@ -510,23 +528,36 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     /// It is centred on the cursor and held inside the cursor's display, so a display edge shows no
     /// empty space beyond it. As the cursor nears another display, the limits grow towards the box
     /// around both and reach it at the seam: the view moves steadily across, with no jump on either side.
+    /// Zoomed out beyond the cursor's display, the view shows that display whole, with its neighbours or
+    /// empty space around it (see `origin`).
     static func viewport(_ request: Request, displays: [CGRect], around cursor: CGPoint) -> CGRect {
         let size = region(request, fitting: displays)
-        let home = displays.first { $0.contains(cursor) } ?? displays.reduce(CGRect.null) { $0.union($1) }
-        var limits = home
-        for other in displays where other != home {
+        let all = displays.reduce(CGRect.null) { $0.union($1) }
+        let home = displays.first { $0.contains(cursor) } ?? all
+        let near = displays.filter { $0 != home }.compactMap { other -> (bounds: CGRect, share: Double)? in
             // 1 at the other display, 0 where the centred region would only just touch it.
             let dx = max(other.minX - cursor.x, cursor.x - other.maxX, 0) / (size.width / 2)
             let dy = max(other.minY - cursor.y, cursor.y - other.maxY, 0) / (size.height / 2)
-            let near = 1 - max(dx, dy)
-            guard near > 0 else { continue }
-            let reach = home.union(other)
-            let minX = home.minX + (reach.minX - home.minX) * near, maxX = home.maxX + (reach.maxX - home.maxX) * near
-            let minY = home.minY + (reach.minY - home.minY) * near, maxY = home.maxY + (reach.maxY - home.maxY) * near
-            limits = limits.union(CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
+            let share = 1 - max(dx, dy)
+            return share > 0 ? (other, share) : nil
         }
-        return CGRect(x: min(max(limits.minX, cursor.x - size.width / 2), limits.maxX - size.width),
-                      y: min(max(limits.minY, cursor.y - size.height / 2), limits.maxY - size.height),
+        // The limits for every set of the displays near, numbered by its bits: each display of a set grows what
+        // the others allow, by its share. Grown from the home display alone, a third display would count from
+        // another edge on either side of a seam, and a view larger than its display would jump there.
+        var grown = [home]
+        for set in 1..<(1 << near.count) {
+            var limits = home
+            for (index, other) in near.enumerated() where set & (1 << index) != 0 {
+                let from = grown[set & ~(1 << index)], reach = from.union(other.bounds)
+                let minX = from.minX + (reach.minX - from.minX) * other.share, maxX = from.maxX + (reach.maxX - from.maxX) * other.share
+                let minY = from.minY + (reach.minY - from.minY) * other.share, maxY = from.maxY + (reach.maxY - from.maxY) * other.share
+                limits = limits.union(CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
+            }
+            grown.append(limits)
+        }
+        let limits = grown.last!
+        return CGRect(x: origin(of: size.width, around: cursor.x, limits: limits.minX...limits.maxX, all: all.minX...all.maxX),
+                      y: origin(of: size.height, around: cursor.y, limits: limits.minY...limits.maxY, all: all.minY...all.maxY),
                       width: size.width, height: size.height)
     }
 
@@ -577,9 +608,10 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let (view, focus, _) = framing(geometry, cursor: Pointer.location)
         // Measured around the focus, not the view: a view as tall as its display lies against the
         // neighbour all the time, but shows it only once the focus is within half a view of the seam.
+        // A view larger than its display shows neighbours wherever the focus is, so the view itself counts too.
         let reach = CGRect(x: focus.x - view.width / 2, y: focus.y - view.height / 2, width: view.width, height: view.height)
             .insetBy(dx: -Self.leadIn, dy: -Self.leadIn)
-        let near = Set(geometry.displays.filter { $0.bounds.intersects(reach) }.map(\.id))
+        let near = Set(geometry.displays.filter { $0.bounds.intersects(reach) || $0.bounds.intersects(view) }.map(\.id))
         if near != reported {
             reported = near
             DispatchQueue.main.async { self.setActive(near) }
@@ -662,7 +694,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         }
         // Without a capture yet the picture stays owed.
         guard var image = composed else { return }
-        // Away from a seam one display fills the view. Otherwise space no display covers stays black.
+        // A view inside one display is filled by it. Otherwise space no display covers stays black.
         if !covered { image = image.composited(over: CIImage(color: .black)) }
         stale = false
         image = image.cropped(to: CGRect(x: 0, y: 0, width: width, height: height))

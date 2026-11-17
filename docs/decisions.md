@@ -166,6 +166,36 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
      Bilder durch, wird jedes größer (3 Mbit/s: 14 KB statt 8 KB). Eine Anpassung der Bitrate an die Antworten würde
      langsame Strecken (DERP) entlasten.
 
+8. Rauszoomen (nach „ich will mehr rauszoomen können! horizontaler modus und vertikaler!“). Ursache: der Ausschnitt
+   wurde verkleinert, bis er auf das kleinste Display passte (`ScreenView.region`), mit dem Seitenverhältnis des
+   Telefons. Am Mac des Nutzers (2056 × 1329 unter zwei Displays mit je 3008 × 1692) gemessen mit der installierten
+   App: hochkant (370 × 560) höchstens 878 × 1329 Punkte, also 0,42×, quer (700 × 330) höchstens 2056 × 969, 0,34×.
+   Auf einem der großen Displays war damit hochkant nie mehr als 29 % der Breite zu sehen. Dazu fragte die Seite nie
+   unter 0,25× an.
+   - Entscheidung: die Grenze ist der ganze Schreibtisch. Der Ausschnitt behält das Seitenverhältnis des Telefons und
+     wächst, bis der Kasten um alle Displays hineinpasst; was kein Display bedeckt, bleibt schwarz. Verworfen: Grenze
+     am Display des Zeigers (die Ausschnittgröße hinge dann am Ort des Zeigers, jeder Wechsel des Displays würde
+     Encoder und Zoomwert neu setzen) und ein gedrehtes Bild hochkant (die Richtungen des Trackpads stimmten nicht mehr).
+   - Lage je Achse (`ScreenView.origin`): passt der Ausschnitt in seine Grenzen, folgt er wie bisher dem Zeiger.
+     Ist er länger, steht er still mit dem Display in der Mitte und rückt davon nur ab, um ein Nachbardisplay statt
+     Leerraum zu zeigen; länger als der Schreibtisch, liegt dieser in der Mitte. Stetig in Zeiger und Zoom, also kein
+     Sprung an der Naht und keiner am Anschlag. Ein Display, das der Ausschnitt zeigt, läuft mit voller Rate, auch wenn
+     der Zeiger weiter als einen halben Ausschnitt entfernt ist.
+   - Grenzen an der Naht: bisher wuchsen sie für jedes nahe Display vom Display des Zeigers aus. Mit drei Displays
+     zählt ein drittes dann auf beiden Seiten einer Naht von einer anderen Kante, was erst auffällt, seit der
+     Ausschnitt größer als sein Display sein darf: 700 × 330 bei 0,25× sprang um 327 Punkte, wenn der Zeiger vom
+     kleinen Display nach oben wechselte (im Review gefunden). Jetzt wächst jedes nahe Display von dem aus, was die
+     übrigen erlauben, berechnet für jede Teilmenge der nahen Displays. Bei zwei Displays ist das die alte Rechnung.
+   - Seite: Stufen bis 0,02× (der Agent begrenzt nur die Rechnung, der Anschlag kommt wie bisher mit dem Bild zurück
+     und wird übernommen, jetzt auf drei Stellen). Anzeige und Vorschau gehen nur bis zum zuletzt gemeldeten
+     Anschlag, während der Zange und solange der Mac gefragt wird; die Anfrage selbst fragt trotzdem nach allem,
+     damit ein dazugekommenes Display den Anschlag löst. Der Anschlag gilt für eine Displaygröße des Telefons.
+   - Gemessen, Test-Agent mit Testmuster an denselben Displays: hochkant bis 6016 × 9105 Punkte (0,062×), quer bis
+     6408 × 3021 (0,109×), Zeiger an der erwarteten Stelle. Verifier v7 (T2): Zange und −-Taste fragen hochkant und
+     quer unter 0,25× an (vorher 0,25×), der Anschlag eines Macs mit 3008 Punkten Breite wird übernommen (0,122× und
+     0,237×), eine weitere Zange zeigt keine kleinere Vorschau, auch nicht nach dem Loslassen. T1 und T3 bis T8
+     unverändert.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or

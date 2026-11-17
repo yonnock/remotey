@@ -14,7 +14,8 @@ import { extname, join, resolve } from 'node:path';
 // 4: no full view key (the dock leaves the display the height it had); reports the display's share upright too.
 // 5: T6 sets the pointer speed on the Regler page and checks the next move; T7 opens and closes the tray.
 // 6: the side buttons (back, forward) count as main actions; T8 taps them.
-export const VERIFIER_VERSION = 6;
+// 7: T2 also zooms out, upright and sideways: by pinch, by the − key, and up to the limit a fake Mac answers with.
+export const VERIFIER_VERSION = 7;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -67,7 +68,7 @@ const cdp = (method, params = {}, sessionId) => new Promise((r, j) => {
 const harness = `(() => {
   const sent = window.__sent = [];
   window.WebSocket = class {
-    constructor() { this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 0); }
+    constructor() { window.__socket = this; this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 0); }
     send(data) {
       const m = JSON.parse(data);
       sent.push({ ...m, at: performance.now() });
@@ -81,6 +82,22 @@ const harness = `(() => {
     reset() { this.set({ width: innerWidth, height: innerHeight, offsetTop: 0 }); } };
   Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
   addEventListener('resize', () => { if (!window.__kb) Object.assign(vv, { width: innerWidth, height: innerHeight }); });
+  // The Mac's answer to the newest view request: a JPEG picture of the display's aspect that shows \`points\` Mac
+  // points across, in the format of Wire.swift. Resolves once the page had time to draw it.
+  window.__picture = async (points) => {
+    const request = sent.findLast((m) => m.t === 'view'), socket = window.__socket;
+    const canvas = Object.assign(document.createElement('canvas'), { width: 64, height: Math.max(2, Math.round(64 * request.h / request.w)) });
+    canvas.getContext('2d').fillRect(0, 0, canvas.width, canvas.height);
+    const jpeg = new Uint8Array(await (await new Promise((r) => canvas.toBlob(r, 'image/jpeg'))).arrayBuffer());
+    const packet = new Uint8Array(35 + jpeg.length), head = new DataView(packet.buffer);
+    packet.set([1, 30, 0]);
+    [0.5, 0.5, 0.5, 0.5, points].forEach((value, i) => head.setFloat32(3 + i * 4, value, true));
+    head.setUint32(27, request.v, true);
+    head.setUint32(31, window.__pictures = (window.__pictures ?? 0) + 1, true);
+    packet.set(jpeg, 35);
+    socket.onmessage?.({ data: packet.buffer });
+    await new Promise((r) => setTimeout(r, 150));
+  };
   try { localStorage.clear(); localStorage.setItem('remotey-view', '1'); localStorage.setItem('remotey-zoom', '0.5'); } catch {}
 })();`;
 
@@ -236,8 +253,58 @@ await task('T2', async () => {
   }
   const after = (await page.sent()).filter((m) => m.t === 'view').at(-1)?.zoom;
   await page.close();
-  return { pinch, reset: { taps, zoom: after ?? null, ok: after === 1 } };
+  return { pinch, reset: { taps, zoom: after ?? null, ok: after === 1 }, out: await zoomOut() };
 });
+
+// T2, zooming out: two fingers moving together, then the − key, then a Mac whose desktop is 3008 points wide and
+// stops the view there. Baseline: the page asks for no less than 0.25.
+async function zoomOut() {
+  const out = {};
+  for (const [orientation, [width, height]] of Object.entries({ portrait: [390, 844], landscape: [844, 390] })) {
+    const page = await openPage(width, height);
+    const r = await page.rect('#screen');
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    const asked = async () => (await page.sent()).filter((m) => m.t === 'view').at(-1)?.zoom ?? null;
+    const readout = () => page.evaluate(`(document.querySelector('#zoomValue') ?? document.querySelector('#zoom'))?.textContent.trim() ?? null`);
+    const together = () => page.gesture({ steps: 20, at: (i) => [[cx - 150 + i * 6, cy], [cx + 150 - i * 6, cy]] });
+    await page.clear();
+    await together();
+    await sleep(300);
+    const sent = await page.sent();
+    const pinch = { zoom: await asked(), misactions: count(sent, 'm') + count(sent, 's') + count(sent, 'c') };
+    // The − key, as often as it takes to reach the end.
+    let key = null;
+    if ((await page.rect('[data-act=zoom][data-step="-1"]'))?.shown) {
+      for (let i = 0; i < 12; i++) await page.tap('[data-act=zoom][data-step="-1"]');
+      await sleep(200);
+      key = await asked();
+    }
+    // The fake Mac shows its whole desktop at this zoom and no less. The page takes the value over, a further
+    // pinch previews no smaller picture, neither while it runs nor while the Mac is asked, and what the page
+    // asks for afterwards is the limit again.
+    const limit = r.w / 3008;
+    let mac = null;
+    if (await page.evaluate(`typeof window.__picture === 'function' && window.__sent.some((m) => m.t === 'view')`)) {
+      await page.evaluate(`window.__picture(3008)`); // the first JPEG only switches the page from H.264 to JPEG
+      await sleep(200);
+      await page.evaluate(`window.__picture(3008)`);
+      const adopted = await asked();
+      await page.touch('touchStart', [[cx - 150, cy], [cx + 150, cy]]); await sleep(16);
+      for (let i = 1; i <= 20; i++) { await page.touch('touchMove', [[cx - 150 + i * 6, cy], [cx + 150 - i * 6, cy]]); await sleep(16); }
+      const preview = await page.evaluate(`document.querySelector('#picture')?.style.transform ?? null`);
+      const shown = await readout();
+      await page.touch('touchEnd', []); await sleep(200);
+      const released = { asked: await asked(), preview: await page.evaluate(`document.querySelector('#picture')?.style.transform ?? null`), readout: await readout() };
+      await page.evaluate(`window.__picture(3008)`);
+      mac = { limit: Math.round(limit * 1000) / 1000, adopted, preview, readoutWhilePinching: shown, released, readout: await readout(),
+        after: await asked(), ok: Math.abs(adopted - limit) < 0.001 && preview === '' && released.preview === '' && released.asked < adopted
+          && Math.abs(await asked() - limit) < 0.001 };
+    }
+    await page.close();
+    out[orientation] = { pinch, key, mac, ok: pinch.zoom < 0.25 && pinch.misactions === 0 && key !== null && key < 0.25 && mac?.ok === true };
+  }
+  return out;
+}
 
 // T3: keyboard open, type, correct, close, in portrait and landscape.
 await task('T3', async () => {
