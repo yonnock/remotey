@@ -47,6 +47,40 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(Array(png.prefix(4)), [0x89, 0x50, 0x4e, 0x47])
     }
 
+    /// Names and titles come from apps and web pages: whatever they hold, the message stays one JSON object.
+    func testTheListOfAppsIsJSONWhateverATitleHolds() throws {
+        let title = #"He said "hi" \ </script>"# + "\n🎉"
+        let list = [
+            Apps.App(pid: 412, name: "Safari", icon: "com.apple.Safari", front: true, hidden: false,
+                     windows: [Apps.Window(id: 7, title: title, minimized: true, main: true)]),
+            Apps.App(pid: 9, name: "Finder", icon: "com.apple.finder", front: false, hidden: true, windows: []),
+        ]
+        let data = Data(Wire.apps(list).utf8)
+        let message = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(message["t"] as? String, "apps")
+        let apps = try XCTUnwrap(message["list"] as? [[String: Any]])
+        XCTAssertEqual(apps.map { $0["name"] as? String }, ["Safari", "Finder"])
+        XCTAssertEqual(apps.map { $0["pid"] as? Int }, [412, 9])
+        XCTAssertEqual(apps.map { $0["icon"] as? String }, ["com.apple.Safari", "com.apple.finder"])
+        XCTAssertEqual(apps.map { $0["front"] as? Bool }, [true, false])
+        XCTAssertEqual(apps.map { $0["hidden"] as? Bool }, [false, true])
+        let window = try XCTUnwrap((apps[0]["windows"] as? [[String: Any]])?.first)
+        XCTAssertEqual(window["id"] as? Int, 7)
+        XCTAssertEqual(window["title"] as? String, title)
+        XCTAssertEqual(window["min"] as? Bool, true)
+        XCTAssertEqual(window["main"] as? Bool, true)
+        XCTAssertEqual((apps[1]["windows"] as? [Any])?.count, 0)
+    }
+
+    func testAnIconTravelsAsPNGUnderItsName() throws {
+        let png = Data([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+        let data = Data(Wire.icon(#"com.example."odd""#, png: png).utf8)
+        let message = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(message["t"] as? String, "icon")
+        XCTAssertEqual(message["id"] as? String, #"com.example."odd""#)
+        XCTAssertEqual(Data(base64Encoded: try XCTUnwrap(message["png"] as? String)), png)
+    }
+
     private func command(_ json: String) throws -> Wire.Command {
         try Wire.command(from: Data(json.utf8))
     }
@@ -67,6 +101,9 @@ final class WireTests: XCTestCase {
         guard case .key("w", mods: ["cmd"], count: 2) = try command(#"{"t":"key","k":"w","mods":["cmd"],"n":2}"#) else { return XCTFail("key") }
         guard case .media("play") = try command(#"{"t":"media","k":"play"}"#) else { return XCTFail("media") }
         guard case .shown(41) = try command(#"{"t":"shown","n":41}"#) else { return XCTFail("shown") }
+        guard case .apps = try command(#"{"t":"apps"}"#) else { return XCTFail("apps") }
+        guard case .focus(pid: 412, window: 7) = try command(#"{"t":"focus","pid":412,"win":7}"#) else { return XCTFail("focus a window") }
+        guard case .focus(pid: 412, window: nil) = try command(#"{"t":"focus","pid":412}"#) else { return XCTFail("focus an app") }
     }
 
     func testViewRequest() throws {
@@ -83,7 +120,7 @@ final class WireTests: XCTestCase {
 
     func testWhatTheAgentDoesNotActOn() throws {
         for json in [#"{"t":"noop"}"#, #"{"t":"m","dx":6000,"dy":0}"#, #"{"t":"m","dx":1}"#, #"{"t":"auth"}"#,
-                     #"{"t":"shown","n":-1}"#, #"{"t":"key","k":"w"}"#,
+                     #"{"t":"shown","n":-1}"#, #"{"t":"key","k":"w"}"#, #"{"t":"focus","win":7}"#, #"{"t":"focus","pid":0}"#,
                      #"{"t":"text","s":"\#(String(repeating: "x", count: 2001))"}"#] {
             guard case .ignored = try command(json) else { return XCTFail(json) }
         }

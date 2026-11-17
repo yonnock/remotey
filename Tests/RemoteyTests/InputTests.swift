@@ -51,6 +51,30 @@ final class InputTests: XCTestCase {
         XCTAssertEqual(posted, [name(.leftMouseDown, "ctrl"), name(.leftMouseUp, "ctrl")])
     }
 
+    /// A half of the main display: the one the pointer is in, or the other one.
+    private func half(holdingThePointer holding: Bool) -> CGRect {
+        let display = CGDisplayBounds(CGMainDisplayID())
+        let left = CGRect(x: display.minX, y: display.minY, width: (display.width / 2).rounded(.down), height: display.height)
+        return left.contains(Pointer.location) == holding ? left : left.offsetBy(dx: left.width, dy: 0)
+    }
+
+    /// A window brought to the front from the phone: the view is cut around the pointer, so the pointer goes there.
+    func testThePointerGoesToTheMiddleOfAWindowItIsNotIn() {
+        let window = half(holdingThePointer: false)
+        XCTAssertTrue(input.move(into: window))
+        XCTAssertEqual(events.map(\.type), [.mouseMoved])
+        XCTAssertEqual(events.first?.location, CGPoint(x: window.midX.rounded(), y: window.midY.rounded()))
+    }
+
+    func testThePointerStaysInAWindowItIsInAndDuringADrag() {
+        XCTAssertFalse(input.move(into: half(holdingThePointer: true)))
+        XCTAssertEqual(events.count, 0)
+        input.button(.left, down: true)
+        XCTAssertFalse(input.move(into: half(holdingThePointer: false)), "the drag goes on where it is")
+        XCTAssertFalse(input.move(into: CGRect(x: -90_000, y: -90_000, width: 100, height: 100)), "no display there")
+        XCTAssertEqual(events.map(\.type), [.leftMouseDown])
+    }
+
     private var scrolls: [String] {
         events.filter { $0.type == .scrollWheel }.map { event in
             let phase = event.getIntegerValueField(.scrollWheelEventScrollPhase)

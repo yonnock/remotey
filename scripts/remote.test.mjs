@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SETTINGS, TAP_MS, Touchpad, detents, gain, settingAt, settingFraction, settingText, stepSetting } from '../Web/touchpad.js';
+import { appLabel, readApps, tapApp, tapWindow, windowTitle } from '../Web/apps.js';
 import { SENTINEL, diff } from '../Web/typing.js';
 import { KEYBOARD_MIN, frame } from '../Web/viewport.js';
 
@@ -242,4 +243,34 @@ test('the page is laid out into the visible part, also when iOS shifts it for th
   assert.equal(frame(layout, { height: 844 - KEYBOARD_MIN + 20, offsetTop: 0, scale: 1 }).keyboard, false);
   // Zoomed in with two fingers: the page keeps its size, so the zoom magnifies it.
   assert.deepEqual(frame(layout, { height: 300, offsetTop: 200, scale: 2.5 }), { top: 0, height: 844, keyboard: false, zoomed: true });
+});
+
+// ---- The switcher (apps.js)
+const app = (windows, more = {}) => ({ pid: 412, name: 'Safari', icon: 'com.apple.Safari', front: false, hidden: false,
+  windows: windows.map((title, i) => ({ id: 7 + i, title, min: false, main: i === 0 })), ...more });
+
+test('a tap on an app brings it to the front at once, unless there are windows to choose from', () => {
+  assert.deepEqual(tapApp(app([])), { t: 'focus', pid: 412 }, 'no window known: as a click in the Dock');
+  assert.deepEqual(tapApp(app(['Start'])), { t: 'focus', pid: 412, win: 7 }, 'one window: that one, also out of the Dock');
+  assert.equal(tapApp(app(['Start', 'Docs'])), null, 'several windows: the user chooses');
+  assert.deepEqual(tapWindow(app(['Start', 'Docs']), { id: 8 }), { t: 'focus', pid: 412, win: 8 });
+});
+
+test('a window without a title is named after its app, and a tile says what a tap will do', () => {
+  assert.equal(windowTitle(app(['  ']), { title: '  ' }), 'Safari');
+  assert.equal(windowTitle(app(['Docs']), { title: ' Docs ' }), 'Docs');
+  assert.equal(appLabel(app([])), 'Safari');
+  assert.equal(appLabel(app(['Start'], { front: true })), 'Safari, im Vordergrund');
+  assert.equal(appLabel(app(['Start', 'Docs', 'Mail'])), 'Safari, 3 Fenster zur Auswahl');
+  assert.equal(appLabel(app(['Start', 'Docs'], { front: true, hidden: true })), 'Safari, 2 Fenster zur Auswahl, im Vordergrund, ausgeblendet');
+});
+
+test('only a list of the expected shape is shown', () => {
+  const list = [app(['Start', 'Docs'], { front: true }), app([], { pid: 9, name: 'Finder', icon: 'com.apple.finder' })];
+  assert.deepEqual(readApps({ t: 'apps', list }), list);
+  assert.deepEqual(readApps({ t: 'apps', list: [] }), []);
+  for (const broken of [{ t: 'apps' }, { t: 'apps', list: 'x' }, { t: 'apps', list: [{ pid: 1 }] },
+    { t: 'apps', list: [{ ...list[0], windows: [{ id: 'a', title: 'x' }] }] }, { t: 'apps', list: [{ ...list[0], pid: '412' }] }]) {
+    assert.equal(readApps(broken), null, JSON.stringify(broken));
+  }
 });
