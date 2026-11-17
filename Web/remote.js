@@ -190,7 +190,8 @@ const touchpad = new Touchpad({
     pinchFrom = pinching = zoom;
   },
   pinch(scale) {
-    pinching = clampZoom(pinchFrom * scale);
+    // Readout and preview stop where the Mac did (see `syncView`); the request at the end still asks for all of it.
+    pinching = Math.max(clampZoom(pinchFrom * scale), floor);
     liveView?.zoomTo(pinching);
     showZoom(pinching);
   },
@@ -210,24 +211,29 @@ for (const [event, type] of [['touchstart', 'start'], ['touchmove', 'move'], ['t
 
 // ---- Live view: the Mac streams the screen region around the pointer (or the text being typed) into the
 // display, and the trackpad lies on top of it. Without the live view the same surface is a plain trackpad.
-const ZOOM_STEPS = [0.25, 0.35, 0.5, 0.7, 1, 1.4, 2, 2.8, 4];
+// The steps of the keys, and with their ends the range of the pinch. How far out a view really goes is up to
+// the Mac: it stops where every display is in the picture, and the value follows (see `placed`).
+const ZOOM_STEPS = [0.02, 0.03, 0.04, 0.06, 0.09, 0.12, 0.18, 0.25, 0.35, 0.5, 0.7, 1, 1.4, 2, 2.8, 4];
 const clampZoom = (z) => Math.min(ZOOM_STEPS.at(-1), Math.max(ZOOM_STEPS[0], z));
 const wide = matchMedia('(orientation: landscape) and (max-height: 540px)'); // a phone on its side
 const cadence = new Cadence(() => syncView());
 let viewOn = store.get('view', (v) => typeof v === 'boolean' || v === 1 || v === 0, false) == true;
 let zoom = store.get('zoom', (z) => typeof z === 'number' && z === clampZoom(z), 0.5);
 let sentView = '', sentSize = null, requestNumber = 0;
+let floor = 0; // the zoom at which the Mac had every display in the picture, for a display of the current size
 function syncView() {
   layout();
   body.classList.toggle('view', viewOn);
   view.hidden = !viewOn;
   $('#viewBtn').classList.toggle('on', viewOn);
-  showZoom(pinching || zoom);
+  // Readout and preview stop where the Mac did, also while it is asked for more.
+  const showing = Math.max(pinching || zoom, floor);
+  showZoom(showing);
   if (!viewOn) $('#follow').hidden = true;
   store.set('view', viewOn);
   if (!liveView) return; // not paired
   liveView.show(viewOn);
-  liveView.zoomTo(pinching || zoom);
+  liveView.zoomTo(showing);
   if (!ready || ws.readyState !== 1) return;
   const r = screenEl.getBoundingClientRect(); // measured after the layout change above
   const request = { t: 'view', on: viewOn, w: r.width, h: r.height, zoom,
@@ -245,11 +251,13 @@ function placed(update, picture) {
   meter.placed(update, performance.now());
   showMeter();
   $('#follow').hidden = !update.followsText;
-  // Zoomed out further than the Mac's smallest display allows: the view stops there, and so does the value.
+  // Zoomed out further than it takes to show every display of the Mac: the view stops there, and so does the value.
   // Only for a request of the display's current size: one sent mid-rotation is cut for a size that is gone.
   const shown = screenEl.clientWidth / update.width;
   const current = sentSize && Math.abs(screenEl.clientWidth - sentSize.w) < 1 && Math.abs(screenEl.clientHeight - sentSize.h) < 1;
-  if (picture && !pinching && current && update.v === requestNumber && shown > zoom * 1.02) setZoom(shown);
+  if (!picture || pinching || !current || update.v !== requestNumber) return;
+  if (shown > zoom * 1.02) { floor = shown; setZoom(shown); }
+  else if (zoom < floor / 1.02) { floor = 0; syncView(); } // the Mac shows more than it could: a display was added
 }
 function showZoom(z) {
   const text = `${decimal(z >= 1 ? Math.round(z * 10) / 10 : Math.round(z * 100) / 100)}×`;
@@ -257,7 +265,7 @@ function showZoom(z) {
   $('[data-act=zoom-reset]').setAttribute('aria-label', `Zoom ${text}, antippen für 1×`);
 }
 function setZoom(z) {
-  zoom = Math.round(clampZoom(z) * 100) / 100;
+  zoom = Math.round(clampZoom(z) * 1000) / 1000; // fine enough for the overview: 0,045 is not 0,05
   store.set('zoom', zoom);
   syncView();
 }
@@ -371,7 +379,7 @@ follow((frame) => {
 });
 wide.addEventListener('change', syncView);
 // Keyboard and rotation resize the display; the captured region must follow.
-new ResizeObserver(() => { liveView?.layout(); syncView(); }).observe(screenEl);
+new ResizeObserver(() => { floor = 0; liveView?.layout(); syncView(); }).observe(screenEl);
 
 // ---- Buttons. preventDefault on touchstart keeps the iOS keyboard open.
 function fire(b) {
