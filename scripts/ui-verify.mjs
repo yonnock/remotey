@@ -15,7 +15,8 @@ import { extname, join, resolve } from 'node:path';
 // 5: T6 sets the pointer speed on the Regler page and checks the next move; T7 opens and closes the tray.
 // 6: the side buttons (back, forward) count as main actions; T8 taps them.
 // 7: T2 also zooms out, upright and sideways: by pinch, by the − key, and up to the limit a fake Mac answers with.
-export const VERIFIER_VERSION = 7;
+// 8: T2 also turns the phone and back: each way of holding it keeps its own zoom.
+export const VERIFIER_VERSION = 8;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -253,7 +254,7 @@ await task('T2', async () => {
   }
   const after = (await page.sent()).filter((m) => m.t === 'view').at(-1)?.zoom;
   await page.close();
-  return { pinch, reset: { taps, zoom: after ?? null, ok: after === 1 }, out: await zoomOut() };
+  return { pinch, reset: { taps, zoom: after ?? null, ok: after === 1 }, out: await zoomOut(), turned: await zoomTurned() };
 });
 
 // T2, zooming out: two fingers moving together, then the − key, then a Mac whose desktop is 3008 points wide and
@@ -304,6 +305,24 @@ async function zoomOut() {
     out[orientation] = { pinch, key, mac, ok: pinch.zoom < 0.25 && pinch.misactions === 0 && key !== null && key < 0.25 && mac?.ok === true };
   }
   return out;
+}
+
+// T2, turning the phone: − upright, + sideways, then back and forth. Each way of holding it asks for its own zoom
+// again, and both are stored. Baseline: one zoom for both, so the turn carries the last value along.
+async function zoomTurned() {
+  const page = await openPage(390, 844);
+  const asked = async () => (await page.sent()).filter((m) => m.t === 'view').at(-1)?.zoom ?? null;
+  const turn = async (width, height) => { await page.resize(width, height); await sleep(200); return asked(); };
+  await page.tap('[data-act=zoom][data-step="-1"]');
+  const upright = await asked();
+  const sidewaysFirst = await turn(844, 390);
+  await page.tap('[data-act=zoom][data-step="1"]');
+  const sideways = await asked();
+  const back = await turn(390, 844), again = await turn(844, 390);
+  const stored = await page.evaluate(`[localStorage.getItem('remotey-zoom'), localStorage.getItem('remotey-zoom-wide')].map(Number)`);
+  await page.close();
+  return { upright, sidewaysFirst, sideways, back, again, stored,
+    ok: upright === 0.35 && sidewaysFirst === 0.5 && sideways === 0.7 && back === 0.35 && again === 0.7 && stored.join() === '0.35,0.7' };
 }
 
 // T3: keyboard open, type, correct, close, in portrait and landscape.

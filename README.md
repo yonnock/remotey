@@ -80,7 +80,7 @@ The build signs with your "Apple Development" identity so macOS keeps the Access
 | ‹ › | Back and forward, clicked as a mouse's side buttons (buttons 4 and 5). Chromium browsers and Firefox navigate on them; Safari and Finder ignore these buttons from any mouse unless a helper app translates them |
 | ⌘ ⌥ ⌃ ⇧ | Applies to the next key or click, e.g. ⌘ then `w`, or ⌥ then a tap. Armed before holding "Links", it stays for the whole drag |
 | "Bild" | Live view: the trackpad shows the screen around the pointer, so you steer on the picture itself |
-| − / + (top right of the display) | Zoom the live view in steps up to 4×, and out until every display of the Mac is in the picture, upright or sideways; the readout between them shows the zoom, tap it for 1× |
+| − / + (top right of the display) | Zoom the live view in steps up to 4×, and out until every display of the Mac is in the picture, upright or sideways; the readout between them shows the zoom, tap it for 1×. Upright and sideways each keep their own zoom |
 | "Folgt Text" | While you type, the live view shows the text cursor on the Mac (or the focused field, if the app reports no cursor), and waits until the cursor nears an edge. Moving the pointer or clicking ends it. Neither the pointer nor the focus on the Mac moves |
 | Readout at the top left of the display | Updates of the live view per second and the delay of a pointer move in milliseconds, measured from sending the move until the picture that shows it is drawn. Green is good, amber middling, red poor; grey while the screen is still |
 | Dock | Under the thumb: ‹ and ›, "Links" and "Rechts", then "Tippen…", the grid key and "Bild". Sideways it stands as a rail right of the display |

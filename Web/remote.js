@@ -187,7 +187,7 @@ const touchpad = new Touchpad({
   dragEnd: () => send({ t: 'b', b: 'left', d: false }),
   pinchStart() {
     if (!viewOn) return false;
-    pinchFrom = pinching = zoom;
+    pinchFrom = pinching = zoom();
   },
   pinch(scale) {
     // Readout and preview stop where the Mac did (see `syncView`); the request at the end still asks for all of it.
@@ -218,7 +218,13 @@ const clampZoom = (z) => Math.min(ZOOM_STEPS.at(-1), Math.max(ZOOM_STEPS[0], z))
 const wide = matchMedia('(orientation: landscape) and (max-height: 540px)'); // a phone on its side
 const cadence = new Cadence(() => syncView());
 let viewOn = store.get('view', (v) => typeof v === 'boolean' || v === 1 || v === 0, false) == true;
-let zoom = store.get('zoom', (z) => typeof z === 'number' && z === clampZoom(z), 0.5);
+// A zoom for each way the phone is held: what shows a whole display upright is a narrow strip of it sideways.
+// Sideways starts from the upright value, which is also what an older page stored.
+const validZoom = (z) => typeof z === 'number' && z === clampZoom(z);
+const zooms = { zoom: store.get('zoom', validZoom, 0.5) };
+zooms['zoom-wide'] = store.get('zoom-wide', validZoom, zooms.zoom);
+const zoomKey = () => (wide.matches ? 'zoom-wide' : 'zoom');
+const zoom = () => zooms[zoomKey()];
 let sentView = '', sentSize = null, requestNumber = 0;
 let floor = 0; // the zoom at which the Mac had every display in the picture, for a display of the current size
 function syncView() {
@@ -227,7 +233,7 @@ function syncView() {
   view.hidden = !viewOn;
   $('#viewBtn').classList.toggle('on', viewOn);
   // Readout and preview stop where the Mac did, also while it is asked for more.
-  const showing = Math.max(pinching || zoom, floor);
+  const showing = Math.max(pinching || zoom(), floor);
   showZoom(showing);
   if (!viewOn) $('#follow').hidden = true;
   store.set('view', viewOn);
@@ -236,7 +242,7 @@ function syncView() {
   liveView.zoomTo(showing);
   if (!ready || ws.readyState !== 1) return;
   const r = screenEl.getBoundingClientRect(); // measured after the layout change above
-  const request = { t: 'view', on: viewOn, w: r.width, h: r.height, zoom,
+  const request = { t: 'view', on: viewOn, w: r.width, h: r.height, zoom: zoom(),
     dpr: window.devicePixelRatio || 2, codec: liveView.codec, fps: cadence.framesPerSecond };
   // Layout observers call this freely; an unchanged request must not restart the stream.
   const text = JSON.stringify(request);
@@ -256,8 +262,8 @@ function placed(update, picture) {
   const shown = screenEl.clientWidth / update.width;
   const current = sentSize && Math.abs(screenEl.clientWidth - sentSize.w) < 1 && Math.abs(screenEl.clientHeight - sentSize.h) < 1;
   if (!picture || pinching || !current || update.v !== requestNumber) return;
-  if (shown > zoom * 1.02) { floor = shown; setZoom(shown); }
-  else if (zoom < floor / 1.02) { floor = 0; syncView(); } // the Mac shows more than it could: a display was added
+  if (shown > zoom() * 1.02) { floor = shown; setZoom(shown); }
+  else if (zoom() < floor / 1.02) { floor = 0; syncView(); } // the Mac shows more than it could: a display was added
 }
 function showZoom(z) {
   const text = `${decimal(z >= 1 ? Math.round(z * 10) / 10 : Math.round(z * 100) / 100)}×`;
@@ -265,12 +271,13 @@ function showZoom(z) {
   $('[data-act=zoom-reset]').setAttribute('aria-label', `Zoom ${text}, antippen für 1×`);
 }
 function setZoom(z) {
-  zoom = Math.round(clampZoom(z) * 1000) / 1000; // fine enough for the overview: 0,045 is not 0,05
-  store.set('zoom', zoom);
+  const key = zoomKey();
+  zooms[key] = Math.round(clampZoom(z) * 1000) / 1000; // fine enough for the overview: 0,045 is not 0,05
+  store.set(key, zooms[key]);
   syncView();
 }
 function stepZoom(direction) {
-  const next = direction > 0 ? ZOOM_STEPS.find((z) => z > zoom * 1.001) : ZOOM_STEPS.findLast((z) => z < zoom / 1.001);
+  const next = direction > 0 ? ZOOM_STEPS.find((z) => z > zoom() * 1.001) : ZOOM_STEPS.findLast((z) => z < zoom() / 1.001);
   if (next) setZoom(next);
 }
 // The readout follows the stream: written twice a second while messages arrive, and once more when they stop.

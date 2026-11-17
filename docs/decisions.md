@@ -196,6 +196,17 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
      0,237×), eine weitere Zange zeigt keine kleinere Vorschau, auch nicht nach dem Loslassen. T1 und T3 bis T8
      unverändert.
 
+9. Zoom je Ausrichtung (nach „merk dir den zoom pro ausrichtung“). Der Zoom ist CSS-Pixel je Mac-Punkt, das Display
+   des Telefons ist quer etwa doppelt so breit wie hochkant: derselbe Wert zeigt quer doppelt so viel Breite, und der
+   Anschlag liegt woanders (am Mac des Nutzers 0,062× hochkant, 0,109× quer). Nach hochkant ganz raus, drehen und
+   zurückdrehen stand der Wert deshalb auf dem Anschlag der anderen Ausrichtung.
+   - Entscheidung: zwei Werte, `zoom` (hochkant, der bisherige Schlüssel) und `zoom-wide` (Telefon quer, dieselbe
+     Abfrage wie das Layout). Gelesen wird der Wert der aktuellen Ausrichtung bei jedem Zugriff, nicht beim
+     Drehereignis, damit eine Anfrage mitten in der Drehung nie den falschen Wert trägt oder speichert. Quer beginnt
+     beim gespeicherten Hochkant-Wert, also dort, wo eine ältere Seite stand.
+   - Gemessen (Verifier v8, T2): − hochkant 0,35×, drehen 0,5×, + quer 0,7×, zurück 0,35×, wieder quer 0,7×, beide
+     gespeichert. Vorher: der Wert wanderte mit (0,35 → 0,35 → 0,5 → 0,5 → 0,5).
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
