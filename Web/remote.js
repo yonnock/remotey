@@ -1,4 +1,6 @@
-// The page: connection, controls, keys and settings, wired to the touchpad, the viewport and the live view.
+// The page: connection, controls, keys and settings, wired to the touchpad, the viewport, the live view and
+// the switcher.
+import { Switcher, readApps } from './apps.js';
 import { Cadence, LiveView, Meter } from './live-view.js';
 import { SETTINGS, Touchpad, detents, settingAt, settingFraction, settingText, stepSetting } from './touchpad.js';
 import { relay } from './typing.js';
@@ -38,6 +40,7 @@ function connect() {
   liveView?.close();
   if (ws) { ws.onclose = null; ws.close(); }
   ready = false;
+  if (sheet === 'apps') askApps(); // the list on show is the old Mac's until the new connection answers
   // Behind `tailscale serve` the socket has its own path; locally the agent listens on the port after the page's.
   const url = location.protocol === 'https:' ? `wss://${location.host}/ws` : `ws://${location.hostname}:${(Number(location.port) || 80) + 1}/ws`;
   const socket = ws = new WebSocket(url);
@@ -62,11 +65,17 @@ function connect() {
       sentView = '';
       syncView();
       if (viewOn) cadence.measure(); // low power mode may have changed it while the page was away
+      if (sheet === 'apps') askApps(); // the Mac is back while the switcher is open
     } else if (m.t === 'cursor') {
       player.setCursor(m);
     } else if (m.t === 'view' && m.ok === false) {
       setView(false);
       pad.textContent = 'Am Mac fehlt die Freigabe „Bildschirmaufnahme“ für Remotey. Dort erlauben, Remotey neu starten, dann „Bild“ erneut antippen.';
+    } else if (m.t === 'apps') {
+      const list = readApps(m);
+      if (list) switcher.update(list);
+    } else if (m.t === 'icon') {
+      switcher.picture(m.id, m.png);
     } else if (m.t === 'denied') {
       denied = true;
       pad.textContent = 'Zugangsschlüssel ungültig. Am Mac neu koppeln und den QR-Code scannen.';
@@ -80,6 +89,7 @@ function connect() {
     if (denied) return;
     setStatus('Getrennt', 'bad');
     pad.textContent = 'Keine Verbindung zum Mac.';
+    if (sheet === 'apps') askApps();
     if (document.visibilityState === 'visible') retryTimer = setTimeout(connect, 1000);
   };
 }
@@ -180,8 +190,8 @@ const touchpad = new Touchpad({
   },
   scroll: (dx, dy) => send({ t: 's', dx, dy }),
   scrollEnd: () => send({ t: 'se' }),
-  // With the tray open, a tap on the display puts it away instead of clicking; moves and scrolls still steer.
-  click: (button) => { if (drawer && !typing && button === 'left') setDrawer(false); else sendClick(button); },
+  // With a sheet open, a tap on the display puts it away instead of clicking; moves and scrolls still steer.
+  click: (button) => { if (sheet && !typing && button === 'left') setSheet(''); else sendClick(button); },
   // Three fingers drag, as the Links key held with a second finger does; armed modifiers stay for the drag.
   dragStart: () => send({ t: 'b', b: 'left', d: true, mods: takeMods() }),
   dragEnd: () => send({ t: 'b', b: 'left', d: false }),
@@ -325,36 +335,66 @@ $('#pages').addEventListener('touchmove', (e) => {
   if (next !== page) setPage(next);
 }, { passive: true });
 
-// ---- Layout: orientation, typing, keyboard and the tray. The tray lies over the display, so opening it
+// ---- The switcher: the Mac's open apps. A tap brings an app or one of its windows to the front and puts the
+// sheet away, so the display shows what came forward. See apps.js.
+const switcher = new Switcher({ list: $('#apps'), title: $('#appsTitle'), note: $('#appsNote'),
+  back: $('[data-act=apps-back]'), icon: $('#appsIcon') }, (message) => { send(message); setSheet(''); });
+// Asked whenever the sheet opens, and when the connection goes or comes back while it is open. Whatever list
+// is on show stops counting at once: nothing of it can be tapped until the Mac has answered.
+function askApps() {
+  switcher.reset();
+  if (ready) send({ t: 'apps' }); else switcher.say('Die Apps erscheinen, sobald der Mac verbunden ist.');
+}
+
+// ---- Layout: orientation, typing, keyboard and the sheets. A sheet lies over the display, so opening one
 // does not change the display's size; typing does, and the view follows.
-let typing = false, drawer = false, visible = { height: innerHeight, keyboard: false };
+const SHEETS = { deck: $('#drawer'), apps: $('#switcher') }; // the tray and the switcher, by the key that opens each
+let typing = false, sheet = '', visible = { height: innerHeight, keyboard: false };
 function layout() {
   body.classList.toggle('wide', wide.matches);
   body.classList.toggle('typing', typing);
   body.classList.toggle('keyboard', visible.keyboard);
-  body.classList.toggle('drawer', drawer && !typing);
-  const deckKey = $('[data-act=deck]');
-  deckKey.classList.toggle('on', drawer);
-  deckKey.setAttribute('aria-expanded', drawer);
-  $('#drawer').inert = !drawer || typing;
+  const open = typing ? '' : sheet;
+  body.classList.toggle('drawer', open === 'deck');
+  body.classList.toggle('apps', open === 'apps');
+  for (const [name, el] of Object.entries(SHEETS)) {
+    const key = $(`[data-act=${name}]`);
+    key.classList.toggle('on', sheet === name);
+    key.setAttribute('aria-expanded', sheet === name);
+    el.inert = open !== name;
+  }
 }
-function setDrawer(open) {
-  drawer = open;
+// One sheet at a time: opening one puts the other away.
+function setSheet(next) {
+  sheet = next;
+  if (next === 'apps') askApps();
   layout();
 }
-// The tray also goes away with a swipe down, started anywhere on it but on a control. It follows the finger
-// and either drops (far or fast enough) or springs back.
-{
-  const tray = $('#drawer');
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && sheet && !typing) setSheet(''); });
+// A sheet also goes away with a swipe down. It follows the finger and either drops (far or fast enough) or
+// springs back. The swipe starts anywhere on the sheet but on a control. The switcher's list is the exception
+// both ways: its icons act on a tap, not on a touch, so a swipe may start on them, but only while the list
+// does not scroll, where the same swipe would have to scroll it.
+const PULL_SLOP = 10; // a finger on the list has to travel this far down before the sheet follows it
+for (const tray of Object.values(SHEETS)) {
   let from = null;
   tray.addEventListener('touchstart', (e) => {
-    if (e.target.closest('button, [role=slider], .switch') || e.touches.length > 1) { from = null; return; }
+    const well = e.target.closest('.well');
+    from = null;
+    if (e.touches.length > 1 || (well ? well.scrollHeight > well.clientHeight : e.target.closest('button, [role=slider], .switch'))) return;
+    from = { y: e.touches[0].clientY, time: e.timeStamp, dy: 0, speed: 0, held: !well };
+    if (well) return; // a tap on an icon stays a tap
     e.preventDefault();
-    from = { y: e.touches[0].clientY, time: e.timeStamp, dy: 0, speed: 0 };
     tray.classList.add('held');
   }, { passive: false });
   tray.addEventListener('touchmove', (e) => {
     if (!from) return;
+    const travel = e.touches[0].clientY - from.y;
+    if (!from.held) {
+      if (travel < PULL_SLOP) return;
+      Object.assign(from, { y: from.y + PULL_SLOP, held: true });
+      tray.classList.add('held');
+    }
     e.preventDefault();
     const dy = Math.max(0, e.touches[0].clientY - from.y), dt = Math.max(1, e.timeStamp - from.time);
     from.speed = (dy - from.dy) / dt;
@@ -365,10 +405,12 @@ function setDrawer(open) {
     if (!from) return;
     tray.classList.remove('held');
     tray.style.removeProperty('--pull');
-    if (e.type === 'touchend' && (from.dy > 56 || (from.dy > 12 && from.speed > 0.4))) setDrawer(false);
+    // Let go over an icon after pulling: the finger did not tap it.
+    if (from.held && e.cancelable) e.preventDefault();
+    if (e.type === 'touchend' && (from.dy > 56 || (from.dy > 12 && from.speed > 0.4))) setSheet('');
     from = null;
   };
-  tray.addEventListener('touchend', release);
+  tray.addEventListener('touchend', release, { passive: false });
   tray.addEventListener('touchcancel', release);
 }
 follow((frame) => {
@@ -386,7 +428,8 @@ function fire(b) {
   const d = b.dataset;
   if (d.act === 'view') setView(!viewOn);
   else if (d.act === 'page') setPage(d.page);
-  else if (d.act === 'deck') setDrawer(!drawer);
+  else if (d.act in SHEETS) setSheet(sheet === d.act ? '' : d.act);
+  else if (d.act === 'apps-back') switcher.back();
   else if (d.act === 'zoom') stepZoom(Number(d.step));
   else if (d.act === 'zoom-reset') setZoom(1);
   else if (d.act === 'settings-reset') resetSettings();
@@ -430,7 +473,8 @@ relay(field, {
   key: (k) => sendKey(k),
   armed: () => mods.size > 0,
 });
-field.addEventListener('focus', () => { keepAwake(); typing = true; syncView(); });
+// The tray comes back after typing; the switcher does not, its list would be old by then.
+field.addEventListener('focus', () => { keepAwake(); typing = true; if (sheet === 'apps') sheet = ''; syncView(); });
 field.addEventListener('blur', () => { typing = false; syncView(); });
 
 connect();

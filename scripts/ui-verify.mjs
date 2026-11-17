@@ -2,7 +2,7 @@
 // No agent, no network: the page gets a fake WebSocket and a visual viewport whose size the script sets, so
 // the keyboard can be "opened". Chromium is not iOS Safari: this checks the page's own logic and layout,
 // not WebKit's keyboard, safe areas or gesture handling.
-// Usage: node scripts/ui-verify.mjs [--web=Web] [--json=out.json] [--only=T1,T4]
+// Usage: node scripts/ui-verify.mjs [--web=Web] [--json=out.json] [--only=T1,T9]
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -15,7 +15,8 @@ import { extname, join, resolve } from 'node:path';
 // 5: T6 sets the pointer speed on the Regler page and checks the next move; T7 opens and closes the tray.
 // 6: the side buttons (back, forward) count as main actions; T8 taps them.
 // 7: T2 also zooms out, upright and sideways: by pinch, by the − key, and up to the limit a fake Mac answers with.
-export const VERIFIER_VERSION = 7;
+// 8: the Apps key counts as a main action; T9 opens the switcher, with a socket that answers `apps`.
+export const VERIFIER_VERSION = 8;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -64,6 +65,19 @@ const cdp = (method, params = {}, sessionId) => new Promise((r, j) => {
   socket.send(JSON.stringify({ id, method, params, sessionId }));
 });
 
+// What the fake Mac has open: an app in front with two windows (one title is markup, as a web page may set it),
+// one with a single minimized window, a hidden one without windows, and enough others to fill three rows.
+const APPS = [
+  { pid: 501, name: 'Safari', icon: 'safari', front: true, hidden: false, windows: [
+    { id: 11, title: 'Remotey', min: false, main: true }, { id: 12, title: '<img src=x onerror="window.__xss = 1">', min: false, main: false }] },
+  { pid: 502, name: 'Mail', icon: 'mail', front: false, hidden: false, windows: [{ id: 13, title: 'Eingang', min: true, main: true }] },
+  { pid: 503, name: 'Musik', icon: 'music', front: false, hidden: true, windows: [] },
+  ...['Kalender', 'Nachrichten', 'Systemeinstellungen', 'Terminal', 'Notizen', 'Vorschau', 'Karten', 'Fotos', 'Finder']
+    .map((name, i) => ({ pid: 510 + i, name, icon: name, front: false, hidden: false, windows: [] })),
+];
+// A 1x1 PNG for the one icon the fake Mac sends.
+const ICON = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
 // Runs in the page before its own scripts.
 const harness = `(() => {
   const sent = window.__sent = [];
@@ -73,6 +87,10 @@ const harness = `(() => {
       const m = JSON.parse(data);
       sent.push({ ...m, at: performance.now() });
       if (m.t === 'auth') setTimeout(() => this.onmessage?.({ data: JSON.stringify({ t: 'ok', ax: true, page: 'test' }) }), 0);
+      if (m.t === 'apps') setTimeout(() => {
+        this.onmessage?.({ data: JSON.stringify({ t: 'apps', list: ${JSON.stringify(APPS)} }) });
+        this.onmessage?.({ data: JSON.stringify({ t: 'icon', id: 'safari', png: '${ICON}' }) });
+      }, window.__appsDelay ?? 0); // T9 makes the Mac slow to answer
     }
     close() { this.readyState = 3; }
   };
@@ -173,7 +191,7 @@ async function reachable(page, selector, visible) {
 
 const CONTROLS = {
   'Links (Drag)': '[data-hold=left]', 'Rechts': '[data-click=right]', 'Zurück': '[data-click=back]',
-  'Vorwärts': '[data-click=forward]', 'Bild': '[data-act=view]',
+  'Vorwärts': '[data-click=forward]', 'Bild': '[data-act=view]', 'Apps': '[data-act=apps]',
   'Zoom': '#zoom, [data-act=zoom-in]', 'Tastatur': '#field, [data-act=type]', 'Play': '[data-media=play]',
   'Lauter': '[data-media=volup]', 'Esc': '[data-key=escape]', 'Einstellungen': '[data-setting], [data-page=settings]',
 };
@@ -524,6 +542,125 @@ await task('T8', async () => {
   const clicks = sent.filter((m) => m.t === 'c').map((m) => [m.b, ...m.mods].join(' '));
   await page.close();
   return { clicks, others: sent.length - clicks.length, ok: clicks.join() === 'back,forward,back cmd,back' && sent.length === clicks.length };
+});
+
+// T9: the switcher. On every phone, upright and sideways: the icons are large enough to tap, lie inside the
+// sheet, and the sheet leaves the display's top row (state, zoom) free. Then what the taps send: an app with
+// one window comes forward at once, one with several shows them first, and nothing reaches the Mac before the choice.
+await task('T9', async () => {
+  const out = { layout: {} };
+  const isOpen = (page) => page.evaluate(`document.body.classList.contains('apps')`);
+  const open = async (page) => { if (!(await isOpen(page))) await page.tap('[data-act=apps]'); await sleep(450); };
+  for (const [phone, [w, h]] of Object.entries(PHONES)) {
+    for (const orientation of ['portrait', 'landscape']) {
+      const page = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]));
+      await open(page);
+      out.layout[`${phone} ${orientation}`] = await page.evaluate(`(() => {
+        const box = (s) => document.querySelector(s).getBoundingClientRect();
+        const sheet = box('#switcher'), well = box('.well'), zoom = box('#zoom'), tiles = [...document.querySelectorAll('.app')].map((e) => e.getBoundingClientRect());
+        const perRow = tiles.filter((t) => Math.abs(t.top - tiles[0].top) < 1).length;
+        return { apps: tiles.length, perRow, smallest: Math.round(Math.min(...tiles.map((t) => Math.min(t.width, t.height)))),
+          inside: tiles.every((t) => t.left >= well.left - 0.5 && t.right <= well.right + 0.5),
+          belowZoom: sheet.top >= zoom.bottom - 0.5, inSight: tiles.filter((t) => t.bottom <= well.bottom + 0.5).length,
+          truncated: [...document.querySelectorAll('.app .name')].filter((n) => n.scrollWidth > n.clientWidth).map((n) => n.textContent) };
+      })()`);
+      await page.close();
+    }
+  }
+  const page = await openPage(375, 812);
+  const focuses = async () => (await page.sent()).filter((m) => m.t === 'focus').map(({ at, ...m }) => m);
+  await open(page);
+  const shown = await page.evaluate(`(() => ({ asked: window.__sent.filter((m) => m.t === 'apps').length,
+    labels: [...document.querySelectorAll('.app')].slice(0, 3).map((e) => e.getAttribute('aria-label')),
+    icon: !!document.querySelector('.app img[src^="data:image/png"]'), letter: getComputedStyle(document.querySelector('[data-pid="502"] .letter')).display !== 'none',
+    key: document.querySelector('[data-act=apps]').getAttribute('aria-expanded') }))()`);
+  // One window: that window, and the sheet goes away.
+  await page.clear();
+  await page.tap('[data-pid="502"]'); await sleep(300);
+  const one = { sent: await focuses(), closed: !(await isOpen(page)) };
+  // No window known: the app alone.
+  await open(page); await page.clear();
+  await page.tap('[data-pid="503"]'); await sleep(300);
+  const none = { sent: await focuses(), closed: !(await isOpen(page)) };
+  // Several windows: a choice, and nothing sent before it. A title that is markup stays text.
+  await open(page); await page.clear();
+  await page.tap('[data-pid="501"]'); await sleep(300);
+  const choice = await page.evaluate(`(() => ({ open: document.body.classList.contains('apps'),
+    rows: [...document.querySelectorAll('.window .title')].map((e) => e.textContent), front: document.querySelector('.window[aria-current]')?.dataset.win,
+    head: document.querySelector('#appsTitle').textContent + ' / ' + document.querySelector('#appsNote').textContent,
+    back: !document.querySelector('[data-act=apps-back]').hidden, markup: !!document.querySelector('#apps img[src="x"]') || !!window.__xss }))()`);
+  choice.sentBefore = (await focuses()).length;
+  await page.tap('[data-act=apps-back]'); await sleep(250);
+  const back = await page.evaluate(`document.querySelectorAll('.app').length`);
+  await page.tap('[data-pid="501"]'); await sleep(300);
+  await page.tap('[data-win="12"]'); await sleep(300);
+  const window = { sent: await focuses(), closed: !(await isOpen(page)) };
+  // Opened again while the Mac is slow to answer: the list of last time is not offered, since the new one may
+  // come in another order under the finger. As many blank places stand in, and a tap on one does nothing.
+  await page.evaluate(`window.__appsDelay = 400`);
+  await page.tap('[data-act=apps]'); await sleep(150);
+  await page.clear();
+  const first = await page.rect('.app');
+  await page.touch('touchStart', [[first.x + first.w / 2, first.y + first.h / 2]]); await sleep(40); await page.touch('touchEnd', []); await sleep(60);
+  const stale = await page.evaluate(`({ places: document.querySelectorAll('.app.ghost').length, tappable: document.querySelectorAll('.app[data-pid]').length,
+    sent: window.__sent.filter((m) => m.t === 'focus').length, open: document.body.classList.contains('apps') })`);
+  await sleep(500);
+  await page.evaluate(`window.__appsDelay = 0`);
+  // Then it shows all apps, and a tap on the display puts it away without a click.
+  await page.clear();
+  const again = await page.evaluate(`document.querySelectorAll('.app[data-pid]').length`);
+  const s = await page.rect('#screen');
+  await page.touch('touchStart', [[s.x + 60, s.y + 80]]); await sleep(40); await page.touch('touchEnd', []); await sleep(300);
+  const tap = { closed: !(await isOpen(page)), clicks: count(await page.sent(), 'c') };
+  // A swipe down from its head.
+  await open(page);
+  const head = await page.rect('#appsTitle');
+  await page.touch('touchStart', [[head.x + head.w / 2, head.y + head.h / 2]]);
+  for (let i = 1; i <= 8; i++) { await sleep(16); await page.touch('touchMove', [[head.x + head.w / 2, head.y + head.h / 2 + i * 12]]); }
+  await page.touch('touchEnd', []); await sleep(300);
+  const swipe = { closed: !(await isOpen(page)) };
+  // Back from the background with the sheet open: the page connects anew. What was on show is from before,
+  // so nothing of it takes a tap until the Mac has answered again.
+  await open(page);
+  await page.evaluate(`(window.__appsDelay = 400, document.dispatchEvent(new Event('visibilitychange')))`);
+  await sleep(150); await page.clear();
+  const old = await page.rect('#apps');
+  await page.touch('touchStart', [[old.x + 50, old.y + 40]]); await sleep(40); await page.touch('touchEnd', []); await sleep(60);
+  const resumed = await page.evaluate(`({ tappable: document.querySelectorAll('#apps button').length,
+    sent: window.__sent.filter((m) => m.t === 'focus').length, open: document.body.classList.contains('apps') })`);
+  await sleep(600);
+  resumed.after = await page.evaluate(`document.querySelectorAll('.app[data-pid]').length`);
+  await page.evaluate(`window.__appsDelay = 0`);
+  // The same swipe started on an icon, while the list does not scroll: the sheet goes, the app is not asked for.
+  await open(page); await page.clear();
+  const icon = await page.rect('[data-pid="502"]');
+  await page.touch('touchStart', [[icon.x + icon.w / 2, icon.y + icon.h / 2]]);
+  for (let i = 1; i <= 8; i++) { await sleep(16); await page.touch('touchMove', [[icon.x + icon.w / 2, icon.y + icon.h / 2 + i * 14]]); }
+  await page.touch('touchEnd', []); await sleep(300);
+  swipe.fromIcon = { closed: !(await isOpen(page)), sent: (await focuses()).length };
+  // One sheet at a time, and typing puts the switcher away for good.
+  await open(page);
+  await page.tap('[data-act=deck]'); await sleep(450);
+  const sheets = await page.evaluate(`document.body.className.split(' ').filter((c) => c === 'drawer' || c === 'apps').join()`);
+  await open(page);
+  await page.evaluate(`document.querySelector('#field').focus()`); await sleep(200);
+  await page.evaluate(`document.querySelector('#field').blur()`); await sleep(300);
+  const typed = { closed: !(await isOpen(page)) };
+  await page.close();
+  const layouts = Object.values(out.layout);
+  return { ...out, shown, one, none, choice, back, window, stale, again, tap, swipe, resumed, sheets, typed,
+    ok: layouts.every((l) => l.apps === 12 && l.smallest >= 44 && l.inside && l.belowZoom && l.inSight >= 6)
+      && shown.asked === 1 && shown.icon && shown.letter && shown.key === 'true'
+      && shown.labels.join('|') === 'Safari, 2 Fenster zur Auswahl, im Vordergrund|Mail|Musik, ausgeblendet'
+      && JSON.stringify(one.sent) === '[{"t":"focus","pid":502,"win":13}]' && one.closed
+      && JSON.stringify(none.sent) === '[{"t":"focus","pid":503}]' && none.closed
+      && choice.open && choice.sentBefore === 0 && choice.rows.length === 2 && choice.rows[1].startsWith('<img') && !choice.markup
+      && choice.front === '11' && choice.head === 'Safari / 2 Fenster' && choice.back && back === 12
+      && JSON.stringify(window.sent) === '[{"t":"focus","pid":501,"win":12}]' && window.closed
+      && stale.places === 12 && stale.tappable === 0 && stale.sent === 0 && stale.open
+      && again === 12 && tap.closed && tap.clicks === 0 && swipe.closed && swipe.fromIcon.closed && swipe.fromIcon.sent === 0
+      && resumed.tappable === 0 && resumed.sent === 0 && resumed.open && resumed.after === 12
+      && sheets === 'drawer' && typed.closed };
 });
 
 socket.close();

@@ -1,7 +1,9 @@
 import CoreGraphics
 import Foundation
 
-/// Everything the agent and the page say to each other. `Web/live-view.js` holds the page's half.
+/// Everything the agent and the page say to each other. On the page each message lives in the module it serves:
+/// `Web/live-view.js` reads the live view's updates, `Web/apps.js` the switcher's lists, and `Web/remote.js`
+/// sends the commands and routes what arrives.
 enum Wire {
     /// What the page says. A message is JSON; `t` names its kind, the other fields belong to one kind or another.
     enum Command {
@@ -24,6 +26,11 @@ enum Wire {
         case view(ScreenView.Request?)
         /// The page has drawn or discarded the picture with this number.
         case shown(UInt32)
+        /// The page asks for the open apps and their windows, see `Apps`.
+        case apps
+        /// Brings an app to the front. `window` names one of its windows by its id in the list; without it the
+        /// app comes forward as after a click in the Dock.
+        case focus(pid: Int32, window: Int?)
         /// Nothing the agent acts on: an unknown kind, a missing field, a value out of range.
         case ignored
     }
@@ -48,6 +55,8 @@ enum Wire {
         var fps: Int?
         var q: UInt32?
         var v: UInt32?
+        var pid: Int32?
+        var win: Int?
     }
 
     private static let decoder = JSONDecoder()
@@ -77,6 +86,8 @@ enum Wire {
         case "media": m.k.map { .media($0) }
         case "view": .view(view(m))
         case "shown": m.n.flatMap(UInt32.init(exactly:)).map { .shown($0) }
+        case "apps": .apps
+        case "focus": m.pid.flatMap { $0 > 0 ? .focus(pid: $0, window: m.win) : nil }
         default: nil
         }
         return command ?? .ignored
@@ -98,6 +109,30 @@ enum Wire {
 
     /// The live view needs the Screen Recording permission.
     static let viewRefused = #"{"t":"view","ok":false}"#
+
+    /// The open apps and their windows, front to back.
+    static func apps(_ list: [Apps.App]) -> String {
+        struct Message: Encodable {
+            let t = "apps"
+            let list: [Apps.App]
+        }
+        return json(Message(list: list))
+    }
+
+    /// The icon the list names `id`, sent once per connection.
+    static func icon(_ id: String, png: Data) -> String {
+        struct Message: Encodable {
+            let t = "icon"
+            let id: String
+            let png: Data
+        }
+        return json(Message(id: id, png: png))
+    }
+
+    /// For messages that carry text from outside the agent: names of apps, titles of windows.
+    private static func json(_ message: some Encodable) -> String {
+        String(decoding: (try? JSONEncoder().encode(message)) ?? Data("{}".utf8), as: UTF8.self)
+    }
 
     /// The pointer's picture, which the page draws at the place every `LiveUpdate` names. Sizes are in points.
     static func cursor(_ picture: Pointer.Picture) -> String? {

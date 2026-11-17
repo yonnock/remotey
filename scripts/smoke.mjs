@@ -1,5 +1,6 @@
 // Smoke test against a running agent: HTTP page, auth, pointer movement, live view flow control.
-// Usage: node scripts/smoke.mjs [--h264] [--fps=120] [--capture=/tmp/view.h264]   (moves the cursor a little and back; sends no keystrokes)
+// Usage: node scripts/smoke.mjs [--h264] [--fps=120] [--capture=/tmp/view.h264] [--focus]   (moves the cursor a little and back; sends no keystrokes)
+// --focus also brings another app's window to the front and the one that was in front back, so what you see changes for two seconds.
 // Close Remotey on the phone first: the most recent viewer gets the live view, so an open phone takes it back.
 import { writeFileSync } from 'node:fs';
 import { H264, JPEG, POINTER, parseH264, parseUpdate } from '../Web/live-view.js';
@@ -21,7 +22,7 @@ if ((await fetch(`${HTTP}/etc/passwd`)).status !== 404) fail('404');
 const html = await (await fetch(`${HTTP}/`)).text();
 // Every file the page names, with the type it needs: a stylesheet served as text/plain is not applied.
 const files = [...html.matchAll(/(?:src|href)="\/?([\w.-]+\.(js|css|png))"/g)].map(([, name, ext]) => [name, ext]);
-for (const name of ['touchpad.js', 'viewport.js', 'typing.js', 'live-view.js']) files.push([name, 'js']); // imported by remote.js
+for (const name of ['touchpad.js', 'viewport.js', 'typing.js', 'live-view.js', 'apps.js']) files.push([name, 'js']); // imported by remote.js
 const types = { js: 'text/javascript', css: 'text/css', png: 'image/png' };
 for (const [name, ext] of files) {
   const response = await fetch(`${HTTP}/${name}`);
@@ -71,6 +72,8 @@ if (hello.ax) {
 // fastest answer plus SLACK seconds (SendWindow.swift).
 const MAX_IN_FLIGHT = 2, SLACK = 0.2;
 let frames = 0, bytes = 0, acking = false, denied = false, held = [], expectKey = true, keyFrames = 0, cursors = 0;
+let apps = null, lists = 0;
+const icons = new Map();
 const shown = (n) => send({ t: 'shown', n });
 good.onMessage = (e) => {
   if (typeof e.data === 'string') {
@@ -79,6 +82,11 @@ good.onMessage = (e) => {
       if (!(m.w > 0 && m.h > 0 && m.x >= 0 && m.y >= 0) || !Buffer.from(m.png, 'base64').subarray(1, 4).equals(Buffer.from('PNG'))) fail('pointer picture');
       cursors++;
     } else if (m.t === 'view') denied = m.ok === false;
+    else if (m.t === 'apps') { apps = m.list; lists++; }
+    else if (m.t === 'icon') {
+      if (!Buffer.from(m.png, 'base64').subarray(1, 4).equals(Buffer.from('PNG'))) fail(`icon ${m.id} is no PNG`);
+      icons.set(m.id, (icons.get(m.id) ?? 0) + 1);
+    }
     return;
   }
   const update = parseUpdate(e.data);
@@ -107,6 +115,34 @@ async function stir() {
   }
   await sleep(200);
 }
+// The switcher: the list of open apps comes at once, every icon after it and once per connection.
+const list = async () => { const n = lists; send({ t: 'apps' }); for (let i = 0; i < 40 && lists === n; i++) await sleep(50); if (lists === n) fail('no list of apps'); return apps; };
+await list();
+await sleep(1000);
+if (!apps.some((a) => a.icon === 'com.apple.finder')) fail('the list of apps lacks the Finder');
+if (!apps.every((a) => a.pid > 0 && a.name && Array.isArray(a.windows))) fail('an app without pid, name or windows');
+if (!apps.every((a) => icons.get(a.icon) === 1)) fail('not every app got its icon once');
+await list();
+await sleep(300);
+if ([...icons.values()].some((n) => n !== 1)) fail('an icon was sent twice');
+console.log(`ok   apps: ${apps.length} apps with ${apps.reduce((n, a) => n + a.windows.length, 0)} windows, each icon once${hello.ax ? '' : ' (no windows without Accessibility)'}`);
+if (process.argv.includes('--focus')) {
+  // A window of another app, so nothing new opens; then the window that was in front.
+  const before = apps.find((a) => a.front), other = apps.find((a) => !a.front && !a.hidden && a.windows.some((w) => !w.min));
+  if (!other) console.log('skip focus: no other app with a window on this Space');
+  else {
+    send({ t: 'focus', pid: other.pid, win: other.windows.find((w) => !w.min).id });
+    await sleep(1000);
+    if ((await list()).find((a) => a.front)?.pid !== other.pid) fail('the app asked for did not come to the front');
+    if (before) {
+      send({ t: 'focus', pid: before.pid, win: before.windows.find((w) => w.main)?.id });
+      await sleep(1000);
+      if ((await list()).find((a) => a.front)?.pid !== before.pid) fail('the app that was in front did not come back');
+    }
+    console.log('ok   apps: a window of another app comes to the front, and the one before comes back');
+  }
+}
+
 send({ t: 'view', on: true, w: 390, h: 844, zoom: 0.5, dpr: 3, codec, fps });
 await stir();
 if (denied) {

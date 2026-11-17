@@ -91,4 +91,48 @@ final class ServerTests: XCTestCase {
         await fulfillment(of: [alive], timeout: 2)
         good.cancel(with: .goingAway, reason: nil)
     }
+
+    /// The list comes first and at once; the icons follow, each once per connection.
+    func testAClientGetsTheOpenAppsAndEveryIconOnce() async throws {
+        let socket = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(wsPort)/ws")!)
+        socket.resume()
+        defer { socket.cancel(with: .goingAway, reason: nil) }
+        func next() async throws -> [String: Any] {
+            guard case .string(let text) = try await socket.receive() else { return [:] }
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        }
+        try await socket.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
+        let ok = try await next()
+        XCTAssertEqual(ok["t"] as? String, "ok")
+
+        try await socket.send(.string(#"{"t":"apps"}"#))
+        let first = try await next()
+        XCTAssertEqual(first["t"] as? String, "apps")
+        let apps = try XCTUnwrap(first["list"] as? [[String: Any]])
+        // Finder always runs in a session with a Dock.
+        XCTAssertTrue(apps.contains { $0["icon"] as? String == "com.apple.finder" }, "\(apps.compactMap { $0["name"] })")
+        for app in apps {
+            XCTAssertGreaterThan(try XCTUnwrap(app["pid"] as? Int), 0)
+            XCTAssertFalse(try XCTUnwrap(app["name"] as? String).isEmpty)
+            XCTAssertNotNil(app["windows"] as? [[String: Any]])
+        }
+        XCTAssertLessThanOrEqual(apps.filter { $0["front"] as? Bool == true }.count, 1)
+
+        var icons: Set<String> = []
+        for _ in Set(apps.compactMap { $0["icon"] as? String }) {
+            let message = try await next()
+            XCTAssertEqual(message["t"] as? String, "icon")
+            let png = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(message["png"] as? String)))
+            XCTAssertEqual(Array(png.prefix(4)), [0x89, 0x50, 0x4e, 0x47])
+            icons.insert(try XCTUnwrap(message["id"] as? String))
+        }
+        XCTAssertEqual(icons, Set(apps.compactMap { $0["icon"] as? String }))
+
+        // Asked again, the list comes without its icons: the next message is the answer to what follows it.
+        for _ in 1...2 {
+            try await socket.send(.string(#"{"t":"apps"}"#))
+            let again = try await next()
+            XCTAssertEqual(again["t"] as? String, "apps")
+        }
+    }
 }

@@ -196,6 +196,53 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
      0,237×), eine weitere Zange zeigt keine kleinere Vorschau, auch nicht nach dem Loslassen. T1 und T3 bis T8
      unverändert.
 
+9. Programme und Fenster (Issue 4: „Liste mit offenen Apps, bei Klick Auswahl des Fensters, in den Vordergrund und in
+   den Fokus"). Verifier v8 (neu: T9 Umschalter, „Apps" zählt als Hauptaktion); Agent geprüft mit zwei Test-Apps mit je
+   zwei Fenstern, damit keine echte App angefasst wird.
+   - Gemessen am Mac (14 offene Apps): Accessibility nennt nur die Fenster des aktuellen Space und die minimierten.
+     8 der 14 Apps meldeten kein Fenster, obwohl sie welche haben. Alle Apps nacheinander zu fragen dauerte 46 bis
+     827 ms (die erste Frage an eine App ist die teure), nebeneinander 20 bis 64 ms. Ein Symbol mit 120 px ist 5 bis
+     8 KB groß, alle zusammen etwa 110 KB.
+   - Entscheidung Agent: `Apps.swift` fragt nebeneinander und abseits des Hauptthreads, der den Zeiger trägt. Die
+     Liste geht sofort, die Symbole folgen einzeln und je Verbindung einmal. Reihenfolge: die App im Vordergrund, dann
+     nach vorderstem Fenster auf dem Bildschirm, dann der Rest nach Startzeit. Ein Fenster behält seine Nummer von
+     Liste zu Liste. Gemessen: Antwort auf `apps` nach 48 bis 216 ms.
+   - Entscheidung Fokus: ein Fenster wird über Accessibility angehoben, zum Hauptfenster gemacht und die App nach vorn
+     geholt (`AXFrontmost` und `activate`, weil macOS `activate` einer Hintergrund-App nur als Wunsch nimmt). Ohne
+     Fenster wie ein Klick im Dock: aktivieren und das Bundle öffnen, damit eine App ohne Fenster eins aufmacht.
+     Keine privaten Schnittstellen (wie bei den Seitentasten): Fenster auf anderen Spaces lassen sich damit nicht
+     einzeln wählen; der Tipp auf die App wechselt den Space, danach listet der Umschalter ihre Fenster.
+   - Zwei Fehler, die erst der Lauf am Mac zeigte: `openApplication` auf einen Prozess ohne App-Bundle startet dessen
+     Datei im Terminal (vier Rückfragen von Ghostty), jetzt nur für `.app`. Und `NSRunningApplication(processIdentifier:)`
+     kennt eine eben gestartete App oft nicht (die meisten Läufe ohne vorherige Liste scheiterten); das Ziel kommt jetzt aus
+     der zuletzt gesendeten Liste, was zugleich nur zulässt, was die Liste anbot.
+   - Gemessen am Endstand: 17 bzw. 18 Prüfungen in drei Läufen bestanden (Fenster einer App im Hintergrund, anderes
+     Fenster derselben App, minimiert, ausgeblendet, ohne Fenster, Nummer ohne Fenster, beendete App, Prozess außerhalb
+     des Docks), einmal mit einer Test-App ohne Bundle. 24 von 24 Wechseln nach 700 ms vorn, je mit einer
+     Zeigerbewegung 300 ms davor und laufendem Live-Bild.
+   - Entscheidung Zeiger: das Live-Bild ist um den Zeiger geschnitten, ein Fenster auf dem anderen Display wäre nach dem
+     Wechsel nicht zu sehen. Mit Live-Bild geht der Zeiger in die Mitte des geholten Fensters, außer er liegt schon
+     darin oder hält eine Taste; ohne Live-Bild bleibt er. Gemessen: 10 von 10, ohne Live-Bild keine Bewegung.
+   - Entscheidung Seite: eine eigene Taste „Apps" im Dock statt einer vierten Seite der Schublade (die merkt sich ihre
+     Seite, der Weg wäre drei Tipps statt zwei). Beschriftet statt bebildert, weil das Rasterzeichen schon die
+     Schublade öffnet. Das Blatt fährt wie die Schublade aus der Unterkante und lässt die oberste Zeile des Displays
+     frei. Symbole im Raster statt einer Liste: 12 Apps ohne Scrollen bei 375 px. Ein Tipp wechselt sofort; nur eine
+     App mit mehreren Fenstern (Zahl am Symbol) zeigt erst die Titel, und bis zur Wahl bewegt sich am Mac nichts.
+     Was der Mac meldet, steht auf dunklem Glas, Amber markiert die App und das Fenster im Vordergrund.
+     Titel und Namen werden als Text gesetzt, nie als Markup (T9 prüft einen Titel mit `<img onerror>`).
+   - Gemessen (T9): je Reihe 3/4/5 Symbole hochkant (320/375/440 px), 5 quer; kleinste Tippfläche 68 px; Blatt nie über
+     den Zoomtasten; 12 von 12 Apps ohne Scrollen bei 375 und 440 px, 9 bei 320 px. Unverändert (T1 bis T8):
+     Display-Anteil 69/73/80 % hochkant, 72/76/82 % quer, 12/12 erreichbar überall.
+   - Nach dem Review (zwei Leser, Standards und Issue): beim Öffnen stand kurz die Liste vom letzten Mal im Blatt, und
+     die frische kam 50 bis 200 ms später in anderer Reihenfolge, weil die Reihenfolge der Nutzung folgt. Ein schneller
+     Tipp traf dann eine andere App. Jetzt stehen bis zur Antwort so viele Leerplätze, wie der Mac zuletzt Apps hatte,
+     und nehmen keinen Tipp an (T9 mit 400 ms Antwortzeit: vorher öffnete der Tipp die Fensterwahl der alten Liste).
+     Das Blatt lässt sich auch am Raster nach unten wischen, solange die Liste nicht scrollt (vorher nur am Kopf).
+     Taste und Blatt heißen beide „Apps". Titel laufen in ihrer eigenen Schreibrichtung.
+   - Nicht gebaut: Beenden oder Ausblenden einer App vom Telefon, laufende Aktualisierung bei offenem Blatt (die Liste
+     wird bei jedem Öffnen gefragt, das Blatt schließt nach der Wahl). Die App im Vordergrund steht oben links, wie
+     bei Command-Tab; näher am Daumen wäre die unterste Reihe, das bricht aber die Leserichtung.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -213,3 +260,8 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   beim Streamen bleibt das Funkmodul wach und die Zeiten sind vermutlich kürzer. Am iPhone zeigt die Anzeige links oben
   die Verzögerung: lag sie vorher deutlich über 100 ms, war das Fenster die Grenze. Echte Bildschirmaufnahme nach den
   Änderungen nicht gemessen (Mac gesperrt, ScreenCaptureKit lieferte keine Displays); Smoke lief mit Testmuster.
+- Runde 9: der Umschalter lief nur in Chromium mit Touch-Emulation, nicht auf einem iPhone: ob Safari die gedrückte
+  Kachel zeigt und die Liste im Blatt flüssig scrollt, ist offen. Der Wechsel auf einen anderen Space und in ein
+  Vollbild-Fenster wurde nicht ausgelöst (er hätte den Bildschirm des Nutzers umgeschaltet); er folgt aus dem
+  dokumentierten Verhalten von `activate` und `openApplication`. Mehrere Displays: der Zeigersprung ist nur auf einem
+  Display gemessen.

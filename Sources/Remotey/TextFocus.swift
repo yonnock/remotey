@@ -63,18 +63,16 @@ final class TextFocus {
 
     /// The caret or selection of the focused element, else its frame. Nil if Accessibility knows neither.
     func locate() -> Target? {
-        guard let focused = attribute(system, kAXFocusedUIElementAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID()
+        guard let focused = Accessibility.attribute(system, kAXFocusedUIElementAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID()
         else { return nil }
         let element = focused as! AXUIElement // swiftlint:disable:this force_cast
         if let caret = caret(of: element) { return Target(rect: caret, exact: true) }
-        guard let position: CGPoint = value(attribute(element, kAXPositionAttribute), .cgPoint),
-              let size: CGSize = value(attribute(element, kAXSizeAttribute), .cgSize) else { return nil }
-        let frame = CGRect(origin: position, size: size)
+        guard let frame = Accessibility.frame(of: element) else { return nil }
         return Self.isOnScreen(frame) ? Target(rect: frame, exact: false) : nil
     }
 
     private func caret(of element: AXUIElement) -> CGRect? {
-        guard let range: CFRange = value(attribute(element, kAXSelectedTextRangeAttribute), .cfRange) else { return nil }
+        guard let range: CFRange = Accessibility.value(Accessibility.attribute(element, kAXSelectedTextRangeAttribute), .cfRange) else { return nil }
         // An empty selection has no bounds in some apps. The character before the caret, or after it at the start, has.
         var candidates = [range]
         if range.length == 0 {
@@ -87,7 +85,7 @@ final class TextFocus {
             var result: CFTypeRef?
             guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString,
                                                              axRange, &result) == .success,
-                  var rect: CGRect = value(result, .cgRect), Self.isOnScreen(rect) else { continue }
+                  var rect: CGRect = Accessibility.value(result, .cgRect), Self.isOnScreen(rect) else { continue }
             // The character before an empty selection: the caret is at its right edge.
             if index > 0, candidate.location < range.location { rect = CGRect(x: rect.maxX, y: rect.minY, width: 0, height: rect.height) }
             else if index > 0 { rect = CGRect(x: rect.minX, y: rect.minY, width: 0, height: rect.height) }
@@ -135,19 +133,4 @@ final class TextFocus {
 
     deinit { stop() }
 
-    // MARK: Accessibility values
-
-    private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-        var result: CFTypeRef?
-        return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
-    }
-
-    private func value<T>(_ ref: CFTypeRef?, _ type: AXValueType) -> T? {
-        guard let ref, CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
-        let axValue = ref as! AXValue // swiftlint:disable:this force_cast
-        guard AXValueGetType(axValue) == type else { return nil }
-        let pointer = UnsafeMutablePointer<T>.allocate(capacity: 1)
-        defer { pointer.deallocate() }
-        return AXValueGetValue(axValue, type, pointer) ? pointer.pointee : nil
-    }
 }
