@@ -12,6 +12,7 @@ final class Server {
     /// Clients are authenticated against the current token, so replacing it drops all of them.
     var token: String { didSet { clients.values.forEach { $0.connection.cancel() } } }
     private let input: Input
+    private let apps = Apps()
     private var listeners: [NWListener] = []
     private var clients: [ObjectIdentifier: Client] = [:]
     private lazy var screen = ScreenView(update: { [weak self] update in
@@ -28,6 +29,8 @@ final class Server {
     private final class Client {
         let connection: NWConnection
         var authed = false
+        /// The app icons this connection has, by the names the list gives them.
+        var icons: Set<String> = []
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
@@ -212,6 +215,24 @@ final class Server {
         case .media(let key): input.media(key)
         case .view(let request): view(request, for: client)
         case .shown(let number): if viewer === client { screen.frameShown(number) }
+        case .apps:
+            apps.list { [weak self, weak client] list in
+                guard let self, let client else { return }
+                self.send(client, Wire.apps(list))
+                // The icons follow the list, so the names show without waiting for the pictures.
+                let missing = list.map(\.icon).filter { client.icons.insert($0).inserted }
+                self.apps.pictures(of: missing) { [weak self, weak client] name, png in
+                    guard let self, let client else { return }
+                    self.send(client, Wire.icon(name, png: png))
+                }
+            }
+        case .focus(let pid, let window):
+            apps.focus(pid: pid, window: window) { [weak self, weak client] frame in
+                // The live view is cut around the pointer: to show the window, the pointer goes to it.
+                guard let self, let client, self.viewer === client, self.input.move(into: frame) else { return }
+                self.screen.followText(false)
+                self.screen.pointerMoved()
+            }
         case .auth, .ignored: break
         }
     }

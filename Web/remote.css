@@ -97,7 +97,7 @@ body:not(.view) #zoom, body:not(.view) #meter { display: none; }
 .key svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
   stroke-linecap: round; stroke-linejoin: round; }
 
-/* The dock under the thumb: mouse keys on top, then the keys that open things. */
+/* The dock under the thumb: mouse keys on top, then the keys that open things: keyboard, apps, tray. */
 #dock { grid-area: dock; min-width: 0; display: flex; flex-direction: column; gap: var(--gap); }
 .mouse { display: flex; gap: 2px; border-radius: 14px; overflow: hidden; background: var(--edge); border: 2px solid var(--edge); }
 .mouse button { flex: 1; height: 54px; background: var(--cap); box-shadow: inset 0 1px 0 var(--cap-hi); color: var(--text); }
@@ -117,19 +117,19 @@ body:not(.view) #zoom, body:not(.view) #meter { display: none; }
 .slot svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .slot.pressed, .slot:active { border-color: var(--accent); color: var(--text); }
 
-/* The tray: comes up out of the display's lower edge and covers its lower part. The display keeps its size,
-   so the stream goes on. Closed, it waits below the edge, clipped by the bezel, and hides only once it is
-   out of sight; it takes no touches from the moment it starts to leave (inert). */
-#drawer { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 3; padding: 0 10px 10px;
+/* Sheets, the tray and the switcher: each comes up out of the display's lower edge and covers its lower part.
+   The display keeps its size, so the stream goes on. Closed, a sheet waits below the edge, clipped by the
+   bezel, and hides only once it is out of sight; it takes no touches from the moment it starts to leave (inert). */
+.sheet { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 3; padding: 0 10px 10px;
   display: flex; flex-direction: column; gap: 10px; border-radius: 14px; background: var(--body);
   box-shadow: inset 0 1px 0 var(--cap-hi), 0 -6px 20px rgb(0 0 0 / .5);
   max-height: calc(100% - 16px); overflow: hidden auto; overscroll-behavior: contain;
   transform: translate3d(0, calc(100% + 12px), 0); visibility: hidden; will-change: transform;
   transition: transform var(--exit), visibility 0s linear var(--exit-ms); }
-body.drawer #drawer { transform: translate3d(0, 0, 0); visibility: visible; transition: transform var(--enter); }
+body.drawer #drawer, body.apps #switcher { transform: translate3d(0, 0, 0); visibility: visible; transition: transform var(--enter); }
 /* Following a finger that pulls it down; let go, it drops or springs back. */
-body.drawer #drawer.held { transform: translate3d(0, var(--pull, 0px), 0); transition: none; }
-/* The grip: a slot to pull the tray down by. The tray's whole top edge takes the swipe. */
+body.drawer #drawer.held, body.apps #switcher.held { transform: translate3d(0, var(--pull, 0px), 0); transition: none; }
+/* The grip: a slot to pull a sheet down by. The sheet's whole top edge takes the swipe. */
 .grip { flex: none; height: 14px; margin-bottom: -6px; display: grid; place-items: center; }
 .grip::before { content: ''; width: 36px; height: 4px; border-radius: 2px; background: var(--deep); box-shadow: inset 0 1px 1px var(--edge); }
 
@@ -199,12 +199,68 @@ body.drawer #drawer.held { transform: translate3d(0, var(--pull, 0px), 0); trans
 .slider.pressed b { transform: translateY(2px); box-shadow: inset 0 1px 0 var(--cap-hi), 0 1px 0 var(--edge); }
 .settings .reset { grid-column: 2; grid-row: 1 / -1; height: calc(100% - 3px); font-size: 10px; letter-spacing: .06em; }
 
+/* The switcher: what the Mac has open, on a recessed panel like the row Command-Tab shows. What the Mac reports
+   (icons, names, titles) stands on dark glass; the body around it carries only printed legends. The display's
+   top row stays free above it: state, zoom, and room for the tap that puts the sheet away. */
+#switcher { gap: 6px; max-height: calc(100% - 56px); overflow: hidden; }
+.head { flex: none; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 2px; }
+.head .key { width: 44px; min-width: 44px; padding: 0; }
+.head .icon { width: 26px; height: 26px; }
+.head .letter { width: 24px; height: 24px; border-radius: 6px; font-size: 12px; }
+#appsTitle { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#appsTitle.legend { font-size: 11px; color: var(--muted); }
+#appsNote { flex: none; color: var(--muted); }
+/* The panel scrolls when the Mac has more open than fits; then the head is where the sheet is pulled down by. */
+.well { flex: 1; min-height: 0; overflow: hidden auto; overscroll-behavior: contain; border-radius: var(--r-key);
+  background: var(--deep); box-shadow: inset 0 1px 3px var(--edge); }
+#apps { padding: 6px; animation: page-in .16s ease-out; }
+/* Icons in rows, the most recently used first: three, four or five in a row, as the phone's width allows, each
+   a touch target of 72 by 76 points or more with room for most names. */
+#apps.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 2px; }
+.app { min-width: 0; min-height: 76px; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 2px 7px;
+  border-radius: var(--r-chip); }
+.app.pressed, .app:active, .window.pressed, .window:active { background: var(--cap); }
+.icon { position: relative; flex: none; width: 44px; height: 44px; display: grid; place-items: center; }
+.icon img { width: 100%; height: 100%; }
+/* Until an icon is here, the app's first letter stands in for it. */
+.icon img:not([src]) { display: none; }
+.icon img[src] + .letter { display: none; }
+.letter { width: 38px; height: 38px; display: grid; place-items: center; border-radius: var(--r-chip); background: var(--cap);
+  box-shadow: inset 0 1px 0 var(--cap-hi); color: var(--muted); font-size: 17px; font-weight: 600; }
+.name { max-width: 100%; padding: 0 2px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The app in front on the Mac is lit, as everything active is: amber under its icon, its name bright. */
+.app.front .name { color: var(--text); }
+.app.front .icon::after { content: ''; position: absolute; left: 50%; bottom: -5px; width: 14px; height: 3px; margin-left: -7px;
+  border-radius: 2px; background: var(--accent); }
+/* A hidden app is dimmed, as in the Dock. */
+.app.away .icon img, .app.away .letter { opacity: .45; }
+/* Several windows: the count says that a tap opens the choice instead of switching at once. */
+.count { position: absolute; right: -7px; top: -5px; min-width: 19px; height: 19px; padding: 0 5px; display: grid; place-items: center;
+  border-radius: 10px; background: var(--cap); box-shadow: inset 0 1px 0 var(--cap-hi), 0 1px 3px var(--edge);
+  color: var(--text); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.app.ghost::before { content: ''; width: 38px; height: 38px; margin-top: 3px; border-radius: var(--r-chip); background: var(--surface); }
+.app.ghost::after { content: ''; width: 34px; height: 7px; margin-top: 6px; border-radius: 4px; background: var(--surface); }
+/* The windows of one app: its titles as rows, the one in front on the Mac marked. Two lines, since titles
+   that differ at their end are the common case. */
+#apps.windows { display: flex; flex-direction: column; }
+.window { flex: none; min-height: 50px; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 8px;
+  border-radius: var(--r-chip); text-align: start; }
+.window + .window { box-shadow: 0 -1px 0 var(--surface); }
+.window::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.window.front::before { background: var(--accent); }
+.window .title { flex: 1; min-width: 0; font-size: 14px; line-height: 1.3; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.window .legend { flex: none; color: var(--muted); font-size: 10px; }
+#apps.notice { min-height: 96px; display: grid; place-items: center; padding: 20px; color: var(--muted); font-size: 14px;
+  line-height: 1.5; text-align: center; }
+#apps.notice p { margin: 0; }
+
 /* Typing: the field and the keys the iOS keyboard lacks, right above it. Out of sight the field stays
    rendered, so iOS can still focus it. */
 #typebar { grid-area: dock; min-width: 0; display: grid; grid-template: "acc acc" auto "slot done" 44px / minmax(0, 1fr) auto; gap: 8px; }
 body:not(.typing) #typebar { position: absolute; left: 0; right: 0; bottom: 0; opacity: 0; pointer-events: none; }
 body.typing #dock { display: none; }
-body.typing #drawer { display: none; }
+body.typing .sheet { display: none; }
 #accessory { grid-area: acc; display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); grid-auto-rows: 40px; gap: 5px; padding-bottom: 3px; }
 #accessory .cap { font-size: 16px; border-radius: 8px; }
 #accessory .legend { font-size: 10px; letter-spacing: .04em; }
@@ -217,7 +273,7 @@ body.typing #drawer { display: none; }
 #done { grid-area: done; width: 92px; height: 41px; }
 
 /* A phone on its side: the display takes the width, the dock stands as a rail beside it, under the right
-   thumb, and the tray opens at the display's right, next to the rail. */
+   thumb, and a sheet opens at the display's right, next to the rail. */
 body.wide #app { grid-template: "console dock" 1fr / minmax(0, 1fr) var(--rail);
   padding-top: max(8px, var(--safe-top)); padding-bottom: max(8px, var(--safe-bottom)); }
 body.wide .mouse { flex: 1; flex-direction: column; }
@@ -227,8 +283,9 @@ body.wide .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 body.wide .tools .key, body.wide .slot { width: auto; height: 44px; }
 body.wide .slot { justify-content: center; padding: 0; }
 body.wide .slot span { display: none; }
-body.wide #viewBtn { grid-column: 1 / -1; }
-body.wide #drawer { left: auto; width: min(380px, calc(100% - 16px)); }
+body.wide .sheet { left: auto; width: min(380px, calc(100% - 16px)); }
+/* On its side the display is short: five icons in a row keep a dozen apps in sight without scrolling. */
+body.wide #apps.grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 /* Typing on its side: one row above the keyboard when it fits, the display above it. */
 body.wide.typing #app { grid-template: "console" 1fr "dock" auto / minmax(0, 1fr); }
 @media (min-width: 640px) {
@@ -237,8 +294,11 @@ body.wide.typing #app { grid-template: "console" 1fr "dock" auto / minmax(0, 1fr
   body.wide #field { height: 40px; }
   body.wide #done { height: 37px; }
 }
-/* A narrow phone: the media keys give the transport room, so the play key does not crowd its neighbours. */
+/* A narrow phone: the media keys give the transport room, so the play key does not crowd its neighbours, and
+   the keys beside the type key give it room for its legend. */
 @media (max-width: 359px) {
+  .tools .key { width: 52px; }
+  .slot { gap: 8px; padding: 0 10px; }
   .media .cap { width: 48px; }
   .rocker { width: 52px; }
   .transport .play { width: 66px; height: 66px; }
@@ -250,7 +310,7 @@ body.wide.typing #app { grid-template: "console" 1fr "dock" auto / minmax(0, 1fr
 body.keyboard #app { padding-bottom: 8px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .cap, .switch > i, .slider b, #drawer, body.drawer #drawer { transition: none; }
-  .page { animation: none; }
+  .cap, .switch > i, .slider b, .sheet, body.drawer #drawer, body.apps #switcher { transition: none; }
+  .page, #apps { animation: none; }
   #status::before { animation: none; }
 }

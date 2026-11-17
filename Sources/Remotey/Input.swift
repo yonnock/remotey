@@ -57,13 +57,26 @@ final class Input {
         Pointer.post(e, movingTo: to, with: post)
     }
 
+    /// Puts the pointer in the middle of `frame`, unless it is inside already or holds a button: a window that
+    /// came to the front from the phone, where the live view is cut around the pointer. False if the pointer stays.
+    func move(into frame: CGRect) -> Bool {
+        let target = CGPoint(x: frame.midX.rounded(), y: frame.midY.rounded())
+        guard held.isEmpty, !frame.contains(Pointer.location), display(at: target) != nil,
+              let e = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: target,
+                              mouseButton: .left) else { return false }
+        moveRemainder = .zero
+        Pointer.post(e, movingTo: target, with: post)
+        return true
+    }
+
+    private func display(at point: CGPoint) -> CGDirectDisplayID? {
+        var id: CGDirectDisplayID = 0
+        var count: UInt32 = 0
+        return CGGetDisplaysWithPoint(point, 1, &id, &count) == .success && count > 0 ? id : nil
+    }
+
     /// Keeps the cursor on a display: a target off every screen is clamped to the current one.
     private func clamp(_ target: CGPoint, from: CGPoint) -> CGPoint {
-        func display(at point: CGPoint) -> CGDirectDisplayID? {
-            var id: CGDirectDisplayID = 0
-            var count: UInt32 = 0
-            return CGGetDisplaysWithPoint(point, 1, &id, &count) == .success && count > 0 ? id : nil
-        }
         guard display(at: target) == nil else { return target }
         let bounds = CGDisplayBounds(display(at: from) ?? CGMainDisplayID())
         return CGPoint(x: min(max(target.x, bounds.minX), bounds.maxX - 1),

@@ -37,7 +37,7 @@
       </div>
     </div>
     <!-- The tray: slides up out of the display's lower edge, so the live view keeps its size. -->
-    <div id="drawer">
+    <div id="drawer" class="sheet">
       <div class="grip" aria-hidden="true"></div>
       <div id="pages" class="switch legend" role="group" aria-label="Tastenseite">
         <i></i>
@@ -94,8 +94,20 @@
         </div>
       </div>
     </div>
+    <!-- The switcher: the Mac's open apps, out of the same edge. An app with several windows shows them to choose from. -->
+    <div id="switcher" class="sheet" role="group" aria-label="Apps am Mac">
+      <div class="grip" aria-hidden="true"></div>
+      <div class="head">
+        <button class="key" data-act="apps-back" aria-label="Zurück zu allen Apps" hidden><svg viewBox="0 0 24 24"><path d="M14.5 5.5L8 12l6.5 6.5"/></svg></button>
+        <span class="icon" hidden><img id="appsIcon" alt=""><span class="letter"></span></span>
+        <span id="appsTitle" class="legend">Offene Apps</span>
+        <span id="appsNote" class="legend"></span>
+      </div>
+      <div class="well"><div id="apps" role="group" aria-label="Offene Apps" aria-live="polite"></div></div>
+    </div>
   </div>
-  <!-- Under the thumb: mouse keys with the side buttons for back and forward, then the keys that open things. -->
+  <!-- Under the thumb: mouse keys with the side buttons for back and forward, then the keys that open things:
+       the keyboard, the Mac's apps, the tray. -->
   <div id="dock">
     <div class="mouse">
       <!-- A mouse's side buttons, on the side where the thumb finds them on a mouse. -->
@@ -111,6 +123,7 @@
         <svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M7 10h.01M12 10h.01M17 10h.01M8 14h8"/></svg>
         <span>Tippen…</span>
       </button>
+      <button class="key legend" data-act="apps" aria-label="Apps und Fenster am Mac" aria-expanded="false">Apps</button>
       <button class="key" data-act="deck" aria-label="Medien, Tasten und Regler" aria-expanded="false">
         <svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg>
       </button>
