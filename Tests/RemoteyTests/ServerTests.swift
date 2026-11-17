@@ -80,6 +80,9 @@ final class ServerTests: XCTestCase {
         try await good.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
         let ok = text(try await good.receive())
         XCTAssertTrue(ok.hasPrefix(#"{"t":"ok""#), ok)
+        // Read, so that the pong below is not held up behind it.
+        let lock = text(try await good.receive())
+        XCTAssertTrue(lock.hasPrefix(#"{"t":"lock""#), lock)
         try await Task.sleep(for: .seconds(1))
         // Still connected: an unknown message is ignored, a closed socket would fail the ping.
         try await good.send(.string(#"{"t":"noop"}"#))
@@ -104,6 +107,10 @@ final class ServerTests: XCTestCase {
         try await socket.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
         let ok = try await next()
         XCTAssertEqual(ok["t"] as? String, "ok")
+        // Whether the Mac is locked follows at once, so the page knows what its field is for.
+        let lock = try await next()
+        XCTAssertEqual(lock["t"] as? String, "lock")
+        XCTAssertEqual(lock["on"] as? Bool, LockScreen.sessionIsLocked())
 
         try await socket.send(.string(#"{"t":"apps"}"#))
         let first = try await next()

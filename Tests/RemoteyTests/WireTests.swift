@@ -38,6 +38,10 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(accepted["page"] as? String, "abc")
         XCTAssertEqual(try object(Wire.denied)["t"] as? String, "denied")
         XCTAssertEqual(try object(Wire.viewRefused)["ok"] as? Bool, false)
+        XCTAssertEqual(try object(Wire.lock(true)) as NSDictionary, ["t": "lock", "on": true])
+        XCTAssertEqual(try object(Wire.lock(false))["on"] as? Bool, false)
+        XCTAssertEqual(try object(Wire.unlockFailed(.password)) as NSDictionary, ["t": "unlock", "ok": false, "why": "password"])
+        XCTAssertEqual(try object(Wire.unlockFailed(.field))["why"] as? String, "field")
         let picture = Pointer.Picture(pixels: Data(repeating: 255, count: 4 * 6 * 9), width: 6, height: 9,
                                       size: CGSize(width: 2, height: 3), hotSpot: CGPoint(x: 1, y: 0.5))
         let cursor = try object(try XCTUnwrap(Wire.cursor(picture)))
@@ -104,6 +108,7 @@ final class WireTests: XCTestCase {
         guard case .apps = try command(#"{"t":"apps"}"#) else { return XCTFail("apps") }
         guard case .focus(pid: 412, window: 7) = try command(#"{"t":"focus","pid":412,"win":7}"#) else { return XCTFail("focus a window") }
         guard case .focus(pid: 412, window: nil) = try command(#"{"t":"focus","pid":412}"#) else { return XCTFail("focus an app") }
+        guard case .unlock(#"pä"ss \wort"#) = try command(#"{"t":"unlock","s":"pä\"ss \\wort"}"#) else { return XCTFail("unlock") }
     }
 
     func testViewRequest() throws {
@@ -121,7 +126,8 @@ final class WireTests: XCTestCase {
     func testWhatTheAgentDoesNotActOn() throws {
         for json in [#"{"t":"noop"}"#, #"{"t":"m","dx":6000,"dy":0}"#, #"{"t":"m","dx":1}"#, #"{"t":"auth"}"#,
                      #"{"t":"shown","n":-1}"#, #"{"t":"key","k":"w"}"#, #"{"t":"focus","win":7}"#, #"{"t":"focus","pid":0}"#,
-                     #"{"t":"text","s":"\#(String(repeating: "x", count: 2001))"}"#] {
+                     #"{"t":"text","s":"\#(String(repeating: "x", count: 2001))"}"#, #"{"t":"unlock"}"#, #"{"t":"unlock","s":""}"#,
+                     #"{"t":"unlock","s":"\#(String(repeating: "x", count: 257))"}"#] {
             guard case .ignored = try command(json) else { return XCTFail(json) }
         }
         XCTAssertThrowsError(try command("not json"))

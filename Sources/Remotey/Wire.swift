@@ -31,6 +31,8 @@ enum Wire {
         /// Brings an app to the front. `window` names one of its windows by its id in the list; without it the
         /// app comes forward as after a click in the Dock.
         case focus(pid: Int32, window: Int?)
+        /// The password of the Mac's user, for the lock screen. See `LockScreen`.
+        case unlock(String)
         /// Nothing the agent acts on: an unknown kind, a missing field, a value out of range.
         case ignored
     }
@@ -88,6 +90,7 @@ enum Wire {
         case "shown": m.n.flatMap(UInt32.init(exactly:)).map { .shown($0) }
         case "apps": .apps
         case "focus": m.pid.flatMap { $0 > 0 ? .focus(pid: $0, window: m.win) : nil }
+        case "unlock": m.s.flatMap { (1...256).contains($0.count) ? .unlock($0) : nil }
         default: nil
         }
         return command ?? .ignored
@@ -109,6 +112,14 @@ enum Wire {
 
     /// The live view needs the Screen Recording permission.
     static let viewRefused = #"{"t":"view","ok":false}"#
+
+    /// Whether the Mac's lock screen is up. Follows `accepted`, and comes again whenever it changes.
+    static func lock(_ on: Bool) -> String { #"{"t":"lock","on":\#(on)}"# }
+
+    /// The Mac is still locked after an `unlock`. One that unlocks says so with `lock`.
+    static func unlockFailed(_ failure: LockScreen.Failure) -> String {
+        #"{"t":"unlock","ok":false,"why":"\#(failure.rawValue)"}"#
+    }
 
     /// The open apps and their windows, front to back.
     static func apps(_ list: [Apps.App]) -> String {

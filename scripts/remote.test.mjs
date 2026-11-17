@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SETTINGS, TAP_MS, Touchpad, detents, gain, settingAt, settingFraction, settingText, stepSetting } from '../Web/touchpad.js';
 import { appLabel, readApps, tapApp, tapWindow, windowTitle } from '../Web/apps.js';
-import { SENTINEL, diff } from '../Web/typing.js';
+import { SENTINEL, diff, relay } from '../Web/typing.js';
 import { KEYBOARD_MIN, frame } from '../Web/viewport.js';
 
 const defaults = Object.fromEntries(Object.entries(SETTINGS).map(([k, { initial }]) => [k, initial]));
@@ -232,6 +232,60 @@ test('the text field relays characters, graphemes and corrections', () => {
   assert.deepEqual(diff(`${SENTINEL}a👋🏽`, `${SENTINEL}a`), { removed: 1, added: '' }, 'one backspace for an emoji with a skin tone');
   assert.deepEqual(diff(`${SENTINEL}teh`, `${SENTINEL}the`), { removed: 2, added: 'he' }, 'autocorrect replaces the end');
   assert.deepEqual(diff(SENTINEL, ''), { removed: 1, added: '' }, 'backspace in an empty field');
+});
+
+// A field as the browser gives it: a value, and the events of typing.
+function typist(secret) {
+  const field = Object.assign(new EventTarget(), { value: '' }), log = [];
+  const state = { secret, busy: false };
+  const empty = relay(field, { text: (s) => log.push(['text', s]), backspace: (n) => log.push(['backspace', n]),
+    key: (k) => log.push(['key', k]), armed: () => false, secret: () => state.secret,
+    submit: (s) => { if (state.busy) return false; log.push(['submit', s]); } });
+  const type = (text) => { field.value += text; field.dispatchEvent(new Event('input')); };
+  const enter = () => field.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'Enter' }));
+  return { field, log, state, empty, type, enter };
+}
+
+test('while the Mac is locked the field holds a password: nothing leaves before Enter, then all of it at once', () => {
+  const t = typist(true);
+  assert.equal(t.field.value, '', 'no sentinel: a password field would show it as a character');
+  t.type('ge');
+  t.type('heim');
+  t.field.value = 'geheim 1Password'; // filled in by the phone's password manager
+  t.field.dispatchEvent(new Event('input'));
+  assert.deepEqual(t.log, []);
+  t.enter();
+  assert.deepEqual(t.log, [['submit', 'geheim 1Password']]);
+  assert.equal(t.field.value, '');
+  t.enter();
+  assert.equal(t.log.length, 1, 'an empty field unlocks nothing');
+  t.type('rest');
+  t.field.dispatchEvent(new Event('blur'));
+  assert.equal(t.field.value, '', 'a password does not stay in a field that was left');
+});
+
+test('a password the Mac cannot take yet stays in the field for the next Enter', () => {
+  const t = typist(true);
+  t.state.busy = true;
+  t.type('richtig');
+  t.enter();
+  assert.deepEqual(t.log, []);
+  assert.equal(t.field.value, 'richtig');
+  t.state.busy = false;
+  t.enter();
+  assert.deepEqual(t.log, [['submit', 'richtig']]);
+  assert.equal(t.field.value, '');
+});
+
+test('once the Mac is open the same field relays again, and nothing of the password with it', () => {
+  const t = typist(true);
+  t.type('geheim');
+  t.state.secret = false;
+  t.empty();
+  assert.equal(t.field.value, SENTINEL);
+  t.type('hi');
+  t.enter();
+  assert.deepEqual(t.log, [['text', 'hi'], ['key', 'return']]);
 });
 
 test('the page is laid out into the visible part, also when iOS shifts it for the keyboard', () => {

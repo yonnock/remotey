@@ -13,6 +13,7 @@ final class Server {
     var token: String { didSet { clients.values.forEach { $0.connection.cancel() } } }
     private let input: Input
     private let apps = Apps()
+    private let lock = LockScreen()
     private var listeners: [NWListener] = []
     private var clients: [ObjectIdentifier: Client] = [:]
     private lazy var screen = ScreenView(update: { [weak self] update in
@@ -48,6 +49,12 @@ final class Server {
         self.input = input
         self.ports = (port, port + 1)
         self.pendingTimeout = pendingTimeout
+        lock.changed = { [weak self] locked in
+            guard let self else { return }
+            // On the lock screen the view shows the password field; back on the desktop it shows the pointer again.
+            if !locked, self.viewer != nil { self.screen.followText(false) }
+            self.clients.values.filter(\.authed).forEach { self.send($0, Wire.lock(locked)) }
+        }
     }
 
     func stop() {
@@ -168,9 +175,11 @@ final class Server {
             if client.authed {
                 self.handle(command, from: client)
             } else if case .auth(let candidate) = command, Token.matches(candidate, self.token) {
+                self.lock.refresh()
                 client.authed = true
                 self.settle(client.connection)
                 self.send(client, Wire.accepted(accessibility: AXIsProcessTrusted(), page: Web.version))
+                self.send(client, Wire.lock(self.lock.isLocked))
             } else {
                 self.send(client, Wire.denied) { client.connection.cancel() }
                 return
@@ -186,7 +195,18 @@ final class Server {
                                completion: .contentProcessed { _ in then?() })
     }
 
+    /// What a person at the Mac would do with its keyboard or mouse, and the wish to see its screen.
+    /// The media keys are not among them: pausing the music leaves a dark display dark.
+    private static func isActivity(_ command: Wire.Command) -> Bool {
+        switch command {
+        case .move, .scroll, .click, .button, .text, .key, .focus, .unlock: true
+        case .view(let request): request != nil
+        case .auth, .scrollEnded, .media, .shown, .apps, .ignored: false
+        }
+    }
+
     private func handle(_ command: Wire.Command, from client: Client) {
+        if Self.isActivity(command) { UserActivity.declare() }
         switch command {
         case .move(let dx, let dy, let sequence):
             input.move(dx: dx, dy: dy)
@@ -232,6 +252,14 @@ final class Server {
                 guard let self, let client, self.viewer === client, self.input.move(into: frame) else { return }
                 self.screen.followText(false)
                 self.screen.pointerMoved()
+            }
+        case .unlock(let password):
+            // The page asked for a Mac that is open by now: it missed the news.
+            guard lock.isLocked else { return send(client, Wire.lock(false)) }
+            if viewer === client { screen.followText(true) } // the view shows the field the password goes into
+            lock.unlock(with: password, typing: input) { [weak self, weak client] failure in
+                guard let self, let client else { return }
+                self.send(client, Wire.unlockFailed(failure))
             }
         case .auth, .ignored: break
         }

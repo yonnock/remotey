@@ -116,6 +116,7 @@ body:not(.view) #zoom, body:not(.view) #meter { display: none; }
 .slot span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .slot svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .slot.pressed, .slot:active { border-color: var(--accent); color: var(--text); }
+body:not(.locked) .slot .shut, body.locked .slot .open { display: none; }
 
 /* Sheets, the tray and the switcher: each comes up out of the display's lower edge and covers its lower part.
    The display keeps its size, so the stream goes on. Closed, a sheet waits below the edge, clipped by the
@@ -270,6 +271,9 @@ body.typing .sheet { display: none; }
   background: var(--deep); color: var(--text); font-size: 16px; outline: none; box-shadow: inset 0 2px 5px var(--edge);
   caret-color: var(--accent); -webkit-user-select: text; user-select: text; }
 #field:focus { border-color: var(--accent); }
+/* The Mac stayed locked: the field says why in its placeholder, until the next try. */
+#field.failed, #field.failed:focus { border-color: var(--bad); }
+#field.failed::placeholder { color: var(--bad); }
 #done { grid-area: done; width: 92px; height: 41px; }
 
 /* A phone on its side: the display takes the width, the dock stands as a rail beside it, under the right
