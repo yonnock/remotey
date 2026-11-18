@@ -395,6 +395,75 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
      Anzeige-Taste fragt ohne `fit` und `shape`, die Rasttaste bleibt; außer Sicht sendet `view` aus, zurück fragt
      wieder mit `shape`; Rasttaste aus fragt nur `fit`. T1 bis T12 unverändert.
 
+14. Sperrtaste und Passkey-Probe (Issue 15, erster Teil). Verifier v13 (T10 erweitert).
+   - Entscheidung Ort: ein Vorhängeschloss unter der Stummtaste auf der Medienseite, beide teilen sich deren Breite.
+     Die Tastenseite ist mit 16 Tasten in zwei Reihen voll, das Dock fasst bei 320 px keine weitere Taste, und die
+     Transporttasten sind bei 320 px schon 39 px schmal, eine weitere Spalte nähme ihnen den Rest.
+   - Entscheidung Senden: die Seite schickt `key q` mit `ctrl` und `cmd`, wie `scripts/lock.mjs` seit Runde 11 sperrt,
+     ohne die gerasteten Sondertasten: ⇧⌘Q meldet den Nutzer ab. Sie bleiben für die nächste Taste gerastet. Kein
+     eigener Befehl im Agenten.
+   - Gemessen (T10): Schloss und Stumm je 48 px (320 px hochkant), 46 px (320 px quer), sonst 53 px, 10 px
+     auseinander, auf der Seite; ein Tipp mit gerasteter ⇧ sendet genau `key q ctrl cmd 1`, ⇧ bleibt gerastet.
+   - Entscheidung Entsperren mit Face ID: PRF von Anfang an, kein Schlüsselbund. Das Passwort liegt dann mit einem
+     Schlüssel versiegelt, den nur der Passkey nach Face ID herausgibt; die Datei braucht keine Geheimhaltung und
+     liegt neben dem Token. Ein Schlüsselbundeintrag hinge an der Signatur „Apple Development", die jeder Prozess
+     nachmachen kann, der dieses Zertifikat benutzen darf, und `swift run` käme ohne Nachfrage nicht an ihn.
+   - Probe (`Web/spike.html`, `spike.js`, `spike.css`, nicht Teil der Fernbedienung, geht mit dem Bau des Ablaufs):
+     legt einen Passkey „Remotey Spike" an und ruft ihn ab, je mit PRF, prüft die Signatur mit dem Schlüssel aus
+     `getPublicKey()` (WebCrypto, wie später CryptoKit) und ruft einmal 2 s nach dem Tipp ab. In Chromium mit
+     virtuellem Authenticator (CDP `WebAuthn.addVirtualAuthenticator`, `hasPrf`) unter der CSP des Agenten: PRF schon
+     beim Anlegen, derselbe Wert bei jedem Abruf und nach geleertem Speicher, Signatur gültig. Das sagt nichts über
+     iOS; es zeigt, dass die Seite stimmt und dass `ui-verify` den Ablauf später mit PRF prüfen kann.
+
+15. Entsperren mit Face ID (Issue 15, zweiter Teil). Verifier v14 (neu: T14). Die Probe aus Runde 14 ist entfernt.
+   - Die Probe am iPhone (iOS 27, Safari und Web-App vom Home-Bildschirm, Passkey in „Passwörter"): beides legt einen
+     Passkey an und ruft ihn mit Face ID ab (Flags UP UV BE BS, also synchronisiert). PRF kommt schon beim Anlegen und
+     ist bei jedem Abruf gleich. Die Signatur ist mit dem Schlüssel aus `getPublicKey()` gültig. Ein Abruf 2 s nach
+     dem Tipp zeigt Face ID trotzdem. Safari nennt beim Abruf auch `second`, ohne Wert. Ein doppelter Tipp startete
+     zwei Abrufe, von denen einer nie antwortete.
+   - Daraus: ein Face ID beim Einrichten; kein CBOR im Agenten, die Seite reicht `getPublicKey()` und
+     `getAuthenticatorData()` weiter; die Seite nimmt keinen Tipp an, solange iOS fragt. Die Challenge kommt trotzdem
+     mit `lock` voraus: das spart den Umlauf und hängt nicht daran, wie lange iOS einen Tipp gelten lässt.
+   - Entscheidung Ablage (`FaceUnlock.swift`): eine Datei `face-unlock` neben dem Token, 0600. Sie hält Passkey-ID,
+     öffentlichen Schlüssel, Origin, Salt und das Passwort, mit AES-GCM unter HKDF-SHA256 des PRF-Werts versiegelt.
+     Ein Agent auf anderem Port hat eine eigene Datei, weil er unter anderem Origin erreicht wird.
+   - Entscheidung Prüfung (`Passkey.swift`): Signatur über eine Challenge je Verbindung, die genau einmal gilt, dazu
+     Typ, Origin, Hash des Hosts, UP und UV. Der PRF-Wert allein öffnete das Passwort auch, wäre aber aufgezeichnet
+     wieder verwendbar; die Signatur macht jeden Versuch frisch. Das Origin wird beim Einrichten genommen, wie der
+     Browser es nennt, und danach verlangt: der Agent kennt seinen Namen im Tailnet nur über `tailscale status`.
+   - Entscheidung Einrichten: am Mac über das Menü. Das Fenster prüft das Passwort gegen das Verzeichnis
+     (OpenDirectory), damit kein Tippfehler versiegelt wird, hält es bis zu zwei Minuten im Speicher und bietet in
+     der Zeit jedem verbundenen Telefon „Face ID einrichten" an. Das erste, das antwortet, ist eingerichtet. Wer in
+     der Zeit das Token hat, könnte seinen Passkey einrichten; er steuert dann ohnehin einen offenen Mac. Ein
+     gesperrter Mac richtet nichts ein.
+   - Entscheidung Fehlversuche: eine Antwort, die nicht zum Passkey passt, tippt nichts und bekommt eine neue
+     Challenge; ein Limit braucht es dafür nicht, die Signatur lässt sich nicht raten. Lehnt der Mac das versiegelte
+     Passwort zweimal in Folge ab, ist es nicht mehr sein Passwort: die Datei wird gelöscht, statt bei jedem Versuch
+     ein falsches zu tippen. Ein Entsperren mit dem versiegelten Passwort setzt die Zählung zurück.
+   - Entscheidung Seite: dieselbe Taste. Nennt `lock` einen Passkey, fragt „Entsperren…" das Telefon, statt das
+     Feld zu öffnen; die Taste sagt „Face ID…", „Entsperre…", „Abgelehnt" oder „Nicht bereit". Nach Ablehnen oder
+     Absage öffnet der nächste Tipp das Passwortfeld (die Tastatur kommt nur aus einem Tipp heraus); das Feld
+     wegzulegen überlässt den Tipp danach wieder Face ID. Ein Mac, der nicht bereit war, wird gleich wieder mit
+     Face ID gefragt.
+   - Nach dem ersten Lauf am iPhone (Einrichten und Entsperren gingen) drei Wünsche des Nutzers:
+     Das Angebot ist eine Karte über dem abgedunkelten Display statt einer einzelnen Taste: Zeichen, Titel, ein Satz
+     mit dem Namen des Macs, „Nicht jetzt" und „Einrichten"; quer steht das Zeichen links neben dem Text. Sie sagt
+     auch, wenn es nicht ging, und zeigt 2,5 s lang „Eingerichtet".
+     Das Fenster am Mac zeigt je Schritt nur, was er braucht (Passwort, Warten, Eingerichtet), ist so hoch wie sein
+     Inhalt und schließt sich 2,5 s nach dem Einrichten selbst.
+     Die Sperrtaste ist das Schloss des Macs: offen, solange er offen ist, zu und gerastet (amber), solange er
+     gesperrt ist. Auf einem gesperrten Mac entsperrt ein Tipp wie „Entsperren…". Sie wirkt deshalb wie die Tipptaste
+     beim Abheben des Fingers, weil iOS nur dann die Tastatur öffnet und nach Face ID fragt.
+   - Gemessen (T14, Chromiums virtueller Authenticator mit PRF als Passkey): die Karte liegt auf allen drei
+     Telefonen hochkant und quer ganz im Display, ihre Tasten sind 44 px hoch; „Nicht jetzt" legt sie weg; ein
+     abgelehnter Passkey zeigt „Nochmal" und sendet nichts; die Sperrtaste fragt gesperrt den Passkey (T14) und
+     öffnet ohne Passkey das Passwortfeld (T10); ein Tipp sendet `enrol` für die Challenge des Angebots; gesperrt sendet ein Tipp `unlock` mit
+     Signatur und PRF-Wert, ohne das Feld zu öffnen, die Signatur ist mit dem eingerichteten Schlüssel gültig; nach
+     „Abgelehnt" öffnet der Tipp das Feld, danach fragt er wieder den Passkey mit der nächsten Challenge; ohne
+     verifizierten Nutzer geht nichts hinaus. Passkey und Antwort aus einem solchen Lauf stehen als fester Vektor in
+     `PasskeyTests`. `FaceUnlockServerTests` richtet über den Socket ein und entsperrt gegen einen Sperrbildschirm,
+     den es nur im Test gibt.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -434,3 +503,9 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   Größe annehmen (Animation, Raster in Zeichenbreite, Seitenleisten mit Mindestbreite), ist nicht festgehalten. ⌘Tab selbst wurde nicht gedrückt; ein Testfenster, das sich selbst nach vorn holt, geht denselben Weg.
   Ob Safari auf iOS `visibilitychange` vor dem Einfrieren noch sendet, ist nicht geprüft; bleibt es aus, behält das
   Fenster die Form, bis der Socket schließt. Ein abgestürzter Agent lässt das Fenster in Telefonform.
+- Runde 14: die Sperrtaste sperrte den Mac vom iPhone aus (vom Nutzer gemeldet, ohne Protokoll).
+- Runde 15: Einrichten über das Menü und Entsperren mit Face ID gingen am iPhone und am echten Sperrbildschirm (vom
+  Nutzer gemeldet, ohne Protokoll), mit der ersten Fassung von Taste und Fenster. Die Karte, das neue Fenster und
+  die zweiseitige Sperrtaste liefen danach nur in Chromium und als gerenderte Bilder des Fensters, nicht am iPhone.
+  Nicht versucht: ein abgelehntes versiegeltes Passwort am echten Mac, das Ende des Angebots nach zwei Minuten,
+  Passkeys aus anderen Passwortmanagern (1Password).

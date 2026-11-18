@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var server = Server(token: Token.load(), input: input)
     private var statusItem: NSStatusItem!
     private var pairingWindow: NSWindow?
+    private lazy var faceUnlockWindow = FaceUnlockWindow(server: server)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -45,6 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add(menu, "Link kopieren", #selector(copyLink))
         add(menu, "Token erneuern (trennt alle Geräte)", #selector(rotateToken))
         menu.addItem(.separator())
+        if server.unlocksWithFaceID {
+            add(menu, "Entsperren mit Face ID entfernen", #selector(removeFaceUnlock))
+        } else {
+            add(menu, "Entsperren mit Face ID einrichten…", #selector(enrolFaceUnlock))
+        }
+        menu.addItem(.separator())
         let login = add(menu, "Beim Anmelden starten", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(.separator())
@@ -76,6 +83,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         server.token = Token.rotate()
         pairingWindow?.close()
         showPairing()
+    }
+
+    @objc private func enrolFaceUnlock() {
+        faceUnlockWindow.show()
+    }
+
+    @objc private func removeFaceUnlock() {
+        server.removeFaceUnlock()
     }
 
     @objc private func toggleLoginItem() {

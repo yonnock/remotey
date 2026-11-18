@@ -3,7 +3,8 @@ import Foundation
 
 /// Everything the agent and the page say to each other. On the page each message lives in the module it serves:
 /// `Web/live-view.js` reads the live view's updates, `Web/apps.js` the switcher's lists, `Web/displays.js` the list
-/// of displays, and `Web/remote.js` sends the commands and routes what arrives.
+/// of displays, `Web/passkey.js` writes what the phone's passkey says, and `Web/remote.js` sends the commands and
+/// routes what arrives.
 enum Wire {
     /// What the page says. A message is JSON; `t` names its kind, the other fields belong to one kind or another.
     enum Command {
@@ -39,6 +40,12 @@ enum Wire {
         case display(CGDirectDisplayID)
         /// The password of the Mac's user, for the lock screen. See `LockScreen`.
         case unlock(String)
+        /// The phone's passkey answers the challenge of the last `lock`, with the secret that opens the
+        /// password kept on the Mac. See `FaceUnlock`.
+        case unlockWithPasskey(Passkey.Answer, secret: Data)
+        /// The phone made a passkey for the enrolment the agent offers. `publicKey`, `authenticator` and
+        /// `client` are what the browser gave the page about it, `secret` what the passkey gives out.
+        case enrol(id: Data, publicKey: Data, authenticator: Data, client: Data, secret: Data)
         /// Nothing the agent acts on: an unknown kind, a missing field, a value out of range.
         case ignored
     }
@@ -68,6 +75,14 @@ enum Wire {
         var fit: String?
         var shape: Double?
         var id: Int64?
+        // Of a passkey, each base64url: its id, its public key, the authenticator's and the browser's data,
+        // the signature, the secret.
+        var cred: String?
+        var key: String?
+        var auth: String?
+        var client: String?
+        var sig: String?
+        var prf: String?
     }
 
     private static let decoder = JSONDecoder()
@@ -85,6 +100,10 @@ enum Wire {
         case "forward": .forward
         default: .left
         }
+        func bytes(_ text: String?) -> Data? {
+            guard let text, text.count <= 4096, let data = Data(base64URL: text), !data.isEmpty else { return nil }
+            return data
+        }
         let command: Command? = switch m.t {
         case "auth": m.token.map { .auth(token: $0) }
         case "m": delta.map { .move(dx: $0.dx, dy: $0.dy, sequence: m.q) }
@@ -101,7 +120,23 @@ enum Wire {
         case "focus": m.pid.flatMap { $0 > 0 ? .focus(pid: $0, window: m.win) : nil }
         case "displays": .displays
         case "display": m.id.flatMap(UInt32.init(exactly:)).map { .display($0) }
-        case "unlock": m.s.flatMap { (1...256).contains($0.count) ? .unlock($0) : nil }
+        case "unlock":
+            if let password = m.s {
+                (1...256).contains(password.count) ? .unlock(password) : nil
+            } else if let authenticator = bytes(m.auth), let client = bytes(m.client), let signature = bytes(m.sig),
+                      let secret = bytes(m.prf) {
+                .unlockWithPasskey(Passkey.Answer(authenticator: authenticator, client: client, signature: signature),
+                                   secret: secret)
+            } else {
+                nil
+            }
+        case "enrol":
+            if let id = bytes(m.cred), let publicKey = bytes(m.key), let authenticator = bytes(m.auth),
+               let client = bytes(m.client), let secret = bytes(m.prf) {
+                .enrol(id: id, publicKey: publicKey, authenticator: authenticator, client: client, secret: secret)
+            } else {
+                nil
+            }
         default: nil
         }
         return command ?? .ignored
@@ -124,13 +159,39 @@ enum Wire {
     /// The live view needs the Screen Recording permission.
     static let viewRefused = #"{"t":"view","ok":false}"#
 
-    /// Whether the Mac's lock screen is up. Follows `accepted`, and comes again whenever it changes.
-    static func lock(_ on: Bool) -> String { #"{"t":"lock","on":\#(on)}"# }
+    /// Whether the Mac's lock screen is up. Follows `accepted`, and comes again whenever it changes. With a
+    /// phone enrolled for Face ID, a locked Mac names the passkey to ask for and gives it a challenge, which
+    /// counts for one `unlock` on this connection; the next one comes with another `lock`.
+    static func lock(_ on: Bool, passkey: (key: FaceUnlock.Key, challenge: Data)? = nil) -> String {
+        guard on, let passkey else { return #"{"t":"lock","on":\#(on)}"# }
+        return #"{"t":"lock","on":true,"key":{"id":"\#(passkey.key.passkey.id.base64URL)","#
+            + #""salt":"\#(passkey.key.salt.base64URL)","challenge":"\#(passkey.challenge.base64URL)"}}"#
+    }
 
     /// The Mac is still locked after an `unlock`. One that unlocks says so with `lock`.
     static func unlockFailed(_ failure: LockScreen.Failure) -> String {
         #"{"t":"unlock","ok":false,"why":"\#(failure.rawValue)"}"#
     }
+
+    /// An `unlock` by passkey that the agent did not take: not the passkey's answer to the last challenge,
+    /// or its secret does not open the password. Nothing was typed.
+    static let passkeyRefused = #"{"t":"unlock","ok":false,"why":"key"}"#
+
+    /// The agent offers to enrol this phone for Face ID, started from its menu: the page makes a passkey
+    /// for the challenge, named after the Mac, and answers with `enrol`. Nil: the offer is over.
+    static func enrolment(_ offer: FaceUnlock.Offer?, mac: String) -> String {
+        struct Message: Encodable {
+            let t = "enrol"
+            let challenge: String
+            let salt: String
+            let name: String
+        }
+        guard let offer else { return #"{"t":"enrol","off":true}"# }
+        return json(Message(challenge: offer.challenge.base64URL, salt: offer.salt.base64URL, name: mac))
+    }
+
+    /// How an `enrol` ended. A phone that is enrolled ends the offer for every other one too.
+    static func enrolled(_ ok: Bool) -> String { #"{"t":"enrolled","ok":\#(ok)}"# }
 
     /// The open apps and their windows, front to back.
     static func apps(_ list: [Apps.App]) -> String {
