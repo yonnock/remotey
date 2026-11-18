@@ -56,6 +56,29 @@ svg { width: 20px; height: 20px; fill: currentColor; pointer-events: none; }
 #pad { position: absolute; inset: 0; touch-action: none; display: flex; align-items: center;
   justify-content: center; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.5; padding: 32px; }
 #pad:not(:empty) { background: var(--surface); }
+/* The offer to enrol for Face ID: a card on the dimmed display, over whatever it shows. On a low display
+   (sideways) the sign stands left of the words instead of above them. */
+#enrol { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; padding: 12px; background: rgb(8 9 10 / .72);
+  animation: page-in .2s ease-out; }
+#enrol .card { width: min(100%, 304px); max-height: 100%; overflow: hidden auto; display: grid; justify-items: center; gap: 6px;
+  padding: 18px 16px 16px; border-radius: 16px; background: var(--body); text-align: center;
+  box-shadow: inset 0 1px 0 var(--line), 0 0 0 1px var(--edge), 0 12px 32px rgb(0 0 0 / .5); }
+#enrol svg { width: 44px; height: 44px; margin-bottom: 4px; fill: none; stroke: var(--accent); stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; }
+#enrol .tick { stroke: var(--ok); }
+#enrol:not([data-state=done]) .tick, #enrol[data-state=done] .face, #enrol[data-state=done] .choice { display: none; }
+#enrol h2 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.25; }
+#enrol p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; text-wrap: balance; }
+#enrol[data-state=failed] p { color: var(--bad); }
+#enrol .choice { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; padding-bottom: 3px; }
+#enrol .cap { height: 44px; }
+#enrol[data-state=busy] .cap { opacity: .5; pointer-events: none; }
+@media (max-height: 480px) {
+  #enrol .card { width: min(100%, 420px); grid-template-columns: auto minmax(0, 1fr); justify-items: start; column-gap: 14px;
+    padding: 14px; text-align: left; }
+  #enrol svg { grid-row: span 2; align-self: center; margin: 0; }
+  #enrol .choice { grid-column: 1 / -1; margin-top: 8px; }
+}
 
 /* Printed on the display's glass: dark chips that stay legible on any picture. Touches pass through to the
    pad everywhere but on the zoom keys. */
@@ -173,7 +196,11 @@ body.drawer #drawer.held, body.apps #switcher.held { transform: translate3d(0, v
 .transport svg { width: 22px; height: 22px; }
 .transport button.pressed, .transport button:active, .rocker button.pressed, .rocker button:active { color: var(--accent); }
 .transport .play.pressed, .transport .play:active { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
-.media .cap { flex: none; width: 58px; height: calc(100% - 3px); }
+/* Two keys in the width of one: each cap stands on its own base, so the gap holds the upper one's. */
+.stack { flex: none; width: 58px; height: calc(100% - 3px); display: flex; flex-direction: column; gap: 10px; }
+.stack .cap { flex: 1; }
+.stack .line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+body:not(.locked) .stack .shut, body.locked .stack .open { display: none; }
 .rocker { flex: none; width: 62px; height: calc(100% - 3px); display: flex; flex-direction: column; border-radius: 14px; background: var(--cap);
   box-shadow: inset 0 1px 0 var(--cap-hi), 0 3px 0 var(--edge); overflow: hidden; }
 .rocker button { flex: 1; font-size: 24px; font-weight: 400; }
@@ -329,7 +356,7 @@ body.wide.typing #app { grid-template: "console" 1fr "dock" auto / minmax(0, 1fr
 @media (max-width: 359px) {
   .tools .key { width: 52px; }
   .slot { gap: 8px; padding: 0 10px; }
-  .media .cap { width: 48px; }
+  .stack { width: 48px; }
   .rocker { width: 52px; }
   .transport .play { width: 66px; height: 66px; }
 }

@@ -3,6 +3,7 @@
 import { Switcher, readApps } from './apps.js';
 import { Picker, readDisplays } from './displays.js';
 import { Cadence, LiveView, Meter } from './live-view.js';
+import * as passkey from './passkey.js';
 import { SETTINGS, Touchpad, detents, settingAt, settingFraction, settingText, stepSetting } from './touchpad.js';
 import { relay } from './typing.js';
 import { follow } from './viewport.js';
@@ -69,9 +70,13 @@ function connect() {
       if (viewOn) cadence.measure(); // low power mode may have changed it while the page was away
       if (sheet === 'apps') askApps(); // the Mac is back while the switcher is open
     } else if (m.t === 'lock') {
-      setLocked(m.on === true);
+      setLocked(m.on === true, m.key);
     } else if (m.t === 'unlock' && m.ok === false) {
       unlockFailed(m.why);
+    } else if (m.t === 'enrol') {
+      setOffer(m.off ? null : m);
+    } else if (m.t === 'enrolled') {
+      enrolled(m.ok === true);
     } else if (m.t === 'cursor') {
       player.setCursor(m);
     } else if (m.t === 'view' && m.ok === false) {
@@ -94,7 +99,10 @@ function connect() {
   socket.onclose = () => {
     if (socket !== ws) return;
     ready = false;
-    unlocking = false; // the answer to a password went with the connection
+    unlocking = byFace = false; // the answer to a password went with the connection
+    phoneKey = null; // and so did the challenge
+    setOffer(null);
+    if (locked) typeLabel('Entsperren…');
     player.close();
     if (denied) return;
     setStatus('Getrennt', 'bad');
@@ -534,12 +542,20 @@ function fire(b) {
   else if (d.act === 'shape') setShape(!shape);
   else if (d.act === 'settings-reset') resetSettings();
   else if (d.act === 'done') field.blur();
-  else if (d.act === 'type') field.focus();
+  else if (d.act === 'type') openField();
+  else if (d.act === 'enrol') enrol();
+  else if (d.act === 'enrol-later') enrolSheet.hidden = true; // the offer stands at the Mac until its time is up
+  // A locked Mac is unlocked by its lock, as by the type key. To lock it: exactly these two modifiers,
+  // whatever is armed, since Shift-Command-Q logs the user out.
+  else if (d.act === 'lock') { if (locked) openField(); else send({ t: 'key', k: 'q', mods: ['ctrl', 'cmd'], n: 1 }); }
   else if (d.key) sendKey(d.key, d.with);
   else if (d.media) send({ t: 'media', k: d.media });
   else if (d.click) sendClick(d.click);
   else if (d.mod) { mods.has(d.mod) ? mods.delete(d.mod) : mods.add(d.mod); showMods(); }
 }
+// Keys that act when the finger lifts: iOS opens the keyboard only for a focus made on touchend, and asks for
+// Face ID only then.
+const ON_LIFT = new Set(['type', 'lock', 'enrol']);
 document.querySelectorAll('button').forEach((b) => {
   let delay = 0, repeat = 0;
   const stop = () => { clearTimeout(delay); clearInterval(repeat); };
@@ -549,7 +565,7 @@ document.querySelectorAll('button').forEach((b) => {
     b.classList.add('pressed');
     // The Mac keeps the modifiers of the press until the release, so a drag carries them.
     if (b.dataset.hold) return send({ t: 'b', b: b.dataset.hold, d: true, mods: takeMods() });
-    if (b.dataset.act === 'type') return; // iOS opens the keyboard only for a focus made on touchend
+    if (ON_LIFT.has(b.dataset.act)) return;
     fire(b);
     if ('repeat' in b.dataset) delay = setTimeout(() => { repeat = setInterval(() => fire(b), 70); }, 400);
   }, { passive: false });
@@ -558,7 +574,7 @@ document.querySelectorAll('button').forEach((b) => {
     stop();
     b.classList.remove('pressed');
     if (b.dataset.hold) send({ t: 'b', b: b.dataset.hold, d: false });
-    if (b.dataset.act === 'type' && e.type === 'touchend') field.focus();
+    if (ON_LIFT.has(b.dataset.act) && e.type === 'touchend') fire(b);
   };
   b.addEventListener('touchend', end, { passive: false });
   b.addEventListener('touchcancel', end, { passive: false });
@@ -570,7 +586,14 @@ document.querySelectorAll('button').forEach((b) => {
 // field takes its password instead: as a password field, so iOS masks it, keeps it out of what the keyboard
 // learns and offers the one saved for this page. The Mac types it into its lock screen and says `lock` once
 // it is open, or `unlock` with the reason why it is not.
+// With this phone enrolled for Face ID the Mac's `lock` names a passkey: the type key then asks the phone
+// for it instead of opening the field, and the Mac types the password it kept sealed. A try that is
+// declined or refused leaves the next tap to the field, and closing the field leaves it to Face ID again.
+// The lock key on the tray's first page does the same on a locked Mac, and shows which way the Mac is.
 let locked = false, unlocking = false; // unlocking: the Mac has a password and has not answered yet
+let phoneKey = null; // the passkey to ask for and its challenge, good for one try
+let asking = false, byFace = false, declined = false; // asking: iOS has a question on show; byFace: the try in flight
+const typeLabel = (text) => { $('#typeLabel').textContent = text; };
 const emptyField = relay(field, {
   text: (s) => send({ t: 'text', s }),
   backspace: (n) => send({ t: 'key', k: 'backspace', mods: [], n }),
@@ -591,9 +614,32 @@ function hint(text, failed = false) {
   field.classList.toggle('failed', failed);
 }
 field.addEventListener('input', () => { if (locked) hint('Passwort des Macs'); });
-function setLocked(on) {
+function openField() {
+  if (locked && phoneKey && !declined) return void unlockWithFace();
+  if (locked) typeLabel('Entsperren…');
+  field.focus();
+}
+async function unlockWithFace() {
+  if (asking || unlocking) return;
+  const key = phoneKey;
+  asking = true;
+  typeLabel('Face ID…');
+  const message = await passkey.get(key).catch(() => null);
+  asking = false;
+  if (!locked) return;
+  typeLabel('Entsperren…');
+  if (!message) { declined = true; return; }
+  if (phoneKey === key) phoneKey = null; // its challenge is spent; the Mac sends the next one
+  if (!ready) return;
+  unlocking = byFace = true;
+  send(message);
+  typeLabel('Entsperre…');
+}
+function setLocked(on, key = null) {
   unlocking = false;
+  phoneKey = on && key && passkey.available() ? key : null;
   if (on === locked) return;
+  byFace = declined = false;
   // A field that changes its kind while it has the keyboard keeps the old keyboard: it is put away first.
   field.blur();
   locked = on;
@@ -603,17 +649,71 @@ function setLocked(on) {
   field.enterKeyHint = on ? 'go' : 'send';
   field.setAttribute('aria-label', on ? 'Passwort zum Entsperren des Macs' : 'Text an den Mac senden');
   hint(on ? 'Passwort des Macs' : '');
-  $('#typeLabel').textContent = on ? 'Entsperren…' : 'Tippen…';
+  typeLabel(on ? 'Entsperren…' : 'Tippen…');
   $('[data-act=type]').setAttribute('aria-label', on ? 'Mac entsperren' : 'Tastatur öffnen');
+  const lockKey = $('[data-act=lock]');
+  lockKey.classList.toggle('on', on);
+  lockKey.setAttribute('aria-pressed', on);
+  lockKey.setAttribute('aria-label', on ? 'Mac entsperren' : 'Mac sperren');
   emptyField();
 }
 function unlockFailed(why) {
   unlocking = false;
-  if (locked) hint(why === 'field' ? 'Mac nicht bereit, nochmal?' : 'Nicht entsperrt, nochmal?', true);
+  if (!locked) return;
+  hint(why === 'field' ? 'Mac nicht bereit, nochmal?' : 'Nicht entsperrt, nochmal?', true);
+  if (!byFace) return;
+  // The field is not open: the key says it. A Mac that was not ready is asked again with Face ID.
+  byFace = false;
+  declined = why !== 'field';
+  typeLabel(why === 'field' ? 'Nicht bereit' : 'Abgelehnt');
+}
+
+// ---- Enrolling for Face ID: started from the agent's menu at the Mac, which then offers it to the phone.
+// A card over the display says what it is for and takes the tap; its states: offer, busy (iOS asks, or the
+// Mac has the passkey and has not answered), failed, done.
+const enrolSheet = $('#enrol'), enrolKey = $('[data-act=enrol]');
+let offer = null, taken = false, confirmed = 0; // taken: this phone has answered the offer with its passkey
+function showEnrol(state, title, text, key = 'Einrichten') {
+  enrolSheet.dataset.state = state;
+  $('#enrolTitle').textContent = title;
+  $('#enrolText').textContent = text;
+  enrolKey.textContent = key;
+}
+function setOffer(next) {
+  offer = next;
+  taken = false;
+  clearTimeout(confirmed);
+  if (next) showEnrol('offer', 'Entsperren mit Face ID', `Dieses iPhone entsperrt dann „${next.name}“. Den Passkey dafür in „Passwörter“ sichern.`);
+  enrolSheet.hidden = !next;
+}
+async function enrol() {
+  if (asking || !offer) return;
+  const mine = offer;
+  asking = true;
+  enrolSheet.dataset.state = 'busy';
+  const message = await passkey.create(mine).catch(() => null);
+  asking = false;
+  if (offer !== mine) return;
+  taken = !!message && ready;
+  if (taken) { send(message); enrolKey.textContent = 'Richte ein…'; } else enrolFailed();
+}
+function enrolFailed() {
+  taken = false;
+  showEnrol('failed', 'Entsperren mit Face ID', 'Das hat nicht geklappt. Den Passkey bitte in „Passwörter“ sichern.', 'Nochmal');
+}
+function enrolled(ok) {
+  if (!ok) { if (offer) enrolFailed(); return; }
+  // The offer is over for every phone; the one that took it reads so for a moment.
+  const mine = taken;
+  setOffer(null);
+  if (!mine) return;
+  showEnrol('done', 'Eingerichtet', 'Ist der Mac gesperrt, fragt „Entsperren…“ jetzt nach Face ID.');
+  enrolSheet.hidden = false;
+  confirmed = setTimeout(() => { enrolSheet.hidden = true; }, 2500);
 }
 // The tray comes back after typing; the switcher does not, its list would be old by then.
 field.addEventListener('focus', () => { keepAwake(); typing = true; if (sheet === 'apps') sheet = ''; syncView(); });
-field.addEventListener('blur', () => { typing = false; syncView(); });
+field.addEventListener('blur', () => { typing = false; declined = false; syncView(); });
 
 connect();
 keepAwake();

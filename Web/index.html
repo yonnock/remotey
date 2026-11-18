@@ -22,6 +22,20 @@
         <div id="aim" hidden><div id="marker"></div><img id="cursor" alt=""></div>
       </div>
       <div id="pad" aria-label="Trackpad"></div>
+      <!-- Lies over the display while the agent offers to enrol this phone for unlocking with Face ID, started
+           from its menu at the Mac. -->
+      <div id="enrol" role="dialog" aria-labelledby="enrolTitle" aria-describedby="enrolText" data-state="offer" hidden>
+        <div class="card">
+          <svg class="face" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9.5v1.5M15 9.5v1.5M12 9.5v3.2h-1M9 15.2c1.8 1.4 4.2 1.4 6 0"/></svg>
+          <svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12.4l2.7 2.7L16 9.6"/></svg>
+          <h2 id="enrolTitle">Entsperren mit Face ID</h2>
+          <p id="enrolText"></p>
+          <div class="choice">
+            <button class="cap legend" data-act="enrol-later">Nicht jetzt</button>
+            <button class="cap accent legend" data-act="enrol">Einrichten</button>
+          </div>
+        </div>
+      </div>
       <!-- Printed on the display's glass: state on the left, zoom on the right. Only the keys take touches. -->
       <div id="hud">
         <span id="status" role="status"><span class="sr">Verbinde…</span></span>
@@ -55,9 +69,17 @@
               <button class="play" data-media="play" aria-label="Play/Pause"><svg viewBox="0 0 24 24"><path d="M3 5l9 7-9 7zM14 5h3v14h-3zM19 5h3v14h-3z"/></svg></button>
               <button data-media="next" aria-label="Nächster Titel"><svg viewBox="0 0 24 24"><path d="M16 5h3v14h-3zM4 5l10 7-10 7z"/></svg></button>
             </div>
-            <button class="cap" data-media="mute" aria-label="Stumm">
-              <svg viewBox="0 0 24 24"><path d="M3 9h4l5-4v14l-5-4H3zM15.3 9.3l1.4-1.4L19 10.2l2.3-2.3 1.4 1.4-2.3 2.3 2.3 2.3-1.4 1.4-2.3-2.3-2.3 2.3-1.4-1.4 2.3-2.3z"/></svg>
-            </button>
+            <div class="stack">
+              <button class="cap" data-media="mute" aria-label="Stumm">
+                <svg viewBox="0 0 24 24"><path d="M3 9h4l5-4v14l-5-4H3zM15.3 9.3l1.4-1.4L19 10.2l2.3-2.3 1.4 1.4-2.3 2.3 2.3 2.3-1.4 1.4-2.3-2.3-2.3 2.3-1.4-1.4 2.3-2.3z"/></svg>
+              </button>
+              <!-- The Mac's lock: open or shut as the Mac is. A tap locks it, as Control-Command-Q on its keyboard
+                   does; on a locked Mac it unlocks, as the type key does then. -->
+              <button class="cap" data-act="lock" aria-label="Mac sperren" aria-pressed="false">
+                <svg class="line open" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.9-.8"/></svg>
+                <svg class="line shut" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+              </button>
+            </div>
             <div class="rocker" role="group" aria-label="Lautstärke">
               <button data-media="volup" data-repeat aria-label="Lauter">+</button>
               <button data-media="voldown" data-repeat aria-label="Leiser">−</button>

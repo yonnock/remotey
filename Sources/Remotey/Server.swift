@@ -13,7 +13,12 @@ final class Server {
     var token: String { didSet { clients.values.forEach { $0.connection.cancel() } } }
     private let input: Input
     private let apps = Apps()
-    private let lock = LockScreen()
+    private let lock: LockScreen
+    private let faceUnlock: FaceUnlock
+    /// A password from the passkey is on its way into the lock screen.
+    private var typesSealedPassword = false
+    private var enrolmentEnds: DispatchWorkItem?
+    private var enrolmentEnded: ((Bool) -> Void)?
     private var displays = Displays()
     private var displaysChanged: NSObjectProtocol?
     private var listeners: [NWListener] = []
@@ -45,6 +50,8 @@ final class Server {
         var icons: Set<String> = []
         /// The page opened the display picker on this connection, so it hears when the displays change.
         var watchesDisplays = false
+        /// What the phone's passkey has to sign to unlock the Mac from this connection, once.
+        var challenge: Data?
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
@@ -57,17 +64,23 @@ final class Server {
     private let pendingTimeout: TimeInterval
     private let ports: (http: UInt16, ws: UInt16)
 
-    init(token: String, input: Input, port: UInt16 = Server.port, pendingTimeout: TimeInterval = 5) {
+    init(token: String, input: Input, port: UInt16 = Server.port, pendingTimeout: TimeInterval = 5,
+         lock: LockScreen = LockScreen(), faceUnlock: FaceUnlock? = nil) {
         self.token = token
         self.input = input
         self.ports = (port, port + 1)
         self.pendingTimeout = pendingTimeout
+        self.lock = lock
+        self.faceUnlock = faceUnlock ?? FaceUnlock(file: FaceUnlock.file(port: port))
         lock.changed = { [weak self] locked in
             guard let self else { return }
             // On the lock screen the view shows the password field; back on the desktop it shows the pointer again.
             if !locked, self.viewer != nil { self.screen.followText(false) }
             if self.viewer != nil { self.screen.locked = locked }
-            self.clients.values.filter(\.authed).forEach { self.send($0, Wire.lock(locked)) }
+            // The Mac took the password that was sealed for the passkey.
+            if !locked, self.typesSealedPassword { self.faceUnlock.opened() }
+            self.typesSealedPassword = false
+            self.clients.values.filter(\.authed).forEach { self.send($0, self.lockState(for: $0)) }
         }
         // Displays were connected, removed, rearranged or changed their mode: an open picker follows.
         displaysChanged = NotificationCenter.default.addObserver(
@@ -88,6 +101,80 @@ final class Server {
         if viewer != nil { stopView() }
         if let displaysChanged { NotificationCenter.default.removeObserver(displaysChanged) }
         displaysChanged = nil
+        withdrawFaceUnlock()
+    }
+
+    // MARK: Face ID
+
+    /// Whether a phone is enrolled to unlock this Mac with Face ID.
+    var unlocksWithFaceID: Bool { faceUnlock.key != nil }
+
+    /// How long an enrolment started at the Mac waits for the phone.
+    static let enrolmentTime: TimeInterval = 120
+
+    /// Offers every connected phone to enrol for Face ID, with the Mac's password to seal. `ended` hears
+    /// whether a phone enrolled before the time was up; not after `withdrawFaceUnlock`.
+    func offerFaceUnlock(password: String, for time: TimeInterval = Server.enrolmentTime, ended: @escaping (Bool) -> Void) {
+        withdrawFaceUnlock()
+        let offer = faceUnlock.offerEnrolment(password: password)
+        enrolmentEnded = ended
+        let end = DispatchWorkItem { [weak self] in self?.endEnrolment(enrolled: false) }
+        enrolmentEnds = end
+        DispatchQueue.main.asyncAfter(deadline: .now() + time, execute: end)
+        clients.values.filter(\.authed).forEach { send($0, Wire.enrolment(offer, mac: Self.macName)) }
+    }
+
+    func withdrawFaceUnlock() {
+        enrolmentEnded = nil
+        endEnrolment(enrolled: false)
+    }
+
+    func removeFaceUnlock() {
+        faceUnlock.remove()
+        clients.values.filter(\.authed).forEach { send($0, lockState(for: $0)) }
+    }
+
+    private func endEnrolment(enrolled: Bool) {
+        guard faceUnlock.offer != nil || enrolmentEnds != nil else { return }
+        enrolmentEnds?.cancel()
+        enrolmentEnds = nil
+        faceUnlock.withdraw()
+        let message = enrolled ? Wire.enrolled(true) : Wire.enrolment(nil, mac: "")
+        clients.values.filter(\.authed).forEach { send($0, message) }
+        enrolmentEnded?(enrolled)
+        enrolmentEnded = nil
+    }
+
+    private static var macName: String { Host.current().localizedName ?? "Mac" }
+
+    /// What a client hears about the lock. A locked Mac with a phone enrolled gives each connection its
+    /// own challenge, and a new one every time it says so.
+    private func lockState(for client: Client) -> String {
+        guard lock.isLocked, let key = faceUnlock.key else {
+            client.challenge = nil
+            return Wire.lock(lock.isLocked)
+        }
+        let challenge = Passkey.challenge()
+        client.challenge = challenge
+        return Wire.lock(true, passkey: (key, challenge))
+    }
+
+    /// Types `password` into the lock screen. A refusal goes to the page, followed by the state of the lock,
+    /// which carries the next challenge for the passkey.
+    private func unlock(with password: String, sealed: Bool, for client: Client) {
+        if viewer === client { screen.followText(true) } // the view shows the field the password goes into
+        if sealed { typesSealedPassword = true }
+        lock.unlock(with: password, typing: input) { [weak self, weak client] failure in
+            guard let self else { return }
+            // A password the Mac refuses again and again is no longer its password: the passkey's is dropped.
+            if sealed {
+                self.typesSealedPassword = false
+                if failure == .password { self.faceUnlock.refused() }
+            }
+            guard let client else { return }
+            self.send(client, Wire.unlockFailed(failure))
+            if sealed { self.send(client, self.lockState(for: client)) }
+        }
     }
 
     private func admit(_ connection: NWConnection) {
@@ -205,7 +292,8 @@ final class Server {
                 client.authed = true
                 self.settle(client.connection)
                 self.send(client, Wire.accepted(accessibility: AXIsProcessTrusted(), page: Web.version))
-                self.send(client, Wire.lock(self.lock.isLocked))
+                self.send(client, self.lockState(for: client))
+                if let offer = self.faceUnlock.offer { self.send(client, Wire.enrolment(offer, mac: Self.macName)) }
             } else {
                 self.send(client, Wire.denied) { client.connection.cancel() }
                 return
@@ -225,9 +313,9 @@ final class Server {
     /// The media keys are not among them: pausing the music leaves a dark display dark.
     private static func isActivity(_ command: Wire.Command) -> Bool {
         switch command {
-        case .move, .scroll, .click, .button, .text, .key, .focus, .display, .unlock: true
+        case .move, .scroll, .click, .button, .text, .key, .focus, .display, .unlock, .unlockWithPasskey: true
         case .view(let request): request != nil
-        case .auth, .scrollEnded, .media, .shown, .apps, .displays, .ignored: false
+        case .auth, .scrollEnded, .media, .shown, .apps, .displays, .enrol, .ignored: false
         }
     }
 
@@ -290,11 +378,24 @@ final class Server {
         case .unlock(let password):
             // The page asked for a Mac that is open by now: it missed the news.
             guard lock.isLocked else { return send(client, Wire.lock(false)) }
-            if viewer === client { screen.followText(true) } // the view shows the field the password goes into
-            lock.unlock(with: password, typing: input) { [weak self, weak client] failure in
-                guard let self, let client else { return }
-                self.send(client, Wire.unlockFailed(failure))
+            unlock(with: password, sealed: false, for: client)
+        case .unlockWithPasskey(let answer, let secret):
+            guard lock.isLocked else { return send(client, Wire.lock(false)) }
+            // The challenge counts once, whatever comes of it.
+            let challenge = client.challenge
+            client.challenge = nil
+            guard let challenge, let password = faceUnlock.password(for: answer, challenge: challenge, secret: secret) else {
+                send(client, Wire.passkeyRefused)
+                return send(client, lockState(for: client))
             }
+            unlock(with: password, sealed: true, for: client)
+        case .enrol(let id, let publicKey, let authenticator, let clientData, let secret):
+            // Only on a Mac that is open, where its user started the offer from the menu.
+            guard !lock.isLocked, faceUnlock.offer != nil,
+                  faceUnlock.enrol(id: id, publicKey: publicKey, authenticator: authenticator, client: clientData, secret: secret) else {
+                return send(client, Wire.enrolled(false))
+            }
+            endEnrolment(enrolled: true)
         case .auth, .ignored: break
         }
     }

@@ -60,6 +60,44 @@ final class WireTests: XCTestCase {
     }
 
     /// Names and titles come from apps and web pages: whatever they hold, the message stays one JSON object.
+    func testALockedMacNamesThePasskeyAndAnOfferNamesTheMac() throws {
+        func object(_ text: String) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        }
+        let key = FaceUnlock.Key(passkey: Passkey(id: Data([251, 255]), publicKey: Data([1]), origin: "https://mac.example.ts.net:8443"),
+                                 salt: Data([1, 2]), sealed: Data([9]))
+        let locked = try object(Wire.lock(true, passkey: (key, Data([3, 4]))))
+        XCTAssertEqual(locked as NSDictionary, ["t": "lock", "on": true, "key": ["id": "-_8", "salt": "AQI", "challenge": "AwQ"]])
+        XCTAssertEqual(try object(Wire.lock(false, passkey: (key, Data([3, 4])))) as NSDictionary, ["t": "lock", "on": false],
+                       "an open Mac asks for no passkey")
+        XCTAssertEqual(try object(Wire.passkeyRefused) as NSDictionary, ["t": "unlock", "ok": false, "why": "key"])
+        let offer = FaceUnlock.Offer(challenge: Data([5]), salt: Data([6]))
+        XCTAssertEqual(try object(Wire.enrolment(offer, mac: #"Annas "Mac""#)) as NSDictionary,
+                       ["t": "enrol", "challenge": "BQ", "salt": "Bg", "name": #"Annas "Mac""#])
+        XCTAssertEqual(try object(Wire.enrolment(nil, mac: "")) as NSDictionary, ["t": "enrol", "off": true])
+        XCTAssertEqual(try object(Wire.enrolled(true)) as NSDictionary, ["t": "enrolled", "ok": true])
+    }
+
+    func testThePasskeysMessagesOfThePage() throws {
+        func command(_ json: String) throws -> Wire.Command { try Wire.command(from: Data(json.utf8)) }
+        guard case .unlockWithPasskey(let answer, let secret) = try command(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#) else {
+            return XCTFail("not an unlock by passkey")
+        }
+        XCTAssertEqual(answer, Passkey.Answer(authenticator: Data([1, 2]), client: Data([3]), signature: Data([4])))
+        XCTAssertEqual(secret, Data([5]))
+        guard case .unlock("geheim") = try command(#"{"t":"unlock","s":"geheim","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#) else {
+            return XCTFail("a typed password counts as one")
+        }
+        guard case .enrol(let id, let publicKey, let authenticator, let client, let prf) =
+            try command(#"{"t":"enrol","cred":"AQ","key":"Ag","auth":"Aw","client":"BA","prf":"BQ"}"#) else { return XCTFail("not an enrol") }
+        XCTAssertEqual([id, publicKey, authenticator, client, prf], [1, 2, 3, 4, 5].map { Data([$0]) })
+        for json in [#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA"}"#, #"{"t":"unlock","auth":"AQI","client":"Aw","sig":"!","prf":"BQ"}"#,
+                     #"{"t":"unlock","auth":"","client":"Aw","sig":"BA","prf":"BQ"}"#, #"{"t":"enrol","cred":"AQ","key":"Ag","auth":"Aw","client":"BA"}"#,
+                     #"{"t":"unlock","auth":"\#(String(repeating: "A", count: 4100))","client":"Aw","sig":"BA","prf":"BQ"}"#] {
+            guard case .ignored = try command(json) else { return XCTFail(json) }
+        }
+    }
+
     func testTheListOfAppsIsJSONWhateverATitleHolds() throws {
         let title = #"He said "hi" \ </script>"# + "\n🎉"
         let list = [

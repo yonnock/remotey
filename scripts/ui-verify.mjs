@@ -3,8 +3,9 @@
 // the keyboard can be "opened". Chromium is not iOS Safari: this checks the page's own logic and layout,
 // not WebKit's keyboard, safe areas or gesture handling.
 // Usage: node scripts/ui-verify.mjs [--web=Web] [--json=out.json] [--only=T1,T9] [--shots=DIR]
-// --shots saves pictures of the page at moments T8, T11, T12 and T13 name, for looking at what they measure.
+// --shots saves pictures of the page at moments T8, T10, T11, T12, T13 and T14 name, for looking at what they measure.
 import { spawn } from 'node:child_process';
+import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
@@ -24,7 +25,11 @@ import { extname, join, resolve } from 'node:path';
 //     displays; T8 also taps the keys for an app's zoom.
 // 12: T13 switches "Telefonform" on in the Apps sheet: the zoom keys and the pinch then ask the Mac for another
 //     size of the window instead of ending "Auto", and a page that goes out of sight switches the view off.
-export const VERIFIER_VERSION = 12;
+// 13: T10 also measures the lock key on the tray's first page on every phone and taps it with a modifier armed.
+// 14: T14 enrols the phone for Face ID and unlocks with it; Chromium's virtual authenticator is the passkey. The
+//     page is loaded from `localhost`, since a passkey belongs to a host name. T10 and T14 also tap the lock key on
+//     a locked Mac, which unlocks as the type key does.
+export const VERIFIER_VERSION = 14;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -49,7 +54,7 @@ const server = createServer((req, res) => {
   } catch { res.writeHead(404); res.end(); }
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const origin = `http://127.0.0.1:${server.address().port}`;
+const origin = `http://localhost:${server.address().port}`;
 
 const profile = mkdtempSync(join(tmpdir(), 'remotey-ui-'));
 const chrome = spawn(chromePath(), ['--headless', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
@@ -160,7 +165,7 @@ async function openPage(width, height) {
   };
   const touch = (type, points) => s('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
   const page = {
-    evaluate, touch,
+    evaluate, touch, cdp: s,
     close: () => cdp('Target.closeTarget', { targetId }),
     resize: async (w, h) => { await s('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 3, mobile: true }); await sleep(250); },
     sent: () => evaluate('window.__sent'),
@@ -712,7 +717,33 @@ await task('T9', async () => {
 
 // T10: a locked Mac. The type key opens the same field for the password: nothing of it leaves before Enter,
 // then all of it in one message. A refusal shows in the field, and an open Mac gets its keyboard back.
+// Before that, the key that locks it: under the mute key on the tray's first page, large enough for a finger on
+// every phone, and it sends Control-Command-Q alone, whatever modifier is armed.
 await task('T10', async () => {
+  const lockKey = { layout: {} };
+  for (const [phone, [w, h]] of Object.entries(PHONES)) {
+    for (const orientation of ['portrait', 'landscape']) {
+      const page = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]));
+      await page.tap('[data-act=deck]'); await sleep(450);
+      lockKey.layout[`${phone} ${orientation}`] = await page.evaluate(`(() => {
+        const box = (s) => document.querySelector(s).getBoundingClientRect(), side = (r) => Math.round(Math.min(r.width, r.height));
+        const page = box('.page.media'), lock = box('[data-act=lock]'), mute = box('[data-media=mute]');
+        return { lock: side(lock), mute: side(mute), apart: Math.round(lock.top - mute.bottom),
+          inside: [lock, mute].every((k) => k.left >= page.left - 0.5 && k.right <= page.right + 0.5 && k.top >= page.top - 0.5 && k.bottom <= page.bottom + 0.5) };
+      })()`);
+      if (phone === 'small' && orientation === 'portrait') {
+        await page.shot('lock');
+        await page.tap('[data-act=page][data-page=keys]'); await sleep(250);
+        await page.tap('[data-mod=shift]');
+        await page.tap('[data-act=page][data-page=media]'); await sleep(250);
+        await page.clear();
+        await page.tap('[data-act=lock]');
+        lockKey.sent = (await page.sent()).map(({ at, ...m }) => m);
+        lockKey.armed = await page.evaluate(`document.querySelector('[data-mod=shift]').classList.contains('on')`);
+      }
+      await page.close();
+    }
+  }
   const page = await openPage(...PHONES.small);
   const say = (m) => page.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify(m))} })`);
   const state = () => page.evaluate(`(() => { const f = document.querySelector('#field'), shown = (s) => getComputedStyle(document.querySelector(s)).display !== 'none';
@@ -724,8 +755,19 @@ await task('T10', async () => {
   const enter = () => page.evaluate(`document.querySelector('#field').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
   const input = async () => (await page.sent()).filter((m) => m.t !== 'view').map(({ at, ...m }) => m);
   const open = await state();
+  // The lock key shows which way the Mac is, and on a locked Mac it opens the field as the type key does.
+  const lockKeyState = () => page.evaluate(`(() => { const k = document.querySelector('[data-act=lock]'), shown = (s) => getComputedStyle(k.querySelector(s)).display !== 'none';
+    return { shut: shown('.shut'), open: shown('.open'), on: k.classList.contains('on'), pressed: k.getAttribute('aria-pressed'), name: k.getAttribute('aria-label') }; })()`);
+  lockKey.open = await lockKeyState();
   await say({ t: 'lock', on: true });
   const locked = await state();
+  lockKey.locked = await lockKeyState();
+  await page.tap('[data-act=deck]'); await sleep(450);
+  await page.clear();
+  await page.tap('[data-act=lock]'); await sleep(200);
+  lockKey.unlocks = { ...(await state()), sent: (await input()).length };
+  await page.evaluate(`document.querySelector('#field').blur()`);
+  await page.tap('[data-act=deck]'); await sleep(450);
   await page.clear();
   await type('ge'); await type('heim');
   const typed = { ...(await state()), sent: await input() };
@@ -749,8 +791,13 @@ await task('T10', async () => {
   await type('hi'); await enter();
   const relayed = await input();
   await page.close();
-  return { open, locked, typed, sent, early, refused, second, unready, retry, opened, relayed,
-    ok: open.type === 'text' && open.keys && !open.padlock && open.label === 'Tippen…'
+  return { lockKey, open, locked, typed, sent, early, refused, second, unready, retry, opened, relayed,
+    ok: Object.values(lockKey.layout).every((l) => l.lock >= 44 && l.mute >= 44 && l.apart >= 8 && l.inside)
+      && JSON.stringify(lockKey.sent) === '[{"t":"key","k":"q","mods":["ctrl","cmd"],"n":1}]' && lockKey.armed
+      && lockKey.open.open && !lockKey.open.shut && !lockKey.open.on && lockKey.open.pressed === 'false' && lockKey.open.name === 'Mac sperren'
+      && lockKey.locked.shut && !lockKey.locked.open && lockKey.locked.on && lockKey.locked.pressed === 'true' && lockKey.locked.name === 'Mac entsperren'
+      && lockKey.unlocks.focused && lockKey.unlocks.type === 'password' && lockKey.unlocks.sent === 0
+      && open.type === 'text' && open.keys && !open.padlock && open.label === 'Tippen…'
       && locked.type === 'password' && locked.autocomplete === 'current-password' && locked.padlock && !locked.keys
       && locked.label === 'Entsperren…' && locked.name === 'Mac entsperren' && locked.value === '' && locked.hint === 'Passwort des Macs'
       && typed.value === 'geheim' && typed.sent.length === 0
@@ -1015,6 +1062,131 @@ await task('T13', async () => {
       && asked(again.views).startsWith('window ') && again.lit
       && asked(hidden) === 'off' && asked(back) === 'off,window 1.2'
       && !plain.latch && plain.stored === 'false,true' && asked(plain.views) === 'window -' && plain.lamp === 'Auto' && plain.lit };
+});
+
+// T14: Face ID. The Mac offers an enrolment and the page makes a passkey for it; once the Mac is locked and names
+// that passkey, the type key asks the phone for it and sends its signature and secret instead of opening the
+// field. A try the Mac refuses or the user declines leaves the next tap to the password field, and closing the
+// field leaves it to Face ID again. Chromium's virtual authenticator is the phone's passkey here: what it signs
+// is checked as the agent checks it.
+await task('T14', async () => {
+  const page = await openPage(...PHONES.small);
+  await page.cdp('WebAuthn.enable');
+  await page.cdp('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', ctap2Version: 'ctap2_1',
+    transport: 'internal', hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true } });
+  const say = (m) => page.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify(m))} })`);
+  const random = () => randomBytes(32).toString('base64url'), raw = (text) => Buffer.from(text, 'base64url');
+  const sent = async (t) => (await page.sent()).filter((m) => m.t === t).map(({ at, ...m }) => m);
+  // The card of the offer: its state, what it says, and whether all of it lies in the display with keys a finger hits.
+  const card = (p = page) => p.evaluate(`(() => { const e = document.querySelector('#enrol'), box = (s) => e.querySelector(s).getBoundingClientRect();
+    const c = box('.card'), s = document.querySelector('#screen').getBoundingClientRect(), keys = [box('[data-act=enrol]'), box('[data-act=enrol-later]')];
+    return { hidden: e.hidden, state: e.dataset.state, title: e.querySelector('h2').textContent, text: e.querySelector('p').textContent,
+      key: e.querySelector('[data-act=enrol]').textContent, keyH: Math.round(Math.min(...keys.map((k) => k.height))),
+      inside: c.left >= s.left && c.right <= s.right && c.top >= s.top && c.bottom <= s.bottom && keys.every((k) => k.bottom <= c.bottom && k.top >= c.top),
+      whole: e.querySelector('.card').scrollHeight <= e.querySelector('.card').clientHeight + 1 }; })()`);
+  const key = card;
+  const state = () => page.evaluate(`(() => { const f = document.querySelector('#field');
+    return { label: document.querySelector('#typeLabel').textContent, focused: document.activeElement === f, type: f.type, hint: f.placeholder }; })()`);
+  // The user declines what iOS asks, or Face ID fails: the browser rejects the call. (The virtual authenticator
+  // cannot play that: once it has failed to verify its user it refuses every later call too.)
+  const decline = (call, on) => page.evaluate(on
+    ? `navigator.credentials.${call} = () => Promise.reject(new DOMException('declined', 'NotAllowedError'))` : `delete navigator.credentials.${call}`);
+  const tapType = async () => { await page.clear(); await page.tap('[data-act=type]'); await sleep(300); return { ...(await state()), unlocks: await sent('unlock') }; };
+  // What the agent checks in Passkey.swift: made for this challenge on this page, user verified, signed by the enrolled key.
+  const checked = (message, type, challenge, publicKey) => {
+    const client = JSON.parse(raw(message.client)), authenticator = raw(message.auth);
+    return client.type === type && client.challenge === challenge && client.origin === origin
+      && authenticator.subarray(0, 32).equals(createHash('sha256').update('localhost').digest()) && (authenticator[32] & 5) === 5
+      && (!publicKey || verify('sha256', Buffer.concat([authenticator, createHash('sha256').update(raw(message.client)).digest()]),
+        { key: createPublicKey({ key: raw(publicKey), format: 'der', type: 'spki' }), dsaEncoding: 'der' }, raw(message.sig)));
+  };
+
+  // The offer: a card over the display; a tap on its key makes the passkey and sends what the agent keeps.
+  const before = await key();
+  const offer = { t: 'enrol', challenge: random(), salt: random(), name: 'Test-Mac' };
+  // On every phone, upright and sideways, the card lies whole in the display.
+  const layout = {};
+  for (const [phone, [w, h]] of Object.entries(PHONES)) {
+    for (const orientation of ['portrait', 'landscape']) {
+      const other = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]));
+      await other.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify({ ...offer, name: 'MacBook Pro von Erika Mustermann' }))} })`);
+      layout[`${phone} ${orientation}`] = await card(other);
+      if (phone !== 'large') await other.shot(`enrol-${phone}-${orientation}`);
+      await other.close();
+    }
+  }
+  await say(offer);
+  const offered = await key();
+  await page.shot('enrol');
+  // "Nicht jetzt" puts the card away; the Mac's offer stands, so a new one shows it again.
+  await page.tap('[data-act=enrol-later]');
+  const later = await key();
+  await say(offer);
+  // The passkey is not made: the card says so and offers another try.
+  await decline('create', true);
+  await page.clear();
+  await page.tap('[data-act=enrol]'); await sleep(400);
+  const failed = { ...(await key()), sent: (await sent('enrol')).length };
+  await page.shot('enrol-failed');
+  await decline('create', false);
+  await page.tap('[data-act=enrol]'); await sleep(400);
+  const [enrol] = await sent('enrol'), taking = await key();
+  await say({ t: 'enrolled', ok: true });
+  const done = await key();
+  await page.shot('enrol-done');
+  await sleep(2700);
+  const gone = await key();
+
+  // Locked, and the Mac names the passkey: the type key asks the phone for it.
+  const challenges = [random(), random(), random(), random()];
+  const lock = (i) => say({ t: 'lock', on: true, key: { id: enrol.cred, salt: offer.salt, challenge: challenges[i] } });
+  await lock(0);
+  const first = await tapType();
+  // The Mac typed the sealed password and stayed locked: the next tap opens the field for the password.
+  await say({ t: 'unlock', ok: false, why: 'password' }); await lock(1);
+  const refused = await state();
+  const field = await tapType();
+  // The field put away: Face ID again, with the Mac's next challenge.
+  await page.evaluate(`document.querySelector('#field').blur()`);
+  const second = await tapType();
+  // A Mac that was not ready is asked again with Face ID at once.
+  await say({ t: 'unlock', ok: false, why: 'field' }); await lock(2);
+  const unready = await state();
+  const third = await tapType();
+  // Face ID fails or is cancelled: nothing leaves, the next tap opens the field.
+  await lock(3);
+  await decline('get', true);
+  const declined = await tapType();
+  const after = await tapType();
+  // The lock key on the tray's first page asks for Face ID too.
+  await page.evaluate(`document.querySelector('#field').blur()`);
+  await decline('get', false);
+  await page.tap('[data-act=deck]'); await sleep(450);
+  await page.clear();
+  await page.tap('[data-act=lock]'); await sleep(300);
+  const byLockKey = { ...(await state()), unlocks: await sent('unlock') };
+  await page.shot('locked');
+  await say({ t: 'lock', on: false });
+  const open = await state();
+  await page.close();
+  const answers = [first, second, third].map((t) => t.unlocks[0]);
+  return { before, layout, offered, later, failed, taking, done, gone, enrol, first, refused, field, second, unready, third, declined, after, byLockKey, open,
+    vector: { origin, offer, challenge: challenges[0] },
+    ok: before.hidden && Object.values(layout).every((l) => !l.hidden && l.inside && l.whole && l.keyH >= 44)
+      && !offered.hidden && offered.state === 'offer' && offered.title === 'Entsperren mit Face ID' && offered.text.includes('„Test-Mac“') && offered.key === 'Einrichten'
+      && later.hidden && failed.state === 'failed' && failed.key === 'Nochmal' && failed.sent === 0 && !failed.hidden
+      && !!enrol && checked(enrol, 'webauthn.create', offer.challenge) && raw(enrol.prf).length === 32 && raw(enrol.key).length === 91
+      && taking.state === 'busy' && taking.key === 'Richte ein…' && !done.hidden && done.state === 'done' && done.title === 'Eingerichtet' && gone.hidden
+      && byLockKey.unlocks.length === 1 && checked(byLockKey.unlocks[0], 'webauthn.get', challenges[3], enrol.key) && !byLockKey.focused
+      && first.unlocks.length === 1 && first.label === 'Entsperre…' && !first.focused
+      && answers.every((a, i) => a && !('s' in a) && a.prf === enrol.prf && checked(a, 'webauthn.get', challenges[i], enrol.key))
+      && refused.label === 'Abgelehnt' && !refused.focused
+      && field.focused && field.type === 'password' && field.label === 'Entsperren…' && field.unlocks.length === 0
+      && second.unlocks.length === 1 && !second.focused
+      && unready.label === 'Nicht bereit' && third.unlocks.length === 1 && !third.focused
+      && declined.unlocks.length === 0 && declined.label === 'Entsperren…' && !declined.focused
+      && after.focused && after.unlocks.length === 0
+      && open.label === 'Tippen…' && open.type === 'text' };
 });
 
 socket.close();
