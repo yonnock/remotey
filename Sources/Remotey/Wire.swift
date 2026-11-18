@@ -23,7 +23,8 @@ enum Wire {
         case media(String)
         /// Nil switches the live view off. The page asks for 30 to 120 frames per second, as it measures its display,
         /// and numbers its requests: every update names the one it was cut for. With `fit` set to `window` the
-        /// agent picks the region itself, around the window in front; `zoom` counts where there is none.
+        /// agent picks the region itself, around the window in front; `zoom` counts where there is none. With
+        /// `shape`, a zoom, that window also takes the phone's shape, at the size that shows at this zoom.
         case view(ScreenView.Request?)
         /// The page has drawn or discarded the picture with this number.
         case shown(UInt32)
@@ -65,6 +66,7 @@ enum Wire {
         var pid: Int32?
         var win: Int?
         var fit: String?
+        var shape: Double?
         var id: Int64?
     }
 
@@ -109,7 +111,7 @@ enum Wire {
         guard m.on == true, let width = m.w, let height = m.h, let zoom = m.zoom, let pixelRatio = m.dpr,
               let codec = m.codec, let fps = m.fps else { return nil }
         return ScreenView.Request(width: width, height: height, zoom: zoom, pixelRatio: pixelRatio, h264: codec == "h264",
-                                  fps: fps, fit: m.fit == "window", number: m.v ?? 0)
+                                  fps: fps, fit: m.fit == "window", shape: m.shape, number: m.v ?? 0)
     }
 
     /// The token was right. `page` is `Web.version`: a page that was loaded from an older agent reloads itself.

@@ -56,12 +56,16 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         /// The view shows the window in front whole, wherever the pointer is in it, instead of the region
         /// around the pointer at `zoom`. Without such a window `zoom` counts.
         let fit: Bool
+        /// With `fit`: the window in front also takes the phone's shape, sized so that it shows at this zoom,
+        /// as far as its app and its display allow. So it fills the phone's display instead of a band of it.
+        /// Nil leaves the windows on the Mac as they are.
+        let shape: Double?
         /// The page's number for this request. Every update names it, so the page knows which zoom a picture has.
         let number: UInt32
 
         /// Nil for a size no phone display has.
         init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool, fps: Int, fit: Bool = false,
-              number: UInt32 = 0) {
+              shape: Double? = nil, number: UInt32 = 0) {
             guard (50...4000).contains(width), (50...4000).contains(height) else { return nil }
             self.width = width
             self.height = height
@@ -71,6 +75,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             self.h264 = h264
             self.framesPerSecond = h264 ? Int32(min(max(fps, 30), 120)) : 30
             self.fit = fit
+            self.shape = fit ? shape.map { min(max($0, 0.05), ScreenView.maxFitZoom) } : nil
             self.number = number
         }
     }
@@ -200,7 +205,13 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private var cursorSent: Pointer.Picture?
     private var cursorCheck = (scheduled: false, again: false)
     private lazy var textFocus = TextFocus { [weak self] target in self?.setText(target) }
-    private lazy var frontWindow = FrontWindow { [weak self] frame in self?.setWindow(frame) }
+    private lazy var frontWindow = FrontWindow { [weak self] frame, another in
+        self?.setWindow(frame)
+        if another, let frame { self?.cameForward?(frame) }
+    }
+    /// Another window came to the front and the view is fitted to it now. Called on the main queue with its
+    /// frame, so that the pointer can go there: left outside, it would push the view off the window.
+    var cameForward: ((CGRect) -> Void)?
     /// The window in front, while the request asks to fit the view to it.
     private var fitTo: CGRect?
     /// The lock screen covers every window: the view shows the pointer there, and the password field.
@@ -329,13 +340,18 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         }
     }
 
-    /// Follows the window in front while the view is fitted to it, and forgets it otherwise.
+    /// Follows the window in front while the view is fitted to it, and forgets it otherwise. Asked to, the
+    /// window takes the phone's shape meanwhile, and gets its frame back with the end of that.
     private func watchWindow() {
-        if request?.fit == true, !locked {
+        if let request, request.fit, !locked {
+            frontWindow.shape = request.shape.map { CGSize(width: request.width / $0, height: request.height / $0) }
             if !frontWindow.isWatching { frontWindow.start() }
-        } else if frontWindow.isWatching {
-            frontWindow.stop()
-            setWindow(nil)
+        } else {
+            if frontWindow.isWatching {
+                frontWindow.stop()
+                setWindow(nil)
+            }
+            frontWindow.shape = nil
         }
     }
 

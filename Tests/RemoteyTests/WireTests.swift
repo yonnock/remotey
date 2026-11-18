@@ -148,6 +148,16 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(fitted, ScreenView.Request(width: 390, height: 844, zoom: 0.5, pixelRatio: 3, h264: true, fps: 120, fit: true, number: 5))
         guard case .view(let unknown?) = try command(on.replacingOccurrences(of: #""v":4"#, with: #""fit":"moon""#)) else { return XCTFail("unknown mode") }
         XCTAssertFalse(unknown.fit)
+        XCTAssertNil(fitted.shape, "the windows on the Mac stay as they are, unless the page asks")
+        // The window in front is to take the phone's shape, at the size that shows at this zoom.
+        func shaped(_ fields: String) throws -> ScreenView.Request? {
+            guard case .view(let request) = try command(on.replacingOccurrences(of: #""v":4"#, with: fields)) else { return nil }
+            return request
+        }
+        XCTAssertEqual(try shaped(#""fit":"window","shape":0.6"#)?.shape, 0.6)
+        XCTAssertEqual(try shaped(#""fit":"window","shape":9"#)?.shape, 2, "at twice its size at most, as a fitted window")
+        XCTAssertEqual(try shaped(#""fit":"window","shape":0"#)?.shape, 0.05)
+        XCTAssertNil(try shaped(#""shape":0.6"#)?.shape, "only a window the view is fitted to")
         for off in [#"{"t":"view","on":false}"#, #"{"t":"view","on":true,"w":390,"h":844}"#,
                     on.replacingOccurrences(of: "390", with: "5")] {
             guard case .view(nil) = try command(off) else { return XCTFail(off) }

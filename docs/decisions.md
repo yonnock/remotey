@@ -355,6 +355,46 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
    - Bekannte Grenze: ein Fenster so breit wie sein Display ist hochkant klein (im Lauf oben 0,19×), und über und
      unter ihm steht, was dort am Schreibtisch liegt. Dagegen helfen Drehen, ⌘+ und später 13 B oder C.
 
+13. Telefonform (Issue 13 B, nach „jetzt 13 B bauen"). Verifier v12 (neu: T13).
+   - Entscheidung Größe: nicht „so groß wie das Display erlaubt", sondern ein Zoom. Das Fenster bekommt die Größe des
+     Telefondisplays geteilt durch diesen Zoom, also dessen Seitenverhältnis, und zeigt sich bei genau diesem Zoom.
+     Die größte passende Größe hinge am Display des Macs (hochkant 0,44× am Laptop, 0,34× an 3008 × 1692) und ließe
+     Text klein. Standard 0,5×, je Ausrichtung gespeichert (`form`, `form-wide`).
+   - Entscheidung Zoomtasten: mit Telefonform ist der Zoom die Fenstergröße. − / + und die Zange bitten den Mac um
+     ein größeres oder kleineres Fenster, das ganz im Bild bleibt, und Auto bleibt an. Ohne Telefonform beenden sie
+     Auto wie bisher. Die Seite rechnet den nächsten Schritt vom gezeigten Zoom aus, nicht vom gewünschten: lehnt die
+     App ab (Mindestgröße) oder das Display (kein Platz), bleibt die Anzeige stehen und die Taste fragt nichts Neues.
+   - Entscheidung Schalter: eine Rasttaste „Telefonform" im Kopf des Apps-Blatts, weil sie bestimmt, wie die Apps
+     darunter nach vorn kommen, und weil das Display bei 320 px keine weitere Taste fasst. Sie weicht der Fensterzahl,
+     solange die Fenster einer App gelistet sind. An schaltet auch Auto an; Auto aus behält sie fürs nächste Mal. Die
+     Lampe der Anzeige sagt dann „Form" statt „Auto".
+   - Entscheidung Agent (`FrontWindow.shape`): ein Fenster zur Zeit. Es bekommt seinen alten Rahmen zurück, wenn ein
+     anderes nach vorn kommt, wenn Telefonform, Auto oder das Live-Bild enden, beim Sperren, beim Trennen und beim
+     Beenden über das Menü (`applicationWillTerminate`). Gefragt wird ein Fenster je gewünschtem Rahmen einmal: was
+     die App daraus macht oder der Nutzer danach, bleibt. Nur Dokument- und Hauptfenster (`AXStandardWindow`) mit
+     setzbarer Größe, keine Dialoge, kein Vollbild. Lage: wo das Fenster ist, nur so weit verschoben, dass es in den
+     sichtbaren Teil seines Displays passt (ohne Menüleiste und Dock). Der neue Rahmen gilt sofort, ohne die 0,15 s
+     Ruhe, weil der Agent ihn selbst gesetzt hat.
+   - Entscheidung Seite außer Sicht: bei `visibilitychange` nach „hidden" schaltet die Seite das Live-Bild ab. iOS
+     friert die Seite ein, ohne den Socket zu schließen; das Fenster bliebe sonst in Telefonform, bis der Socket
+     abläuft. Zurück im Blick verbindet die Seite wie bisher neu und fragt wieder an.
+   - Fehler aus Runde 12, im Lauf am Mac gefunden: kam ein Fenster ohne den Umschalter nach vorn (⌘Tab, eine App
+     startet), blieb der Zeiger draußen und schob das eingepasste Bild vom Fenster weg. Gemessen: Bild in Fenstergröße,
+     aber auf dem Display, auf dem die Maus lag. Jetzt geht der Zeiger in die Mitte eines Fensters, das unter Auto
+     neu nach vorn kommt, außer er liegt schon darin oder hält eine Taste, wie nach dem Umschalter. Danach gemessen:
+     Zeiger bei 0,50/0,50 im Bild.
+   - Gemessen am Mac (Entwicklungs-Agent auf 47840, eigene Testfenster 1200 × 732, damit keine echte App angefasst
+     wird; Laptop-Display): hochkant (390 × 844) bei 0,5 gibt das Display nur 559 × 1210 her, das Bild zeigt 0,70×;
+     bei 1,0 genau 390 × 844, erstes Bild 113 ms nach der Anfrage; quer (844 × 390) bei 0,5 genau 1688 × 780, 121 ms.
+     Telefonform aus: alter Rahmen auf den Punkt. Zweites Fenster nach vorn: das erste hat den alten Rahmen, das
+     zweite die Form. Socket zu: alter Rahmen. Fenster mit Mindestgröße 900 × 600 bei 1,0: 900 × 844, Bild 0,43×,
+     danach keine weitere Änderung in 1 s. Live-Bild aus: alter Rahmen.
+   - Gemessen (T13): die Taste ist auf allen Telefonen 111 × 36 px, im Kopf, neben dem Titel; an fragt
+     `fit: "window", shape: 0.5` und lässt das Blatt offen; + fragt 0,7 mit Auto an; zeigt der Mac danach nur 0,6×,
+     sendet ein weiteres + nichts; eine Zange aufs Doppelte fragt 1,2 ohne Bewegung oder Klick; quer fragt 0,5; die
+     Anzeige-Taste fragt ohne `fit` und `shape`, die Rasttaste bleibt; außer Sicht sendet `view` aus, zurück fragt
+     wieder mit `shape`; Rasttaste aus fragt nur `fit`. T1 bis T12 unverändert.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -389,3 +429,8 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   `TextFocus` beobachtet die vordere App jetzt über `FrontApp`; „Folgt Text" wurde danach nicht am Mac geprüft.
   Displays an- und abstecken wurde nicht ausgelöst, nur die Liste und der Sprung. ⌘+ auf einer Belegung, auf der
   das Plus Umschalt braucht (US), ist ungeprüft; hier ist die Belegung deutsch.
+- Runde 13: gemessen wurde Telefonform nur mit eigenen AppKit-Testfenstern. Die installierte App wurde danach am
+  iPhone ausprobiert und für gut befunden, ohne Protokoll: wie einzelne Browser, Electron-Apps oder Terminals die neue
+  Größe annehmen (Animation, Raster in Zeichenbreite, Seitenleisten mit Mindestbreite), ist nicht festgehalten. ⌘Tab selbst wurde nicht gedrückt; ein Testfenster, das sich selbst nach vorn holt, geht denselben Weg.
+  Ob Safari auf iOS `visibilitychange` vor dem Einfrieren noch sendet, ist nicht geprüft; bleibt es aus, behält das
+  Fenster die Form, bis der Socket schließt. Ein abgestürzter Agent lässt das Fenster in Telefonform.

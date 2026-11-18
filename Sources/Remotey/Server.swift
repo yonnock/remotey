@@ -18,15 +18,24 @@ final class Server {
     private var displaysChanged: NSObjectProtocol?
     private var listeners: [NWListener] = []
     private var clients: [ObjectIdentifier: Client] = [:]
-    private lazy var screen = ScreenView(update: { [weak self] update in
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
-        let context = NWConnection.ContentContext(identifier: "frame", metadata: [metadata])
-        self?.viewer?.connection.send(content: update.data, contentContext: context, completion: .idempotent)
-    }, cursor: { [weak self] picture in
-        guard let self, let viewer = self.viewer, let message = Wire.cursor(picture) else { return false }
-        self.send(viewer, message)
-        return true
-    })
+    private lazy var screen: ScreenView = {
+        let screen = ScreenView(update: { [weak self] update in
+            let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
+            let context = NWConnection.ContentContext(identifier: "frame", metadata: [metadata])
+            self?.viewer?.connection.send(content: update.data, contentContext: context, completion: .idempotent)
+        }, cursor: { [weak self] picture in
+            guard let self, let viewer = self.viewer, let message = Wire.cursor(picture) else { return false }
+            self.send(viewer, message)
+            return true
+        })
+        // A window that came forward without the switcher, by Command-Tab or a key from the phone: the pointer
+        // goes to it as it does after the switcher, unless it is inside already or holds a button.
+        screen.cameForward = { [weak self] frame in
+            guard let self, self.viewer != nil, self.input.move(into: frame) else { return }
+            self.screen.pointerMoved()
+        }
+        return screen
+    }()
     private weak var viewer: Client?
 
     private final class Client {
@@ -75,6 +84,8 @@ final class Server {
         listeners = []
         pending.forEach { $0.cancel() }
         clients.values.forEach { $0.connection.cancel() }
+        // A window that has the phone's shape gets its frame back now, not with the news of the closed connection.
+        if viewer != nil { stopView() }
         if let displaysChanged { NotificationCenter.default.removeObserver(displaysChanged) }
         displaysChanged = nil
     }
