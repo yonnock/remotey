@@ -1,6 +1,7 @@
 // Smoke test against a running agent: HTTP page, auth, pointer movement, live view flow control.
-// Usage: node scripts/smoke.mjs [--h264] [--fps=120] [--capture=/tmp/view.h264] [--focus]   (moves the cursor a little and back; sends no keystrokes)
+// Usage: node scripts/smoke.mjs [--h264] [--fps=120] [--capture=/tmp/view.h264] [--focus] [--display]   (moves the cursor a little and back; sends no keystrokes)
 // --focus also brings another app's window to the front and the one that was in front back, so what you see changes for two seconds.
+// --display also puts the pointer on another display and back to where it was, on a Mac with more than one.
 // Close Remotey on the phone first: the most recent viewer gets the live view, so an open phone takes it back.
 import { writeFileSync } from 'node:fs';
 import { H264, JPEG, POINTER, parseH264, parseUpdate } from '../Web/live-view.js';
@@ -22,7 +23,7 @@ if ((await fetch(`${HTTP}/etc/passwd`)).status !== 404) fail('404');
 const html = await (await fetch(`${HTTP}/`)).text();
 // Every file the page names, with the type it needs: a stylesheet served as text/plain is not applied.
 const files = [...html.matchAll(/(?:src|href)="\/?([\w.-]+\.(js|css|png))"/g)].map(([, name, ext]) => [name, ext]);
-for (const name of ['touchpad.js', 'viewport.js', 'typing.js', 'live-view.js', 'apps.js']) files.push([name, 'js']); // imported by remote.js
+for (const name of ['touchpad.js', 'viewport.js', 'typing.js', 'live-view.js', 'apps.js', 'displays.js']) files.push([name, 'js']); // imported by remote.js
 const types = { js: 'text/javascript', css: 'text/css', png: 'image/png' };
 for (const [name, ext] of files) {
   const response = await fetch(`${HTTP}/${name}`);
@@ -72,7 +73,7 @@ if (hello.ax) {
 // fastest answer plus SLACK seconds (SendWindow.swift).
 const MAX_IN_FLIGHT = 2, SLACK = 0.2;
 let frames = 0, bytes = 0, acking = false, denied = false, held = [], expectKey = true, keyFrames = 0, cursors = 0;
-let apps = null, lists = 0;
+let apps = null, lists = 0, displays = null, fitted = 0, unfitted = 0, fitWidth = 0;
 const icons = new Map();
 const shown = (n) => send({ t: 'shown', n });
 good.onMessage = (e) => {
@@ -83,6 +84,7 @@ good.onMessage = (e) => {
       cursors++;
     } else if (m.t === 'view') denied = m.ok === false;
     else if (m.t === 'apps') { apps = m.list; lists++; }
+    else if (m.t === 'displays') displays = m.list;
     else if (m.t === 'icon') {
       if (!Buffer.from(m.png, 'base64').subarray(1, 4).equals(Buffer.from('PNG'))) fail(`icon ${m.id} is no PNG`);
       icons.set(m.id, (icons.get(m.id) ?? 0) + 1);
@@ -103,6 +105,7 @@ good.onMessage = (e) => {
     if (capture) packets.push(Buffer.from(data));
   } else if (Buffer.from(update.picture.subarray(0, 2)).readUInt16BE() !== 0xffd8) fail('JPEG picture without its marker');
   frames++;
+  if (update.fitted) { fitted++; fitWidth = update.width; } else unfitted++;
   bytes += e.data.byteLength;
   if (acking) shown(update.n); else held.push(update.n);
 };
@@ -140,6 +143,28 @@ if (process.argv.includes('--focus')) {
       if ((await list()).find((a) => a.front)?.pid !== before.pid) fail('the app that was in front did not come back');
     }
     console.log('ok   apps: a window of another app comes to the front, and the one before comes back');
+  }
+}
+
+// The display picker: every display with its place, one of them with the pointer.
+const places = async () => { displays = null; send({ t: 'displays' }); for (let i = 0; i < 40 && !displays; i++) await sleep(50); if (!displays) fail('no list of displays'); return displays; };
+await places();
+if (!displays.length || !displays.every((d) => Number.isInteger(d.id) && d.name && d.w > 0 && d.h > 0)) fail('a display without id, name or size');
+if (displays.filter((d) => d.pointer).length !== 1) fail('the pointer is on no display, or on several');
+console.log(`ok   displays: ${displays.map((d) => `${d.name} ${d.w}×${d.h}`).join(', ')}`);
+if (process.argv.includes('--display')) {
+  const home = displays.find((d) => d.pointer), other = displays.find((d) => !d.pointer);
+  if (!other || !hello.ax) console.log(`skip display: ${other ? 'no Accessibility permission' : 'one display'}`);
+  else {
+    const [x, y] = pointer();
+    send({ t: 'display', id: other.id });
+    await sleep(400);
+    if ((await places()).find((d) => d.pointer)?.id !== other.id) fail('the pointer did not go to the display asked for');
+    send({ t: 'display', id: home.id });
+    await sleep(400);
+    const [bx, by] = pointer();
+    if ((await places()).find((d) => d.pointer)?.id !== home.id || Math.abs(bx - x) > 1 || Math.abs(by - y) > 1) fail(`the pointer came back to ${bx}, ${by} instead of ${x}, ${y}`);
+    console.log(`ok   displays: the pointer goes to "${other.name}" and back to where it left "${home.name}"`);
   }
 }
 
@@ -193,6 +218,22 @@ if (denied) {
     if (frames - beforeResize < 10) fail('stream stalled after resize');
     if (codec === 'h264' && keyFrames === keysBeforeResize) fail('resized H.264 stream has no new IDR');
     console.log('ok   view: resize continues with a fresh stream');
+    // "Auto": the agent picks the region, the window in front, whole. With no such window (the Finder's desktop
+    // in front) the pictures come as asked for by zoom, and say so.
+    fitted = unfitted = 0;
+    send({ t: 'view', on: true, w: 390, h: 844, zoom: 1, dpr: 2, codec, fps, fit: 'window' });
+    await stir();
+    if (fitted + unfitted < 10) fail('stream stalled when asked to fit the window in front');
+    if (fitted && unfitted > 2) fail(`${unfitted} pictures not fitted among ${fitted} fitted ones`);
+    // As wide as the window or wider (then its height limits), and never magnified beyond 2x.
+    if (fitted && fitWidth < 390 / 2 - 1) fail(`fitted view of ${fitWidth} points: more than 2x`);
+    console.log(fitted ? `ok   view: fitted to the window in front, ${Math.round(fitWidth)} points across (${(390 / fitWidth).toFixed(2)}x)`
+      : 'ok   view: no window in front to fit, the view keeps its zoom');
+    fitted = 0;
+    send({ t: 'view', on: true, w: 390, h: 844, zoom: 1, dpr: 2, codec, fps });
+    await stir();
+    if (fitted) fail('pictures still fitted after the page took the zoom back');
+    console.log('ok   view: back to the zoom set by hand');
   }
 }
 good.close();

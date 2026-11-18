@@ -79,11 +79,15 @@ svg { width: 20px; height: 20px; fill: currentColor; pointer-events: none; }
 #meter.idle b { color: var(--muted); }
 /* Lit while the view shows the text being typed instead of the pointer. Moving the pointer ends it. */
 #follow { height: 26px; display: flex; align-items: center; padding: 0 9px; color: var(--accent); font-size: 10px; }
-/* Zoom: two keys around a recessed readout, at the top corner away from the thumb. The readout returns to 1×. */
+/* Zoom: two keys around a recessed readout, at the top corner away from the thumb. The readout is a key too:
+   it switches "Auto", and its legend is the lamp that says so. */
 #zoom { margin-left: auto; display: flex; align-items: center; gap: 3px; padding: 3px; pointer-events: auto; border-radius: 10px; }
 #zoom .key { width: 34px; min-width: 34px; height: 32px; padding: 0; font-size: 19px; font-weight: 400; border-radius: 7px; }
 .readout { width: 50px; height: 32px; border-radius: 6px; background: var(--deep); box-shadow: inset 0 1px 3px var(--edge);
-  font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); position: relative; }
+  font-size: 13px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; color: var(--text); position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.readout .legend { font-size: 8px; letter-spacing: .12em; margin-right: -.12em; color: var(--faint); }
+.readout.on .legend { color: var(--accent); }
 .readout::after { content: ''; position: absolute; inset: -6px -1px; }
 .readout.pressed { color: var(--accent); }
 body:not(.view) #zoom, body:not(.view) #meter { display: none; }
@@ -178,7 +182,8 @@ body.drawer #drawer.held, body.apps #switcher.held { transform: translate3d(0, v
 .keys { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); grid-template-rows: 1fr 1fr; gap: 10px 6px; }
 .keys .cap:not(.legend) { font-size: 18px; }
 .keys .legend { font-size: 10px; letter-spacing: .06em; }
-.keys .wide { grid-column: span 2; }
+/* Keys that bring their own Command: two signs side by side. */
+.keys .pair { font-size: 14px; letter-spacing: -.02em; }
 
 /* Regler: each a legend with its value over a slider. The finger sets the value where it touches and while
    it slides; the thumb snaps from detent to detent. The longer tick marks the default. */
@@ -256,6 +261,21 @@ body.drawer #drawer.held, body.apps #switcher.held { transform: translate3d(0, v
   line-height: 1.5; text-align: center; }
 #apps.notice p { margin: 0; }
 
+/* The display picker: the Mac's displays as they are arranged, each a small screen of dark glass. The one
+   that holds the pointer is lit. The map is as wide as the sheet or as tall as two keys, whichever limits. */
+#displays { --map-h: 104px; flex: none; position: relative; align-self: center; width: min(100%, calc(var(--ratio, 2) * var(--map-h)));
+  aspect-ratio: var(--ratio, 2); }
+.display { position: absolute; padding: 2px; }
+.display > span { width: 100%; height: 100%; display: grid; place-items: center; padding: 0 4px; overflow: hidden;
+  border-radius: 6px; background: var(--deep); box-shadow: inset 0 1px 3px var(--edge); color: var(--muted);
+  font-size: 10px; font-weight: 600; line-height: 1.15; text-align: center; }
+/* A long name ends in an ellipsis after two lines; the map says which display it is. */
+.display > span > span { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  line-clamp: 2; overflow: hidden; }
+.display.here > span { color: var(--text); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.display.pressed > span, .display:active > span { background: var(--cap); }
+.display:disabled > span { opacity: .5; }
+
 /* Typing: the field and the keys the iOS keyboard lacks, right above it. Out of sight the field stays
    rendered, so iOS can still focus it. */
 #typebar { grid-area: dock; min-width: 0; display: grid; grid-template: "acc acc" auto "slot done" 44px / minmax(0, 1fr) auto; gap: 8px; }
@@ -288,8 +308,10 @@ body.wide .tools .key, body.wide .slot { width: auto; height: 44px; }
 body.wide .slot { justify-content: center; padding: 0; }
 body.wide .slot span { display: none; }
 body.wide .sheet { left: auto; width: min(380px, calc(100% - 16px)); }
-/* On its side the display is short: five icons in a row keep a dozen apps in sight without scrolling. */
+/* On its side the display is short: five icons in a row keep a dozen apps in sight without scrolling, and a
+   lower map of the displays leaves them a row on the smallest phone. */
 body.wide #apps.grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+body.wide #displays { --map-h: 72px; }
 /* Typing on its side: one row above the keyboard when it fits, the display above it. */
 body.wide.typing #app { grid-template: "console" 1fr "dock" auto / minmax(0, 1fr); }
 @media (min-width: 640px) {

@@ -2,9 +2,10 @@
 // No agent, no network: the page gets a fake WebSocket and a visual viewport whose size the script sets, so
 // the keyboard can be "opened". Chromium is not iOS Safari: this checks the page's own logic and layout,
 // not WebKit's keyboard, safe areas or gesture handling.
-// Usage: node scripts/ui-verify.mjs [--web=Web] [--json=out.json] [--only=T1,T9]
+// Usage: node scripts/ui-verify.mjs [--web=Web] [--json=out.json] [--only=T1,T9] [--shots=DIR]
+// --shots saves pictures of the page at moments T8, T11 and T12 name, for looking at what they measure.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
@@ -18,10 +19,15 @@ import { extname, join, resolve } from 'node:path';
 // 8: T2 also turns the phone and back: each way of holding it keeps its own zoom.
 // 9: the Apps key counts as a main action; T9 opens the switcher, with a socket that answers `apps`.
 // 10: T10 locks the fake Mac: the type key's field takes the password and sends it whole.
-export const VERIFIER_VERSION = 10;
+// 11: the zoom readout switches "Auto" (T11, with a fake Mac that answers with fitted pictures) and no longer
+//     returns to 1×, which T2 now reaches with the zoom keys; T12 opens the display picker on a Mac with three
+//     displays; T8 also taps the keys for an app's zoom.
+export const VERIFIER_VERSION = 11;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
+const shots = arg('shots', '');
+if (shots) mkdirSync(shots, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function chromePath() {
@@ -77,6 +83,12 @@ const APPS = [
   ...['Kalender', 'Nachrichten', 'Systemeinstellungen', 'Terminal', 'Notizen', 'Vorschau', 'Karten', 'Fotos', 'Finder']
     .map((name, i) => ({ pid: 510 + i, name, icon: name, front: false, hidden: false, windows: [] })),
 ];
+// The fake Mac's displays in T12: a laptop above two large displays side by side. One name is markup.
+const DISPLAYS = [
+  { id: 1, name: 'Built-in Retina Display', x: 0, y: 0, w: 2056, h: 1329, pointer: true },
+  { id: 2, name: 'Studio Display', x: -1939, y: 1329, w: 3008, h: 1692, pointer: false },
+  { id: 3, name: '<img src=y onerror="window.__xss = 1">', x: 1069, y: 1329, w: 3008, h: 1692, pointer: false },
+];
 // A 1x1 PNG for the one icon the fake Mac sends.
 const ICON = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
@@ -88,11 +100,15 @@ const harness = `(() => {
     send(data) {
       const m = JSON.parse(data);
       sent.push({ ...m, at: performance.now() });
+      if (m.t === 'view') window.__view = m; // outlives a task's clearing of the list
       if (m.t === 'auth') setTimeout(() => this.onmessage?.({ data: JSON.stringify({ t: 'ok', ax: true, page: 'test' }) }), 0);
       if (m.t === 'apps') setTimeout(() => {
         this.onmessage?.({ data: JSON.stringify({ t: 'apps', list: ${JSON.stringify(APPS)} }) });
         this.onmessage?.({ data: JSON.stringify({ t: 'icon', id: 'safari', png: '${ICON}' }) });
       }, window.__appsDelay ?? 0); // T9 makes the Mac slow to answer
+      // One display unless a task plugs in more: then the picker shows.
+      if (m.t === 'displays') setTimeout(() => this.onmessage?.({ data: JSON.stringify({ t: 'displays', list: window.__displays ?? [${JSON.stringify(DISPLAYS[0])}] }) }),
+        window.__appsDelay ?? 0);
     }
     close() { this.readyState = 3; }
   };
@@ -103,14 +119,17 @@ const harness = `(() => {
   Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
   addEventListener('resize', () => { if (!window.__kb) Object.assign(vv, { width: innerWidth, height: innerHeight }); });
   // The Mac's answer to the newest view request: a JPEG picture of the display's aspect that shows \`points\` Mac
-  // points across, in the format of Wire.swift. Resolves once the page had time to draw it.
-  window.__picture = async (points) => {
-    const request = sent.findLast((m) => m.t === 'view'), socket = window.__socket;
+  // points across, in the format of Wire.swift. Resolves once the page had time to draw it. \`fitted\`: the Mac
+  // chose the zoom itself, for the window in front, which the picture then shows as a light sheet.
+  window.__picture = async (points, fitted = false) => {
+    const request = window.__view, socket = window.__socket;
     const canvas = Object.assign(document.createElement('canvas'), { width: 64, height: Math.max(2, Math.round(64 * request.h / request.w)) });
-    canvas.getContext('2d').fillRect(0, 0, canvas.width, canvas.height);
+    const context = canvas.getContext('2d');
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    if (fitted) { context.fillStyle = '#d9dce1'; context.fillRect(0, canvas.height * 0.3, canvas.width, canvas.height * 0.4); }
     const jpeg = new Uint8Array(await (await new Promise((r) => canvas.toBlob(r, 'image/jpeg'))).arrayBuffer());
     const packet = new Uint8Array(35 + jpeg.length), head = new DataView(packet.buffer);
-    packet.set([1, 30, 0]);
+    packet.set([1, 30, fitted ? 2 : 0]);
     [0.5, 0.5, 0.5, 0.5, points].forEach((value, i) => head.setFloat32(3 + i * 4, value, true));
     head.setUint32(27, request.v, true);
     head.setUint32(31, window.__pictures = (window.__pictures ?? 0) + 1, true);
@@ -143,6 +162,8 @@ async function openPage(width, height) {
     close: () => cdp('Target.closeTarget', { targetId }),
     resize: async (w, h) => { await s('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 3, mobile: true }); await sleep(250); },
     sent: () => evaluate('window.__sent'),
+    /** With --shots: a picture of the page as it is now. */
+    shot: async (name) => { if (shots) writeFileSync(join(shots, `${name}.png`), Buffer.from((await s('Page.captureScreenshot', { format: 'png' })).data, 'base64')); },
     clear: () => evaluate('window.__sent.length = 0'),
     rect: (selector) => evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null;
       const r = e.getBoundingClientRect(); const st = getComputedStyle(e);
@@ -257,21 +278,14 @@ await task('T2', async () => {
   const views = sent.filter((m) => m.t === 'view');
   const pinch = { zoomAfter: views.at(-1)?.zoom ?? 0.5, zoomed: (views.at(-1)?.zoom ?? 0.5) > 0.5,
     misactions: count(sent, 'm') + count(sent, 's') + count(sent, 'c') };
-  // Back to 1x with the manual control.
+  // Back to 1x: with the − key, step by step. Before version 11 the readout went there in one tap.
   await page.clear();
   let taps = 0;
-  for (const selector of ['[data-act=zoom-reset]', '#zoom']) {
-    const target = await page.rect(selector);
-    if (!target?.shown) continue;
-    if (selector === '#zoom') { // baseline: the "1" detent is the middle of five
-      const p = target.w > target.h ? [target.x + target.w / 2, target.y + target.h / 2] : [target.x + target.w / 2, target.y + target.h / 2];
-      await page.touch('touchStart', [p]); await sleep(40); await page.touch('touchEnd', []);
-    } else await page.tap(selector);
-    taps++;
-    await sleep(200);
-    break;
-  }
-  const after = (await page.sent()).filter((m) => m.t === 'view').at(-1)?.zoom;
+  const asked = async () => (await page.sent()).filter((m) => m.t === 'view').at(-1)?.zoom;
+  if ((await page.rect('[data-act=zoom-reset]'))?.shown) { await page.tap('[data-act=zoom-reset]'); taps++; }
+  else for (; taps < 6 && ((await asked()) ?? pinch.zoomAfter) > 1.001; taps++) await page.tap('[data-act=zoom][data-step="-1"]');
+  await sleep(200);
+  const after = await asked();
   await page.close();
   return { pinch, reset: { taps, zoom: after ?? null, ok: after === 1 }, out: await zoomOut(), turned: await zoomTurned() };
 });
@@ -560,8 +574,19 @@ await task('T8', async () => {
   await page.tap('[data-click=back]');
   const sent = await page.sent();
   const clicks = sent.filter((m) => m.t === 'c').map((m) => [m.b, ...m.mods].join(' '));
+  // The keys for an app's zoom bring their Command along; an armed modifier joins it, for one key.
+  await page.clear();
+  for (const key of ['+', '-', '0']) await page.tap(`[data-key="${key}"]`);
+  await page.tap('[data-mod=alt]');
+  await page.tap('[data-key="+"]');
+  await page.tap('[data-key="+"]');
+  const keys = (await page.sent()).map((m) => (m.t === 'key' ? [m.k, ...m.mods, m.n].join(' ') : m.t));
+  await page.shot('keys');
+  const sizes = await page.evaluate(`[...document.querySelectorAll('.keys .cap')].map((e) => { const r = e.getBoundingClientRect(); return Math.round(Math.min(r.width, r.height)); })`);
   await page.close();
-  return { clicks, others: sent.length - clicks.length, ok: clicks.join() === 'back,forward,back cmd,back' && sent.length === clicks.length };
+  return { clicks, others: sent.length - clicks.length, keys, smallestKey: Math.min(...sizes),
+    ok: clicks.join() === 'back,forward,back cmd,back' && sent.length === clicks.length
+      && keys.join() === '+ cmd 1,- cmd 1,0 cmd 1,+ cmd alt 1,+ cmd 1' && sizes.length === 16 && Math.min(...sizes) >= 27 };
 });
 
 // T9: the switcher. On every phone, upright and sideways: the icons are large enough to tap, lie inside the
@@ -733,6 +758,155 @@ await task('T10', async () => {
       && unready.failed && unready.hint === 'Mac nicht bereit, nochmal?' && !retry.failed && retry.hint === 'Passwort des Macs'
       && opened.type === 'text' && !opened.focused && !opened.failed && opened.hint === '' && opened.label === 'Tippen…' && opened.keys
       && JSON.stringify(relayed) === '[{"t":"text","s":"hi"},{"t":"key","k":"return","mods":[],"n":1}]' };
+});
+
+// T11: "Auto". The readout's key asks the Mac to fit the view to the window in front. The Mac picks the zoom and
+// the readout shows it, with no request in return; another window, another zoom. Turned, the phone asks again.
+// A zoom key or a pinch takes the zoom back into the hand, from where the picture stands. Without a window
+// in front the zoom set by hand counts, and its limit is taken over as before.
+await task('T11', async () => {
+  const page = await openPage(390, 844);
+  const r = await page.rect('#screen');
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  const views = async () => (await page.sent()).filter((m) => m.t === 'view').map(({ at, v, ...m }) => m);
+  const state = () => page.evaluate(`(() => { const key = document.querySelector('[data-act=fit]'), lamp = key.querySelector('.legend');
+    return { readout: document.querySelector('#zoomValue').textContent, on: key.classList.contains('on'), pressed: key.getAttribute('aria-pressed'),
+      lamp: getComputedStyle(lamp).color, label: key.getAttribute('aria-label'), preview: document.querySelector('#picture').style.transform,
+      stored: localStorage.getItem('remotey-fit'), w: Math.round(key.getBoundingClientRect().width), h: Math.round(key.getBoundingClientRect().height),
+      clipped: lamp.scrollWidth > key.clientWidth || document.querySelector('#zoomValue').scrollWidth > key.clientWidth }; })()`);
+  const text = (z) => `${String(Math.round(z * 100) / 100).replace('.', ',')}×`;
+  const off = await state();
+  await page.evaluate(`window.__picture(${r.w / 0.5})`); // the first JPEG only switches the page from H.264 to JPEG
+  await sleep(200);
+  await page.clear();
+  await page.tap('[data-act=fit]');
+  const asked = { ...(await state()), views: await views() };
+  // The window in front is 1512 points wide, then another one of 900 comes forward.
+  await page.clear();
+  await page.evaluate(`window.__picture(1512, true)`);
+  const first = { ...(await state()), views: (await views()).length };
+  await page.shot('auto-upright');
+  await page.evaluate(`window.__picture(900, true)`);
+  const second = { ...(await state()), views: (await views()).length };
+  // Sideways the page asks again, still for the window, and takes the zoom that fits there.
+  await page.resize(844, 390); await sleep(200);
+  const wide = await page.rect('#screen');
+  const turned = { views: await views() };
+  await page.evaluate(`window.__picture(1800, true)`);
+  Object.assign(turned, await state());
+  await page.shot('auto-sideways');
+  await page.resize(390, 844); await sleep(200);
+  await page.evaluate(`window.__picture(900, true)`);
+  // The + key: by hand from here on, at the next step above what the picture had.
+  await page.clear();
+  await page.tap('[data-act=zoom][data-step="1"]');
+  const stepped = { ...(await state()), views: await views() };
+  await page.evaluate(`window.__picture(${r.w / 0.5})`);
+  // On again, then a pinch: the picture is scaled from the zoom it has, and the request is for that.
+  await page.tap('[data-act=fit]');
+  await page.evaluate(`window.__picture(1512, true)`);
+  await page.clear();
+  await page.touch('touchStart', [[cx - 40, cy], [cx + 40, cy]]); await sleep(16);
+  for (let i = 1; i <= 20; i++) { await page.touch('touchMove', [[cx - 40 - i * 2, cy], [cx + 40 + i * 2, cy]]); await sleep(16); }
+  const during = await state();
+  await page.touch('touchEnd', []); await sleep(200);
+  const sent = await page.sent();
+  const pinched = { during, ...(await state()), views: await views(), misactions: count(sent, 'm') + count(sent, 's') + count(sent, 'c') };
+  // "Auto" with no window in front (the Finder's desktop): the Mac answers at the zoom set by hand.
+  await page.tap('[data-act=zoom][data-step="-1"]'); // a known step: 0.35
+  await page.tap('[data-act=fit]');
+  await page.clear();
+  await page.evaluate(`window.__picture(${r.w / 0.35})`);
+  const none = { ...(await state()), views: (await views()).length };
+  await page.evaluate(`window.__picture(1512, true)`);
+  await page.evaluate(`window.__picture(${r.w / 0.35})`);
+  const gone = { ...(await state()), views: (await views()).length };
+  await page.close();
+  const fits = (list) => list.map((m) => `${m.fit ?? '-'} ${m.zoom}`).join();
+  const amber = 'rgb(242, 184, 75)';
+  return { off, asked, first, second, turned, stepped, pinched, none, gone,
+    ok: !off.on && off.pressed === 'false' && off.lamp !== amber && off.readout === '0,5×' && !off.clipped && off.h >= 32
+      && asked.on && asked.pressed === 'true' && asked.lamp === amber && asked.stored === 'true' && fits(asked.views) === 'window 0.5'
+      && asked.label.includes('Auto an')
+      && first.readout === text(r.w / 1512) && first.views === 0 && first.preview === '' && !first.clipped
+      && second.readout === text(r.w / 900) && second.views === 0 && second.preview === ''
+      && turned.views.length >= 1 && turned.views.every((m) => m.fit === 'window') && turned.readout === text(wide.w / 1800) && turned.on
+      && !stepped.on && stepped.stored === 'false' && fits(stepped.views) === '- 0.5'
+      && pinched.during.readout === text(r.w / 1512 * 2) && Math.abs(Number(pinched.during.preview.match(/scale\(([\d.]+)\)/)?.[1]) - 2) < 0.01 && !pinched.on && pinched.misactions === 0
+      && pinched.views.length === 1 && pinched.views[0].fit === undefined && Math.abs(pinched.views[0].zoom - r.w / 1512 * 2) < 0.002
+      && none.on && none.readout === '0,35×' && none.views === 0 && gone.readout === '0,35×' && gone.views === 0 };
+});
+
+// T12: the display picker. With three displays the Apps sheet shows them under the apps, as they are arranged,
+// the pointer's one lit. A tap asks for that display and puts the sheet away. The map follows a display that is
+// unplugged, and one display shows no map at all.
+await task('T12', async () => {
+  const out = { layout: {} };
+  const isOpen = (page) => page.evaluate(`document.body.classList.contains('apps')`);
+  const open = async (page) => { if (!(await isOpen(page))) await page.tap('[data-act=apps]'); await sleep(450); };
+  const tiles = (page) => page.evaluate(`(() => { const box = (e) => e.getBoundingClientRect();
+    const map = document.querySelector('#displays'), sheet = box(document.querySelector('#switcher')), well = box(document.querySelector('.well'));
+    const list = [...map.querySelectorAll('.display')].map((e) => { const r = box(e); return { id: e.dataset.display, x: r.x, y: r.y, w: r.width, h: r.height,
+      here: e.classList.contains('here'), name: e.textContent, label: e.getAttribute('aria-label'), off: e.disabled,
+      cut: e.firstElementChild.firstElementChild.getBoundingClientRect().height > e.firstElementChild.clientHeight + 0.5 }; });
+    const apps = [...document.querySelectorAll('.app')].map(box);
+    return { hidden: map.hidden, list, smallest: list.length ? Math.round(Math.min(...list.map((t) => Math.min(t.w, t.h)))) : 0,
+      inside: list.every((t) => t.x >= sheet.left - 0.5 && t.x + t.w <= sheet.right + 0.5 && t.y >= well.bottom - 0.5 && t.y + t.h <= sheet.bottom + 0.5),
+      belowZoom: sheet.top >= box(document.querySelector('#zoom')).bottom - 0.5, appsInSight: apps.filter((t) => t.bottom <= well.bottom + 0.5).length }; })()`);
+  // As arranged: the laptop above, the two large ones under it, side by side and of one size.
+  const arranged = (list) => { const [laptop, left, right] = list;
+    return list.length === 3 && laptop.y + laptop.h <= left.y + 0.5 && Math.abs(left.y - right.y) < 0.5 && Math.abs(left.x + left.w - right.x) < 0.5
+      && Math.abs(left.w - right.w) < 0.5 && laptop.w < left.w && laptop.x > left.x && laptop.x + laptop.w < right.x + right.w; };
+  for (const [phone, [w, h]] of Object.entries(PHONES)) {
+    for (const orientation of ['portrait', 'landscape']) {
+      const page = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]));
+      await page.evaluate(`window.__displays = ${JSON.stringify(DISPLAYS)}`);
+      await open(page);
+      const seen = await tiles(page);
+      out.layout[`${phone} ${orientation}`] = { tiles: seen.list.length, smallest: seen.smallest, inside: seen.inside, belowZoom: seen.belowZoom,
+        appsInSight: seen.appsInSight, arranged: arranged(seen.list), cut: seen.list.filter((t) => t.cut).map((t) => t.name) };
+      if (phone === 'small') await page.shot(`displays-${orientation}`);
+      await page.close();
+    }
+  }
+  const page = await openPage(375, 812);
+  // One display: no map, and the sheet is as it was.
+  await open(page);
+  const one = { ...(await tiles(page)), asked: (await page.sent()).filter((m) => m.t === 'displays').length };
+  await page.tap('[data-act=apps]'); await sleep(300);
+  // Three: plugged in while the sheet was shut.
+  await page.evaluate(`window.__displays = ${JSON.stringify(DISPLAYS)}`);
+  await open(page);
+  const three = await tiles(page);
+  three.markup = await page.evaluate(`!!document.querySelector('#displays img') || !!window.__xss`);
+  await page.clear();
+  await page.tap('[data-display="2"]'); await sleep(300);
+  const tap = { sent: (await page.sent()).filter((m) => m.t !== 'view').map(({ at, ...m }) => m), closed: !(await isOpen(page)) };
+  // One is unplugged while the sheet is open: the Mac says so without being asked.
+  await open(page);
+  await page.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify({ t: 'displays', list: [DISPLAYS[0], { ...DISPLAYS[1], pointer: true }].map((d, i) => ({ ...d, pointer: i === 1 })) }))} })`);
+  const two = await tiles(page);
+  // Opened again while the Mac is slow to answer: the map of last time takes no tap.
+  await page.tap('[data-act=apps]'); await sleep(300);
+  await page.evaluate(`window.__appsDelay = 400`);
+  await page.tap('[data-act=apps]'); await sleep(150);
+  await page.clear();
+  const old = (await tiles(page)).list[0];
+  await page.touch('touchStart', [[old.x + old.w / 2, old.y + old.h / 2]]); await sleep(40); await page.touch('touchEnd', []); await sleep(60);
+  const stale = { off: (await tiles(page)).list.every((t) => t.off), sent: (await page.sent()).filter((m) => m.t === 'display').length, open: await isOpen(page) };
+  await sleep(500);
+  stale.after = (await tiles(page)).list.filter((t) => !t.off).length;
+  await page.close();
+  return { ...out, one: { hidden: one.hidden, asked: one.asked, appsInSight: one.appsInSight }, three, tap, two: { tiles: two.list.length, here: two.list.filter((t) => t.here).map((t) => t.id) }, stale,
+    // Sideways the display is short: the map is lower there, so a row of apps stays in sight on the smallest phone.
+    ok: Object.entries(out.layout).every(([name, l]) => l.tiles === 3 && l.smallest >= (name.endsWith('portrait') ? 44 : 30) && l.inside && l.belowZoom
+        && l.arranged && l.appsInSight >= 5 && l.cut.length === 0)
+      && one.hidden && one.asked === 1 && !three.hidden && arranged(three.list) && !three.markup
+      && three.list.filter((t) => t.here).map((t) => t.id).join() === '1' && three.list[0].label === 'Display Built-in Retina Display, mit dem Zeiger'
+      && three.list[2].name.startsWith('<img')
+      && JSON.stringify(tap.sent) === '[{"t":"display","id":2}]' && tap.closed
+      && two.list.length === 2 && two.list.filter((t) => t.here).map((t) => t.id).join() === '2'
+      && stale.off && stale.sent === 0 && stale.open && stale.after === 3 };
 });
 
 socket.close();

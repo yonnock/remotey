@@ -2,14 +2,16 @@
 export const POINTER = 0, JPEG = 1, H264 = 2;
 
 // One binary message of the live view, little endian: Uint8 kind, Uint8 frames per second the view runs at,
-// Uint8 flags (1: the view follows the text caret), Float32 pointer x and y and Float32 focus x and y (0...1
-// inside the picture; the focus is what the view is cut around), Float32 picture width in Mac points, Uint32
+// Uint8 flags (1: the view follows the text caret, 2: it is fitted to the window in front, so its zoom is the
+// Mac's choice), Float32 pointer x and y and Float32 focus x and y (0...1 inside the picture; the focus is the
+// pointer, or the caret while the view follows the text), Float32 picture width in Mac points, Uint32
 // number of the last pointer move it includes, Uint32 number of the view request it was cut for, Uint32
 // picture number, then the picture. POINTER has none: pointer or focus moved inside the picture sent last.
 export const HEADER = 35;
 export function parseUpdate(buffer) {
   const head = new DataView(buffer), float = (at) => head.getFloat32(at, true);
   return { kind: head.getUint8(0), fps: head.getUint8(1), followsText: (head.getUint8(2) & 1) === 1,
+    fitted: (head.getUint8(2) & 2) === 2,
     x: float(3), y: float(7), fx: float(11), fy: float(15), width: float(19),
     q: head.getUint32(23, true), v: head.getUint32(27, true), n: head.getUint32(31, true),
     picture: new Uint8Array(buffer, HEADER) };
@@ -62,7 +64,8 @@ export class LiveView {
   /**
    * The zoom the page wants, in CSS pixels per Mac point. Until a picture of that zoom arrives (while a
    * pinch runs, or the request is under way) the picture at hand stands in, scaled around the point the
-   * view is cut around, which is where the new picture will be centred.
+   * view is cut around, which is where the new picture will be centred. 0: the Mac picks the zoom (the view
+   * is fitted to a window), so every picture is shown as it comes.
    */
   zoomTo(zoom) {
     this.target = zoom;

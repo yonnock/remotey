@@ -75,6 +75,19 @@ final class InputTests: XCTestCase {
         XCTAssertEqual(events.map(\.type), [.leftMouseDown])
     }
 
+    /// A display chosen on the phone: the pointer goes to the place named, also inside the window it is in.
+    func testThePointerGoesToAPlaceOnADisplayUnlessItHoldsAButton() {
+        let display = CGDisplayBounds(CGMainDisplayID())
+        let target = CGPoint(x: display.midX.rounded(), y: display.midY.rounded())
+        XCTAssertTrue(input.move(to: target))
+        XCTAssertEqual(events.map(\.type), [.mouseMoved])
+        XCTAssertEqual(events.first?.location, target)
+        XCTAssertFalse(input.move(to: CGPoint(x: -90_000, y: -90_000)), "no display there")
+        input.button(.left, down: true)
+        XCTAssertFalse(input.move(to: target), "the drag goes on where it is")
+        XCTAssertEqual(events.map(\.type), [.mouseMoved, .leftMouseDown])
+    }
+
     private var scrolls: [String] {
         events.filter { $0.type == .scrollWheel }.map { event in
             let phase = event.getIntegerValueField(.scrollWheelEventScrollPhase)

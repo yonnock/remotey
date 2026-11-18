@@ -5,7 +5,7 @@ import XCTest
 final class WireTests: XCTestCase {
     func testLayoutOfAnUpdateWithAPicture() {
         let update = LiveUpdate(pointer: CGPoint(x: 0.5, y: 0.25), focus: CGPoint(x: 0.75, y: 1.5), followsText: true,
-                                request: 9, width: 614, framesPerSecond: 120, sequence: 0x0102_0304,
+                                fitted: false, request: 9, width: 614, framesPerSecond: 120, sequence: 0x0102_0304,
                                 picture: (number: 7, content: .h264(Data([66, 192, 31, 1]))))
         let data = update.data
         func float(_ offset: Int) -> Float32 {
@@ -18,7 +18,7 @@ final class WireTests: XCTestCase {
     }
 
     func testKinds() {
-        var update = LiveUpdate(pointer: .zero, focus: .zero, followsText: false, request: 0, width: 614,
+        var update = LiveUpdate(pointer: .zero, focus: .zero, followsText: false, fitted: false, request: 0, width: 614,
                                 framesPerSecond: 60, sequence: 1, picture: nil)
         XCTAssertEqual(Array(update.data), [0, 60, 0] + [UInt8](repeating: 0, count: 16) + [0, 0x80, 0x19, 0x44]
                        + [1, 0, 0, 0] + [UInt8](repeating: 0, count: 8),
@@ -26,6 +26,14 @@ final class WireTests: XCTestCase {
         update.picture = (number: 1, content: .jpeg(Data([0xff, 0xd8])))
         XCTAssertEqual(update.data[0], 1)
         XCTAssertEqual(update.data.count, LiveUpdate.headerSize + 2)
+    }
+
+    func testFlagsSayWhatTheViewIsCutAround() {
+        var update = LiveUpdate(pointer: .zero, focus: .zero, followsText: false, fitted: true, request: 0, width: 614,
+                                framesPerSecond: 60, sequence: 1, picture: nil)
+        XCTAssertEqual(update.data[2], 2, "fitted to the window in front")
+        update.followsText = true
+        XCTAssertEqual(update.data[2], 3, "and showing the text typed into it")
     }
 
     func testTextMessagesAreJSON() throws {
@@ -76,6 +84,21 @@ final class WireTests: XCTestCase {
         XCTAssertEqual((apps[1]["windows"] as? [Any])?.count, 0)
     }
 
+    func testTheListOfDisplaysNamesTheirPlacesAndThePointers() throws {
+        let list = [
+            Displays.Display(id: 1, name: #"Built-in "Retina""#, x: 0, y: 0, w: 2056, h: 1329, pointer: false),
+            Displays.Display(id: 69_734_662, name: "Studio Display", x: -1939, y: 1329, w: 3008, h: 1692, pointer: true),
+        ]
+        let message = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(Wire.displays(list).utf8)) as? [String: Any])
+        XCTAssertEqual(message["t"] as? String, "displays")
+        let displays = try XCTUnwrap(message["list"] as? [[String: Any]])
+        XCTAssertEqual(displays.map { $0["id"] as? Int }, [1, 69_734_662])
+        XCTAssertEqual(displays.map { $0["name"] as? String }, [#"Built-in "Retina""#, "Studio Display"])
+        XCTAssertEqual(displays.map { $0["pointer"] as? Bool }, [false, true])
+        XCTAssertEqual(["x", "y", "w", "h"].map { displays[1][$0] as? Double }, [-1939, 1329, 3008, 1692])
+        XCTAssertEqual(Set(displays[0].keys), ["id", "name", "x", "y", "w", "h", "pointer"])
+    }
+
     func testAnIconTravelsAsPNGUnderItsName() throws {
         let png = Data([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
         let data = Data(Wire.icon(#"com.example."odd""#, png: png).utf8)
@@ -108,6 +131,8 @@ final class WireTests: XCTestCase {
         guard case .apps = try command(#"{"t":"apps"}"#) else { return XCTFail("apps") }
         guard case .focus(pid: 412, window: 7) = try command(#"{"t":"focus","pid":412,"win":7}"#) else { return XCTFail("focus a window") }
         guard case .focus(pid: 412, window: nil) = try command(#"{"t":"focus","pid":412}"#) else { return XCTFail("focus an app") }
+        guard case .displays = try command(#"{"t":"displays"}"#) else { return XCTFail("displays") }
+        guard case .display(69734662) = try command(#"{"t":"display","id":69734662}"#) else { return XCTFail("display") }
         guard case .unlock(#"pä"ss \wort"#) = try command(#"{"t":"unlock","s":"pä\"ss \\wort"}"#) else { return XCTFail("unlock") }
     }
 
@@ -117,6 +142,12 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(request, ScreenView.Request(width: 390, height: 844, zoom: 0.5, pixelRatio: 3, h264: true, fps: 120, number: 4))
         guard case .view(let jpeg?) = try command(on.replacingOccurrences(of: "h264", with: "jpeg")) else { return XCTFail("jpeg") }
         XCTAssertFalse(jpeg.h264)
+        XCTAssertFalse(request.fit, "the region around the pointer, unless the page asks for the window")
+        // A mode instead of a number: the agent picks the region. The zoom stays for a Mac that shows no window.
+        guard case .view(let fitted?) = try command(on.replacingOccurrences(of: #""v":4"#, with: #""fit":"window","v":5"#)) else { return XCTFail("fit") }
+        XCTAssertEqual(fitted, ScreenView.Request(width: 390, height: 844, zoom: 0.5, pixelRatio: 3, h264: true, fps: 120, fit: true, number: 5))
+        guard case .view(let unknown?) = try command(on.replacingOccurrences(of: #""v":4"#, with: #""fit":"moon""#)) else { return XCTFail("unknown mode") }
+        XCTAssertFalse(unknown.fit)
         for off in [#"{"t":"view","on":false}"#, #"{"t":"view","on":true,"w":390,"h":844}"#,
                     on.replacingOccurrences(of: "390", with: "5")] {
             guard case .view(nil) = try command(off) else { return XCTFail(off) }
@@ -126,6 +157,7 @@ final class WireTests: XCTestCase {
     func testWhatTheAgentDoesNotActOn() throws {
         for json in [#"{"t":"noop"}"#, #"{"t":"m","dx":6000,"dy":0}"#, #"{"t":"m","dx":1}"#, #"{"t":"auth"}"#,
                      #"{"t":"shown","n":-1}"#, #"{"t":"key","k":"w"}"#, #"{"t":"focus","win":7}"#, #"{"t":"focus","pid":0}"#,
+                     #"{"t":"display"}"#, #"{"t":"display","id":-1}"#,
                      #"{"t":"text","s":"\#(String(repeating: "x", count: 2001))"}"#, #"{"t":"unlock"}"#, #"{"t":"unlock","s":""}"#,
                      #"{"t":"unlock","s":"\#(String(repeating: "x", count: 257))"}"#] {
             guard case .ignored = try command(json) else { return XCTFail(json) }

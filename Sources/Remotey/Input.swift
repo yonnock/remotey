@@ -60,8 +60,13 @@ final class Input {
     /// Puts the pointer in the middle of `frame`, unless it is inside already or holds a button: a window that
     /// came to the front from the phone, where the live view is cut around the pointer. False if the pointer stays.
     func move(into frame: CGRect) -> Bool {
-        let target = CGPoint(x: frame.midX.rounded(), y: frame.midY.rounded())
-        guard held.isEmpty, !frame.contains(Pointer.location), display(at: target) != nil,
+        !frame.contains(Pointer.location) && move(to: CGPoint(x: frame.midX.rounded(), y: frame.midY.rounded()))
+    }
+
+    /// Puts the pointer at `target`: on another display, for one. False if it stays: it holds a button (the
+    /// drag goes on where it is), or no display is there.
+    func move(to target: CGPoint) -> Bool {
+        guard held.isEmpty, display(at: target) != nil,
               let e = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: target,
                               mouseButton: .left) else { return false }
         moveRemainder = .zero
