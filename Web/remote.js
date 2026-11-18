@@ -112,7 +112,11 @@ async function keepAwake() {
   try { if (!wakeLock || wakeLock.released) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { connect(); keepAwake(); }
+  if (document.visibilityState === 'visible') { connect(); keepAwake(); return; }
+  // Out of sight the page shows no picture. Said now, the Mac stops the stream at once, and a window that took
+  // the phone's shape gets its frame back before someone sits down at the Mac, not when the socket times out.
+  send({ t: 'view', on: false });
+  sentView = '';
 });
 
 // ---- Sticky modifiers (apply to the next key or click, then release)
@@ -208,16 +212,17 @@ const touchpad = new Touchpad({
   dragEnd: () => send({ t: 'b', b: 'left', d: false }),
   pinchStart() {
     if (!viewOn) return false;
-    pinchFrom = pinching = fitted || zoom(); // a fitted picture is pinched from the zoom it has
+    pinchFrom = pinching = fitted || handZoom(); // a fitted picture is pinched from the zoom it has
   },
   pinch(scale) {
     // Readout and preview stop where the Mac did (see `syncView`); the request at the end still asks for all of it.
-    pinching = Math.max(clampZoom(pinchFrom * scale), floor);
+    pinching = shaping() ? clampForm(pinchFrom * scale) : Math.max(clampZoom(pinchFrom * scale), floor);
     liveView?.zoomTo(pinching);
     showZoom(pinching);
   },
   pinchEnd(scale) {
     pinching = 0;
+    if (shaping()) return setForm(pinchFrom * scale);
     leaveFit();
     setZoom(pinchFrom * scale);
   },
@@ -251,8 +256,24 @@ const zoomKey = () => (wide.matches ? 'zoom-wide' : 'zoom');
 const zoom = () => zooms[zoomKey()];
 let sentView = '', sentSize = null, requestNumber = 0;
 let floor = 0; // the zoom at which the Mac had every display in the picture, for a display of the current size
+// With "Telefonform" on top of "Auto", the window in front also takes the phone's shape on the Mac, so it fills
+// the display instead of a band of it. Then the zoom is the window's size: − / + and a pinch ask the Mac for a
+// larger or smaller window, which stays whole in the picture, and "Auto" stays on. The Mac gives the window its
+// old frame back when another one comes forward and when this ends.
 let fit = store.get('fit', (v) => typeof v === 'boolean', false); // "Auto" is on
 let fitted = 0; // the zoom of the picture on the display while it is fitted to a window, else 0
+let shape = store.get('shape', (v) => typeof v === 'boolean', false); // "Telefonform" is on; it counts with "Auto"
+const shaping = () => fit && shape;
+// The zoom a shaped window is asked to show at, for each way the phone is held. The Mac bounds it: a window is no
+// larger than its display has room for, no smaller than its app allows, and shown at twice its size at most.
+const FORM = [0.1, 2];
+const clampForm = (z) => Math.min(FORM[1], Math.max(FORM[0], z));
+const validForm = (z) => typeof z === 'number' && z === clampForm(z);
+const forms = { form: store.get('form', validForm, 0.5), 'form-wide': store.get('form-wide', validForm, 0.5) };
+const formKey = () => (wide.matches ? 'form-wide' : 'form');
+const form = () => forms[formKey()];
+// The zoom the hand set last, for what the zoom means right now: the size of the shaped window, or the cut.
+const handZoom = () => (shaping() ? form() : zoom());
 function syncView() {
   layout();
   body.classList.toggle('view', viewOn);
@@ -260,17 +281,17 @@ function syncView() {
   $('#viewBtn').classList.toggle('on', viewOn);
   // Readout and preview stop where the Mac did, also while it is asked for more. A fitted picture has the
   // zoom the Mac chose for it, and is shown as it comes.
-  const showing = pinching ? Math.max(pinching, floor) : fitted || Math.max(zoom(), floor);
+  const showing = pinching ? Math.max(pinching, floor) : fitted || (shaping() ? form() : Math.max(zoom(), floor));
   showZoom(showing);
   if (!viewOn) $('#follow').hidden = true;
   store.set('view', viewOn);
   if (!liveView) return; // not paired
   liveView.show(viewOn);
-  liveView.zoomTo(fitted && !pinching ? 0 : showing);
+  liveView.zoomTo((fitted || shaping()) && !pinching ? 0 : showing);
   if (!ready || ws.readyState !== 1) return;
   const r = screenEl.getBoundingClientRect(); // measured after the layout change above
   // `zoom` goes along with "Auto" too: it counts while the Mac has no window in front to fit.
-  const request = { t: 'view', on: viewOn, w: r.width, h: r.height, zoom: zoom(), ...(fit && { fit: 'window' }),
+  const request = { t: 'view', on: viewOn, w: r.width, h: r.height, zoom: zoom(), ...(fit && { fit: 'window' }), ...(shaping() && { shape: form() }),
     dpr: window.devicePixelRatio || 2, codec: liveView.codec, fps: cadence.framesPerSecond };
   // Layout observers call this freely; an unchanged request must not restart the stream.
   const text = JSON.stringify(request);
@@ -305,7 +326,28 @@ function showZoom(z) {
   $('#zoomValue').textContent = text;
   readout.classList.toggle('on', fit);
   readout.setAttribute('aria-pressed', fit);
-  readout.setAttribute('aria-label', `Zoom ${text}. Auto ${fit ? 'an: das Bild zeigt das vordere Fenster ganz' : 'aus'}`);
+  readout.setAttribute('aria-label', `Zoom ${text}. Auto ${!fit ? 'aus' : shape ? 'an: das vordere Fenster hat die Form des Telefons'
+    : 'an: das Bild zeigt das vordere Fenster ganz'}`);
+  $('#fitLamp').textContent = shaping() ? 'Form' : 'Auto';
+  const latch = $('[data-act=shape]');
+  latch.classList.toggle('on', shape);
+  latch.setAttribute('aria-pressed', shape);
+}
+// "Telefonform" on or off. It needs "Auto", so switching it on switches that on too. Switching "Auto" off keeps
+// it for the next time.
+function setShape(on) {
+  shape = on;
+  store.set('shape', shape);
+  if (on && !fit) { fit = true; store.set('fit', fit); }
+  fitted = 0;
+  syncView();
+}
+// The size of the shaped window, as the zoom it shows at.
+function setForm(z) {
+  const key = formKey();
+  forms[key] = Math.round(clampForm(z) * 1000) / 1000;
+  store.set(key, forms[key]);
+  syncView();
 }
 // "Auto" on or off. Off, the view is cut around the pointer again, at the zoom last set by hand.
 function setFit(on) {
@@ -328,8 +370,9 @@ function setZoom(z) {
   syncView();
 }
 function stepZoom(direction) {
-  const from = fitted || zoom(); // a fitted picture steps from the zoom it has
+  const from = fitted || handZoom(); // a fitted picture steps from the zoom it has
   const next = direction > 0 ? ZOOM_STEPS.find((z) => z > from * 1.001) : ZOOM_STEPS.findLast((z) => z < from / 1.001);
+  if (shaping()) { if (next) setForm(next); return; }
   leaveFit();
   if (next) setZoom(next); else syncView();
 }
@@ -488,6 +531,7 @@ function fire(b) {
   else if (d.act === 'apps-back') switcher.back();
   else if (d.act === 'zoom') stepZoom(Number(d.step));
   else if (d.act === 'fit') setFit(!fit);
+  else if (d.act === 'shape') setShape(!shape);
   else if (d.act === 'settings-reset') resetSettings();
   else if (d.act === 'done') field.blur();
   else if (d.act === 'type') field.focus();

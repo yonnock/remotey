@@ -3,7 +3,7 @@
 // the keyboard can be "opened". Chromium is not iOS Safari: this checks the page's own logic and layout,
 // not WebKit's keyboard, safe areas or gesture handling.
 // Usage: node scripts/ui-verify.mjs [--web=Web] [--json=out.json] [--only=T1,T9] [--shots=DIR]
-// --shots saves pictures of the page at moments T8, T11 and T12 name, for looking at what they measure.
+// --shots saves pictures of the page at moments T8, T11, T12 and T13 name, for looking at what they measure.
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -22,7 +22,9 @@ import { extname, join, resolve } from 'node:path';
 // 11: the zoom readout switches "Auto" (T11, with a fake Mac that answers with fitted pictures) and no longer
 //     returns to 1×, which T2 now reaches with the zoom keys; T12 opens the display picker on a Mac with three
 //     displays; T8 also taps the keys for an app's zoom.
-export const VERIFIER_VERSION = 11;
+// 12: T13 switches "Telefonform" on in the Apps sheet: the zoom keys and the pinch then ask the Mac for another
+//     size of the window instead of ending "Auto", and a page that goes out of sight switches the view off.
+export const VERIFIER_VERSION = 12;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -907,6 +909,112 @@ await task('T12', async () => {
       && JSON.stringify(tap.sent) === '[{"t":"display","id":2}]' && tap.closed
       && two.list.length === 2 && two.list.filter((t) => t.here).map((t) => t.id).join() === '2'
       && stale.off && stale.sent === 0 && stale.open && stale.after === 3 };
+});
+
+// T13: "Telefonform". A latch in the Apps sheet's head asks the Mac to give the window in front the phone's shape,
+// which needs "Auto" and switches it on. From then on the zoom is the window's size: + and a pinch ask for
+// another one and "Auto" stays on. The readout's key ends it and keeps the latch for the next time. A page that
+// goes out of sight says so, so the window gets its frame back.
+await task('T13', async () => {
+  const out = { layout: {} };
+  const isOpen = (page) => page.evaluate(`document.body.classList.contains('apps')`);
+  const open = async (page) => { if (!(await isOpen(page))) await page.tap('[data-act=apps]'); await sleep(450); };
+  const shut = async (page) => { if (await isOpen(page)) await page.tap('[data-act=apps]'); await sleep(300); };
+  for (const [phone, [w, h]] of Object.entries(PHONES)) {
+    for (const orientation of ['portrait', 'landscape']) {
+      const page = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]));
+      await open(page);
+      out.layout[`${phone} ${orientation}`] = await page.evaluate(`(() => { const box = (s) => document.querySelector(s).getBoundingClientRect();
+        const key = box('[data-act=shape]'), title = box('#appsTitle'), head = box('.head'), label = document.querySelector('[data-act=shape]');
+        return { w: Math.round(key.width), h: Math.round(key.height), inside: key.left >= head.left - 0.5 && key.right <= head.right + 0.5,
+          clear: title.right <= key.left + 0.5, whole: (() => { const range = document.createRange(); range.selectNodeContents(label); return range.getBoundingClientRect().width <= key.width - 8; })(), title: document.querySelector('#appsTitle').scrollWidth <= document.querySelector('#appsTitle').clientWidth }; })()`);
+      await page.close();
+    }
+  }
+  const page = await openPage(390, 844);
+  const r = await page.rect('#screen');
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  const views = async () => (await page.sent()).filter((m) => m.t === 'view').map(({ at, v, ...m }) => m);
+  const asked = (list) => list.map((m) => (m.on ? `${m.fit ?? '-'} ${m.shape ?? '-'}` : 'off')).join();
+  const state = () => page.evaluate(`(() => { const key = document.querySelector('[data-act=shape]'), lamp = document.querySelector('#fitLamp');
+    return { readout: document.querySelector('#zoomValue').textContent, lamp: lamp.textContent, lit: document.querySelector('[data-act=fit]').classList.contains('on'),
+      latch: key.classList.contains('on'), pressed: key.getAttribute('aria-pressed'), shown: getComputedStyle(key).display !== 'none',
+      stored: [localStorage.getItem('remotey-shape'), localStorage.getItem('remotey-fit')].join(), open: document.body.classList.contains('apps'),
+      clipped: lamp.scrollWidth > lamp.parentElement.clientWidth }; })()`);
+  const text = (z) => `${String(Math.round(z * 100) / 100).replace('.', ',')}×`;
+  await page.evaluate(`window.__picture(${r.w / 0.5})`); // the first JPEG only switches the page from H.264 to JPEG
+  await sleep(200);
+  await open(page);
+  const before = await state();
+  await page.clear();
+  await page.tap('[data-act=shape]');
+  const on = { ...(await state()), views: await views() };
+  await page.shot('form-sheet');
+  // The windows of one app: the latch makes way for their number.
+  await page.tap('[data-pid="501"]'); await sleep(300);
+  const listed = await state();
+  await shut(page);
+  // The Mac gave the window the phone's shape: it shows at the zoom asked for and fills the display.
+  await page.clear();
+  await page.evaluate(`window.__picture(${r.w / 0.5}, true)`);
+  const shaped = { ...(await state()), views: (await views()).length };
+  await page.shot('form');
+  // + asks for a smaller window, which shows larger. "Auto" stays on.
+  await page.tap('[data-act=zoom][data-step="1"]');
+  const stepped = { ...(await state()), views: await views() };
+  // The app has a smallest size and stays at it: the readout says what is. + would ask for the step above that,
+  // which the Mac was asked for already, so nothing is sent.
+  await page.evaluate(`window.__picture(${r.w / 0.6}, true)`);
+  await page.clear();
+  await page.tap('[data-act=zoom][data-step="1"]');
+  const held = { ...(await state()), views: await views() };
+  // A pinch to twice the size: one request for that, nothing else.
+  await page.clear();
+  await page.touch('touchStart', [[cx - 40, cy], [cx + 40, cy]]); await sleep(16);
+  for (let i = 1; i <= 20; i++) { await page.touch('touchMove', [[cx - 40 - i * 2, cy], [cx + 40 + i * 2, cy]]); await sleep(16); }
+  await page.touch('touchEnd', []); await sleep(200);
+  const sent = await page.sent();
+  const pinched = { ...(await state()), views: await views(), misactions: count(sent, 'm') + count(sent, 's') + count(sent, 'c') };
+  // Sideways the window has a size of its own.
+  await page.clear();
+  await page.resize(844, 390); await sleep(200);
+  const turned = { views: await views() };
+  await page.resize(390, 844); await sleep(200);
+  // The readout's key ends "Auto" and with it the shape; the latch stays for the next time.
+  await page.clear();
+  await page.tap('[data-act=fit]');
+  const off = { ...(await state()), views: await views() };
+  await page.clear();
+  await page.tap('[data-act=fit]');
+  const again = { ...(await state()), views: await views() };
+  // Out of sight: the page switches the view off, whatever iOS does with the socket.
+  await page.clear();
+  await page.evaluate(`(Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }), document.dispatchEvent(new Event('visibilitychange')))`);
+  await sleep(100);
+  const hidden = await views();
+  await page.evaluate(`(Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true }), document.dispatchEvent(new Event('visibilitychange')))`);
+  await sleep(400);
+  const back = await views();
+  // The latch off: plain "Auto", the windows on the Mac as they are.
+  await open(page);
+  await page.clear();
+  await page.tap('[data-act=shape]');
+  const plain = { ...(await state()), views: await views() };
+  await page.close();
+  return { ...out, before, on, listed, shaped, stepped, held, pinched, turned, off, again, hidden: asked(hidden), back: asked(back), plain,
+    ok: Object.values(out.layout).every((l) => l.h >= 36 && l.w >= 44 && l.inside && l.clear && l.whole && l.title)
+      && !before.latch && before.pressed === 'false' && before.shown && before.lamp === 'Auto'
+      && on.latch && on.pressed === 'true' && on.stored === 'true,true' && on.open && asked(on.views) === 'window 0.5'
+      && !listed.shown
+      && shaped.readout === '0,5×' && shaped.lamp === 'Form' && shaped.lit && !shaped.clipped && shaped.views === 0
+      && asked(stepped.views) === 'window 0.7' && stepped.lit && stepped.lamp === 'Form'
+      && held.readout === '0,6×' && held.views.length === 0
+      && pinched.misactions === 0 && pinched.views.length === 1 && pinched.views[0].fit === 'window' && Math.abs(pinched.views[0].shape - 1.2) < 0.01 && pinched.lit
+      && turned.views.length >= 1 && turned.views.every((m) => m.fit === 'window' && m.shape === 0.5)
+      && asked(off.views) === '- -' && !off.lit && off.lamp === 'Auto' && off.latch && off.stored === 'true,false'
+      && asked(again.views).startsWith('window ') && again.lit
+      && asked(hidden) === 'off' && asked(back) === 'off,window 1.2'
+      && !plain.latch && plain.stored === 'false,true' && asked(plain.views) === 'window -' && plain.lamp === 'Auto' && plain.lit };
 });
 
 socket.close();

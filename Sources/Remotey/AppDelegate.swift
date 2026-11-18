@@ -28,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
     }
 
+    /// Leaves the Mac as it was: a window that took the phone's shape for the live view gets its frame back.
+    func applicationWillTerminate(_ notification: Notification) {
+        server.stop()
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         if AXIsProcessTrusted() {

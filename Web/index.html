@@ -31,8 +31,9 @@
         <span id="follow" class="legend" hidden>Folgt Text</span>
         <div id="zoom" role="group" aria-label="Zoom des Live-Bilds">
           <button class="key" data-act="zoom" data-step="-1" aria-label="Verkleinern">−</button>
-          <!-- The readout is a key with a lamp: "Auto" fits the view to the window in front on the Mac. -->
-          <button class="readout" data-act="fit" aria-pressed="false" aria-label="Zoom 0,5×. Auto aus"><span class="legend">Auto</span><span id="zoomValue">0,5×</span></button>
+          <!-- The readout is a key with a lamp: "Auto" fits the view to the window in front on the Mac. The lamp
+               says "Form" while that window also takes the phone's shape. -->
+          <button class="readout" data-act="fit" aria-pressed="false" aria-label="Zoom 0,5×. Auto aus"><span id="fitLamp" class="legend">Auto</span><span id="zoomValue">0,5×</span></button>
           <button class="key" data-act="zoom" data-step="1" aria-label="Vergrößern">+</button>
         </div>
       </div>
@@ -108,6 +109,8 @@
         <span class="icon" hidden><img id="appsIcon" alt=""><span class="letter"></span></span>
         <span id="appsTitle" class="legend">Offene Apps</span>
         <span id="appsNote" class="legend"></span>
+        <!-- With "Auto": the window in front takes the phone's shape on the Mac, and its old frame back afterwards. -->
+        <button class="key legend" data-act="shape" aria-pressed="false" aria-label="Telefonform: das vordere Fenster nimmt am Mac die Form des Telefons an">Telefonform</button>
       </div>
       <div class="well"><div id="apps" role="group" aria-label="Offene Apps" aria-live="polite"></div></div>
       <div id="displays" role="group" aria-label="Displays des Macs" hidden></div>

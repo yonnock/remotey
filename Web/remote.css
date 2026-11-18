@@ -211,6 +211,10 @@ body.drawer #drawer.held, body.apps #switcher.held { transform: translate3d(0, v
 #switcher { gap: 6px; max-height: calc(100% - 56px); overflow: hidden; }
 .head { flex: none; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 2px; }
 .head .key { width: 44px; min-width: 44px; padding: 0; }
+/* "Telefonform" is a setting for what the apps below come forward as: a latch at the head's far end. It makes
+   way for the note while the windows of one app are listed. */
+.head [data-act=shape] { width: auto; padding: 0 12px; font-size: 10px; }
+.head:has([data-act=apps-back]:not([hidden])) [data-act=shape] { display: none; }
 .head .icon { width: 26px; height: 26px; }
 .head .letter { width: 24px; height: 24px; border-radius: 6px; font-size: 12px; }
 #appsTitle { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
