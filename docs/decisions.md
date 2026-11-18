@@ -306,6 +306,55 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
      nichts, nach der Absage sendet Enter es), und der Agent sagt einem zweiten Telefon sofort ab. Nicht geändert:
      mehr als 100 Zeichen im Feld löscht er nicht ganz (`Input.key` begrenzt), das Feld hält nur, was ein Versuch ließ.
 
+12. Lesbar am Telefon, Displays, ein Fenster (Issues 13, 12, 5). Gebaut: Auto (13 A), die App-Zoom-Tasten (13 E), die
+   Display-Auswahl (12). Nicht gebaut: 13 B, C und F, wie dort empfohlen erst nach A. Verifier v11 (neu: T11 Auto,
+   T12 Display-Auswahl, T8 mit den Zoom-Tasten, T2 ohne die 1×-Taste).
+   - Entscheidung Protokoll: die Ansichtsanfrage trägt `fit: "window"` neben dem Zoom, der Agent wählt den Ausschnitt.
+     Der Zoom bleibt in der Anfrage und gilt, wenn vorn kein Fenster ist (Schreibtisch des Finders, fehlende
+     Bedienungshilfen, Sperrbildschirm). Jedes Bild sagt im Kopf (Flag 2), ob es eingepasst ist: nur dann übernimmt die
+     Seite seinen Zoom in die Anzeige, ohne ihn als Anschlag zu nehmen und ohne neu anzufragen.
+   - Entscheidung Ausschnitt (`ScreenView.fitted`): Seitenverhältnis des Telefons, so groß, dass das Fenster Breite
+     oder Höhe füllt, höchstens 2× (ein kleiner Dialog bleibt klein), höchstens der ganze Schreibtisch. Lage wie beim
+     Zeiger: um das Fenster, innerhalb der Displays, auf denen es liegt, und über `origin` mittig, wenn der Ausschnitt
+     länger ist als diese.
+   - Entscheidung Zeiger außerhalb (Frage aus Issue 13): der Zeiger schiebt den Ausschnitt. Er bleibt 20 Telefonpixel
+     vom Bildrand, der Ausschnitt rückt nur so weit wie nötig und kehrt mit dem Zeiger zurück, bei gleicher Bildgröße,
+     also ohne neuen Strom. So bleiben Menüleiste, Dock und Nachbarfenster erreichbar. Verworfen: Zeiger verlässt das
+     Bild (man steuert blind) und Ausschnitt wächst (jede Bewegung setzte Encoder und Aufnahmedichte neu).
+   - Entscheidung „Folgt Text" im eingepassten Bild: dieselbe Regel, statt des Zeigers hält der Ausschnitt die
+     Schreibmarke. Im Fenster ändert sich nichts, außerhalb rückt das Bild zu ihr.
+   - Entscheidung Ende: Zange und − / + beenden Auto und gehen vom gezeigten Zoom aus weiter. Die Anzeige zwischen
+     − und + ist die Taste dafür, „Auto" darüber die Lampe. Sie setzte bisher auf 1×; das geht jetzt mit − / + (T2:
+     3 Tipps von 2,17× statt 1). Verworfen: eine vierte Taste, bei 320 px ist neben Anzeige und Messwert kein Platz.
+   - Entscheidung Fenster (`FrontWindow`): das fokussierte Fenster der vorderen App, wenn es ein Fenster oder Dialog
+     ist (`Apps.isChoice`), sonst ihr Hauptfenster. Ein anderes Fenster gilt sofort, ein bewegtes oder in der Größe
+     geändertes erst nach 0,15 s Ruhe: beim Ziehen liefe sonst das Bild mit dem Fenster mit, und jede Größe baute
+     Encoder und Aufnahme neu. Die Beobachtung der vorderen App teilt es sich mit `TextFocus` (`FrontApp`).
+   - Entscheidung Issue 5: Auto ist die Einzel-App-Ansicht. Ein eigenes Bild nur des Fensters
+     (`SCContentFilter(desktopIndependentWindow:)`) zeigte auch ein verdecktes Fenster, aber Klicks träfen, was davor
+     liegt; die Menüleiste fehlte. Der Umschalter holt das Fenster ohnehin nach vorn.
+   - Entscheidung Displays: eine Karte unter den Apps im selben Blatt, nur ab zwei Displays, Kacheln in der Anordnung
+     des Macs, das Display mit dem Zeiger amber. Kein eigenes Blatt und keine zweite Seite: ein Tipp mehr. Der Agent
+     merkt sich je Display, wo der Zeiger war, als er es über die Karte verließ (als Anteil, damit der Ort eine neue
+     Anordnung übersteht), sonst die Mitte. Wer die Liste einmal fragte, bekommt jede Änderung der Displays.
+   - Entscheidung Tasten: ⌘−, ⌘0, ⌘+ in der ersten Reihe der Tastenseite. Dafür sind Leer, ⌫ und ↵ nur noch eine
+     Spalte breit statt zwei (375 px: 34 statt 74 px). Eine dritte Reihe hätte alle Tasten auf 35 px Höhe gedrückt.
+   - Gemessen am Mac (Entwicklungs-Agent auf 47840, echte Aufnahme, Laptop 2056 × 1329 unter zwei Displays mit
+     3008 × 1692): Fenster 2056 × 1210 hochkant (390 × 844) 2056 Punkte breit, 0,19×; quer (844 × 390) 2619 Punkte,
+     0,32×, Fenster ganz. Fenster 1028 × 606 einer anderen App über den Umschalter geholt: 1311 Punkte, 0,64×, erstes
+     eingepasstes Bild 88 ms nach `focus`. Auto aus: 0,5× wie angefragt. `smoke.mjs --display`: Zeiger auf das zweite Display und
+     zurück auf den Punkt genau.
+   - Gemessen (T11): Auto an fragt `fit: "window"` mit unverändertem Zoom; ein Fenster mit 1512 Punkten zeigt 0,24×,
+     eines mit 900 Punkten 0,41×, je ohne neue Anfrage und ohne Vorschau; gedreht fragt die Seite wieder mit `fit`;
+     + geht auf 0,5× und schaltet Auto aus; eine Zange aufs Doppelte fragt 0,484× ohne `fit`, keine Bewegung, kein
+     Klick; ohne Fenster bleibt die Anzeige auf dem Zoom von Hand. T12: drei Kacheln in der Anordnung, kleinste Seite
+     46 px hochkant und 32 px quer (die Karte ist quer 72 statt 104 px hoch), Apps in Sicht mit Karte 6/12/12 hochkant
+     und 5/5/10 quer (ohne: 9/12/12 und 10/10/12); ein Tipp sendet `display` und schließt das Blatt; ein abgezogenes
+     Display verschwindet ohne Nachfrage; ein Display: keine Karte. T1, T3 bis T7, T9, T10 unverändert
+     (Display-Anteil 69/73/80 % hochkant, 72/76/82 % quer, 12/12 erreichbar).
+   - Bekannte Grenze: ein Fenster so breit wie sein Display ist hochkant klein (im Lauf oben 0,19×), und über und
+     unter ihm steht, was dort am Schreibtisch liegt. Dagegen helfen Drehen, ⌘+ und später 13 B oder C.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -334,3 +383,9 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   das Feld beim Wechsel zum Passwortfeld richtig umstellt und das gespeicherte Passwort anbietet, ist offen. Nicht
   geprüft: Bildschirmschoner über der Sperre, Entsperren per Apple Watch, schneller Benutzerwechsel, ein Mac, dessen
   Display beim Wecken länger braucht als die 5 s, die der Agent auf das Feld wartet.
+- Runde 12: kein iPhone. Auto lief am Mac nur über den Umschalter (ein Wechsel hin, einer zurück), nicht mit ⌘Tab
+  oder einem Klick am Mac; beide lösen dieselbe Meldung von macOS aus. Das Warten auf ein ruhendes Fenster, der
+  Sperrbildschirm unter Auto und „Folgt Text" im eingepassten Bild sind nur in Tests gerechnet, nicht gelaufen.
+  `TextFocus` beobachtet die vordere App jetzt über `FrontApp`; „Folgt Text" wurde danach nicht am Mac geprüft.
+  Displays an- und abstecken wurde nicht ausgelöst, nur die Liste und der Sprung. ⌘+ auf einer Belegung, auf der
+  das Plus Umschalt braucht (US), ist ungeprüft; hier ist die Belegung deutsch.

@@ -31,7 +31,8 @@
         <span id="follow" class="legend" hidden>Folgt Text</span>
         <div id="zoom" role="group" aria-label="Zoom des Live-Bilds">
           <button class="key" data-act="zoom" data-step="-1" aria-label="Verkleinern">−</button>
-          <button class="readout" data-act="zoom-reset" aria-label="Zoom 0,5×, antippen für 1×"><span id="zoomValue">0,5×</span></button>
+          <!-- The readout is a key with a lamp: "Auto" fits the view to the window in front on the Mac. -->
+          <button class="readout" data-act="fit" aria-pressed="false" aria-label="Zoom 0,5×. Auto aus"><span class="legend">Auto</span><span id="zoomValue">0,5×</span></button>
           <button class="key" data-act="zoom" data-step="1" aria-label="Vergrößern">+</button>
         </div>
       </div>
@@ -64,9 +65,13 @@
           <div class="page keys" data-page="keys" role="group" aria-label="Tasten">
             <button class="cap legend" data-key="escape">Esc</button>
             <button class="cap legend" data-key="tab">Tab</button>
-            <button class="cap legend wide" data-key="space">Leer</button>
-            <button class="cap wide" data-key="backspace" data-repeat aria-label="Löschen">⌫</button>
-            <button class="cap wide" data-key="return" aria-label="Enter">↵</button>
+            <button class="cap legend" data-key="space">Leer</button>
+            <button class="cap" data-key="backspace" data-repeat aria-label="Löschen">⌫</button>
+            <button class="cap" data-key="return" aria-label="Enter">↵</button>
+            <!-- The zoom of the app in front: browsers, editors and terminals scale their content on these. -->
+            <button class="cap pair" data-key="-" data-with="cmd" aria-label="App verkleinern, Command Minus">⌘−</button>
+            <button class="cap pair" data-key="0" data-with="cmd" aria-label="App auf normale Größe, Command 0">⌘0</button>
+            <button class="cap pair" data-key="+" data-with="cmd" aria-label="App vergrößern, Command Plus">⌘+</button>
             <button class="cap" data-mod="cmd" aria-label="Command">⌘</button>
             <button class="cap" data-mod="alt" aria-label="Option">⌥</button>
             <button class="cap" data-mod="ctrl" aria-label="Control">⌃</button>
@@ -94,7 +99,8 @@
         </div>
       </div>
     </div>
-    <!-- The switcher: the Mac's open apps, out of the same edge. An app with several windows shows them to choose from. -->
+    <!-- The switcher: the Mac's open apps, out of the same edge. An app with several windows shows them to choose from.
+         Under them, on a Mac with more than one display, the displays as they are arranged: a tap puts the pointer there. -->
     <div id="switcher" class="sheet" role="group" aria-label="Apps am Mac">
       <div class="grip" aria-hidden="true"></div>
       <div class="head">
@@ -104,6 +110,7 @@
         <span id="appsNote" class="legend"></span>
       </div>
       <div class="well"><div id="apps" role="group" aria-label="Offene Apps" aria-live="polite"></div></div>
+      <div id="displays" role="group" aria-label="Displays des Macs" hidden></div>
     </div>
   </div>
   <!-- Under the thumb: mouse keys with the side buttons for back and forward, then the keys that open things:

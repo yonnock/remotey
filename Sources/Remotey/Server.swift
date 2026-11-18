@@ -14,6 +14,8 @@ final class Server {
     private let input: Input
     private let apps = Apps()
     private let lock = LockScreen()
+    private var displays = Displays()
+    private var displaysChanged: NSObjectProtocol?
     private var listeners: [NWListener] = []
     private var clients: [ObjectIdentifier: Client] = [:]
     private lazy var screen = ScreenView(update: { [weak self] update in
@@ -32,6 +34,8 @@ final class Server {
         var authed = false
         /// The app icons this connection has, by the names the list gives them.
         var icons: Set<String> = []
+        /// The page opened the display picker on this connection, so it hears when the displays change.
+        var watchesDisplays = false
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
@@ -53,7 +57,16 @@ final class Server {
             guard let self else { return }
             // On the lock screen the view shows the password field; back on the desktop it shows the pointer again.
             if !locked, self.viewer != nil { self.screen.followText(false) }
+            if self.viewer != nil { self.screen.locked = locked }
             self.clients.values.filter(\.authed).forEach { self.send($0, Wire.lock(locked)) }
+        }
+        // Displays were connected, removed, rearranged or changed their mode: an open picker follows.
+        displaysChanged = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.clients.values.contains(where: \.watchesDisplays) else { return }
+            let list = Wire.displays(Displays.list())
+            self.clients.values.filter(\.watchesDisplays).forEach { self.send($0, list) }
         }
     }
 
@@ -62,6 +75,8 @@ final class Server {
         listeners = []
         pending.forEach { $0.cancel() }
         clients.values.forEach { $0.connection.cancel() }
+        if let displaysChanged { NotificationCenter.default.removeObserver(displaysChanged) }
+        displaysChanged = nil
     }
 
     private func admit(_ connection: NWConnection) {
@@ -199,9 +214,9 @@ final class Server {
     /// The media keys are not among them: pausing the music leaves a dark display dark.
     private static func isActivity(_ command: Wire.Command) -> Bool {
         switch command {
-        case .move, .scroll, .click, .button, .text, .key, .focus, .unlock: true
+        case .move, .scroll, .click, .button, .text, .key, .focus, .display, .unlock: true
         case .view(let request): request != nil
-        case .auth, .scrollEnded, .media, .shown, .apps, .ignored: false
+        case .auth, .scrollEnded, .media, .shown, .apps, .displays, .ignored: false
         }
     }
 
@@ -253,6 +268,14 @@ final class Server {
                 self.screen.followText(false)
                 self.screen.pointerMoved()
             }
+        case .displays:
+            client.watchesDisplays = true
+            send(client, Wire.displays(Displays.list()))
+        case .display(let id):
+            guard let target = displays.jump(to: id, from: Pointer.location, among: Displays.list()), input.move(to: target),
+                  viewer === client else { return }
+            screen.followText(false)
+            screen.pointerMoved()
         case .unlock(let password):
             // The page asked for a Mac that is open by now: it missed the news.
             guard lock.isLocked else { return send(client, Wire.lock(false)) }
@@ -277,6 +300,7 @@ final class Server {
         }
         if viewer !== client { stopView() }
         viewer = client
+        screen.locked = lock.isLocked
         screen.update(request)
     }
 

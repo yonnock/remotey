@@ -211,4 +211,83 @@ final class ScreenViewTests: XCTestCase {
         let editor = TextFocus.Target(rect: CGRect(x: 0, y: 40, width: 1200, height: 900), exact: false)
         XCTAssertNil(ScreenView.textView(for: editor, held: nil, around: around), "the pointer's view instead")
     }
+
+    // MARK: Fitted to the window in front
+
+    private func fitted(_ width: Double, _ height: Double, to window: CGRect, pointer: CGPoint? = nil,
+                        displays: [CGRect] = [CGRect(x: 0, y: 0, width: 3008, height: 1692)]) throws -> CGRect {
+        // The zoom of the request does not count while there is a window to fit.
+        let request = try XCTUnwrap(ScreenView.Request(width: width, height: height, zoom: 1, pixelRatio: 3, h264: true, fps: 60, fit: true))
+        return ScreenView.fitted(request, displays: displays, to: window, holding: pointer ?? CGPoint(x: window.midX, y: window.midY))
+    }
+
+    func testAFittedWindowFillsThePadsWidthOrHeightWhicheverLimits() throws {
+        let window = CGRect(x: 400, y: 200, width: 1200, height: 800)
+        // Upright the width limits: the picture is as wide as the window. It is taller than the display then,
+        // which lies in its middle, as when zoomed out by hand.
+        let upright = try fitted(370, 560, to: window)
+        XCTAssertEqual(upright.minX, 400, accuracy: 0.001)
+        XCTAssertEqual(upright.width, 1200, accuracy: 0.001)
+        XCTAssertEqual(upright.width / upright.height, 370.0 / 560, accuracy: 0.0001, "the pad's aspect")
+        XCTAssertEqual(upright.midY, 846, accuracy: 0.001)
+        // Sideways the height limits, and the window lies in the middle of what shows beside it.
+        let sideways = try fitted(700, 330, to: window)
+        XCTAssertEqual(sideways.minY, 200, accuracy: 0.001)
+        XCTAssertEqual(sideways.height, 800, accuracy: 0.001)
+        XCTAssertEqual(sideways.midX, 1000, accuracy: 0.001)
+        // A window as tall as the pad is: both fit at once.
+        let both = try fitted(370, 560, to: CGRect(x: 100, y: 100, width: 740, height: 1120))
+        XCTAssertEqual(both, CGRect(x: 100, y: 100, width: 740, height: 1120))
+    }
+
+    func testAFittedViewStaysOnTheWindowsDisplayAndASmallWindowStaysSmall() throws {
+        // A narrow window in the display's corner: the view shows what is beside it, not the space beyond the edge.
+        let corner = try fitted(700, 330, to: CGRect(x: 0, y: 25, width: 400, height: 900))
+        XCTAssertEqual(corner.minX, 0, accuracy: 0.001)
+        XCTAssertEqual(corner.height, 900, accuracy: 0.001)
+        XCTAssertTrue(corner.insetBy(dx: -0.001, dy: -0.001).contains(CGRect(x: 0, y: 25, width: 400, height: 900)))
+        // A small dialog is shown at twice its size at most.
+        let dialog = CGRect(x: 1400, y: 800, width: 120, height: 60)
+        let small = try fitted(370, 560, to: dialog)
+        XCTAssertEqual(small.size, CGSize(width: 185, height: 280))
+        XCTAssertEqual(small.midX, dialog.midX, accuracy: 0.001)
+        // A window on the second display is shown there.
+        let displays = [CGRect(x: 0, y: 0, width: 2056, height: 1329), CGRect(x: -1939, y: 1329, width: 3008, height: 1692)]
+        let below = try fitted(700, 330, to: CGRect(x: -1900, y: 1400, width: 1500, height: 1600), displays: displays)
+        XCTAssertEqual(below.height, 1600, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(below.minX, -1939)
+        XCTAssertGreaterThanOrEqual(below.minY, 1329)
+        // A window larger than every display together: the whole desktop, as zoomed out by hand.
+        let huge = try fitted(370, 560, to: CGRect(x: -500, y: -500, width: 9000, height: 9000))
+        XCTAssertEqual(huge.width, 3008, accuracy: 0.001)
+    }
+
+    func testThePointerPushesAFittedViewAndItReturns() throws {
+        let window = CGRect(x: 400, y: 200, width: 1200, height: 800)
+        let rest = try fitted(700, 330, to: window)
+        // 20 pixels of the pad are this many points here.
+        let margin = 20 * rest.width / 700
+        XCTAssertEqual(try fitted(700, 330, to: window, pointer: CGPoint(x: 900, y: 700)), rest, "inside the window nothing moves")
+        // Up to the menu bar: the view follows just far enough, and stops at the display's edge.
+        let above = try fitted(700, 330, to: window, pointer: CGPoint(x: 900, y: 120))
+        XCTAssertEqual(above.minY, 120 - margin, accuracy: 0.001)
+        XCTAssertEqual(above.minX, rest.minX)
+        XCTAssertEqual(above.size, rest.size, "the same picture size, so the stream goes on")
+        XCTAssertEqual(try fitted(700, 330, to: window, pointer: CGPoint(x: 900, y: 3)).minY, 0)
+        // Across the window's edge and far beyond, the view never moves further than the pointer does.
+        var last = rest
+        for x in stride(from: 1000.0, through: 3007, by: 1) {
+            let next = try fitted(700, 330, to: window, pointer: CGPoint(x: x, y: 700))
+            XCTAssertLessThanOrEqual(abs(next.minX - last.minX), 1.001, "x jump at \(x)")
+            XCTAssertTrue(next.contains(CGPoint(x: x, y: 700)))
+            last = next
+        }
+        XCTAssertEqual(last.maxX, 3008, accuracy: 0.001)
+        XCTAssertEqual(try fitted(700, 330, to: window, pointer: CGPoint(x: 1000, y: 700)), rest, "and back where it was")
+        // On another display the pointer takes the view along, at the window's zoom.
+        let displays = [CGRect(x: 0, y: 0, width: 3008, height: 1692), CGRect(x: 3008, y: 0, width: 1728, height: 1117)]
+        let away = try fitted(700, 330, to: window, pointer: CGPoint(x: 4000, y: 500), displays: displays)
+        XCTAssertTrue(away.contains(CGPoint(x: 4000, y: 500)))
+        XCTAssertEqual(away.size, rest.size)
+    }
 }

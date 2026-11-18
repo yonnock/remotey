@@ -29,9 +29,9 @@ function setup() {
 }
 
 /** An update as the agent sends it (Sources/Remotey/Wire.swift), of a view that runs at 60 fps. */
-function update(kind, picture, n, { q = 0, x = 0.5, y = 0.25, fx = x, fy = y, v = 0, text = false, width = 780 } = {}) {
+function update(kind, picture, n, { q = 0, x = 0.5, y = 0.25, fx = x, fy = y, v = 0, text = false, fitted = false, width = 780 } = {}) {
   const buffer = new ArrayBuffer(HEADER + picture.length), head = new DataView(buffer);
-  head.setUint8(0, kind); head.setUint8(1, 60); head.setUint8(2, +text);
+  head.setUint8(0, kind); head.setUint8(1, 60); head.setUint8(2, +text | (fitted ? 2 : 0));
   [x, y, fx, fy, width].forEach((value, i) => head.setFloat32(3 + 4 * i, value, true));
   [q, v, n].forEach((value, i) => head.setUint32(23 + 4 * i, value, true));
   new Uint8Array(buffer, HEADER).set(picture);
@@ -43,8 +43,25 @@ const pointerOnly = (q, x, y, fields = {}) => update(POINTER, [], 0, { q, x, y, 
 
 test('reads every field of the header the agent writes', () => {
   const meta = parseUpdate(update(JPEG, [0xff, 0xd8], 7, { q: 3, x: 0.5, y: 0.25, fx: 0.75, fy: 1.5, v: 9, text: true }));
-  assert.deepEqual({ ...meta, picture: [...meta.picture] }, { kind: JPEG, fps: 60, followsText: true, x: 0.5, y: 0.25,
+  assert.deepEqual({ ...meta, picture: [...meta.picture] }, { kind: JPEG, fps: 60, followsText: true, fitted: false, x: 0.5, y: 0.25,
     fx: 0.75, fy: 1.5, width: 780, q: 3, v: 9, n: 7, picture: [0xff, 0xd8] });
+  // The flags are told apart: fitted to a window, with and without typed text in it.
+  assert.deepEqual([parseUpdate(update(JPEG, [], 1, { fitted: true })), parseUpdate(update(JPEG, [], 1, { fitted: true, text: true }))]
+    .map((m) => [m.fitted, m.followsText]), [[true, false], [true, true]]);
+});
+
+test('a picture whose zoom the Mac chose is shown as it comes, and a pinch scales it from there', async () => {
+  const s = setup();
+  s.player.zoomTo(0.5);
+  // Fitted to a window 1280 points wide: 0.25 on this display, where the page had asked for 0.5.
+  s.player.receive(packet(1, true, 31, { fitted: true, width: 1280, fx: 0.25, fy: 0.5 })); await s.player.chain;
+  s.output(0, 1);
+  assert.match(s.picture.style.transform, /scale\(2\)/, 'the page still wants its own zoom');
+  s.player.zoomTo(0);
+  assert.equal(s.picture.style.transform, '', 'the Mac picks: no preview');
+  s.player.zoomTo(0.5);
+  assert.equal(s.picture.style.transform, 'translate(80px,90px) scale(2) translate(-80px,-90px)', 'pinched in, around the pointer');
+  s.player.close();
 });
 
 test('submits both frames without waiting for output, but acknowledges only drawn frames', async () => {

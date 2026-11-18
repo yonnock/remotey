@@ -17,6 +17,8 @@ struct LiveUpdate {
     var focus: CGPoint
     /// The view follows the text caret instead of the pointer.
     var followsText: Bool
+    /// The view is fitted to the window in front, so its zoom is the Mac's choice and not the request's.
+    var fitted: Bool
     /// Number of the view request the picture was cut for.
     var request: UInt32
     /// Width of the picture in points, which gives the pointer's size on the phone.
@@ -51,11 +53,15 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let pixelRatio: Double
         let h264: Bool
         let framesPerSecond: Int32
+        /// The view shows the window in front whole, wherever the pointer is in it, instead of the region
+        /// around the pointer at `zoom`. Without such a window `zoom` counts.
+        let fit: Bool
         /// The page's number for this request. Every update names it, so the page knows which zoom a picture has.
         let number: UInt32
 
         /// Nil for a size no phone display has.
-        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool, fps: Int, number: UInt32 = 0) {
+        init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool, fps: Int, fit: Bool = false,
+              number: UInt32 = 0) {
             guard (50...4000).contains(width), (50...4000).contains(height) else { return nil }
             self.width = width
             self.height = height
@@ -64,6 +70,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             self.pixelRatio = min(max(pixelRatio, 1), ScreenView.maxPixelRatio)
             self.h264 = h264
             self.framesPerSecond = h264 ? Int32(min(max(fps, 30), 120)) : 30
+            self.fit = fit
             self.number = number
         }
     }
@@ -74,13 +81,17 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private struct Geometry: Equatable {
         let request: Request
         let displays: [Display]
+        /// The window the view is fitted to. Nil: the view is cut around the pointer at the request's zoom.
+        let window: CGRect?
         /// Output pixels per point, the same for every display.
         let scale: Double
         let revision: UInt64
         let framesPerSecond: Int32
 
-        func view(around cursor: CGPoint) -> CGRect {
-            ScreenView.viewport(request, displays: displays.map(\.bounds), around: cursor)
+        /// The view that shows `point`: the pointer, or the text caret while the phone types.
+        func view(around point: CGPoint) -> CGRect {
+            if let window { return ScreenView.fitted(request, displays: displays.map(\.bounds), to: window, holding: point) }
+            return ScreenView.viewport(request, displays: displays.map(\.bounds), around: point)
         }
     }
 
@@ -165,6 +176,11 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private static let leadIn = 200.0
     /// While typing, the view moves only once the caret comes this close to an edge, as a share of the view.
     private static let textMargin = 0.2
+    /// A fitted window is never shown larger than this: a small dialog stays a small dialog.
+    static let maxFitZoom = 2.0
+    /// A fitted view keeps the pointer this far inside its edges, in CSS pixels of the phone: room for the
+    /// pointer's picture, and near an edge the view shows what lies beyond it.
+    private static let pointerMargin = 20.0
 
     // Main queue state.
     private var request: Request?
@@ -184,6 +200,11 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private var cursorSent: Pointer.Picture?
     private var cursorCheck = (scheduled: false, again: false)
     private lazy var textFocus = TextFocus { [weak self] target in self?.setText(target) }
+    private lazy var frontWindow = FrontWindow { [weak self] frame in self?.setWindow(frame) }
+    /// The window in front, while the request asks to fit the view to it.
+    private var fitTo: CGRect?
+    /// The lock screen covers every window: the view shows the pointer there, and the password field.
+    var locked = false { didSet { if locked != oldValue { watchWindow() } } }
 
     // Frame queue state.
     private let queue = DispatchQueue(label: "remotey.frames", qos: .userInteractive)
@@ -259,6 +280,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         if restarting { cursorSent = nil }
         if request == nil { followText(false) }
         watchMouse(request != nil)
+        watchWindow()
         sendCursorIfChanged()
         configure()
     }
@@ -305,6 +327,22 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             self.text = target
             self.encodeLatest()
         }
+    }
+
+    /// Follows the window in front while the view is fitted to it, and forgets it otherwise.
+    private func watchWindow() {
+        if request?.fit == true, !locked {
+            if !frontWindow.isWatching { frontWindow.start() }
+        } else if frontWindow.isWatching {
+            frontWindow.stop()
+            setWindow(nil)
+        }
+    }
+
+    private func setWindow(_ frame: CGRect?) {
+        guard frame != fitTo else { return }
+        fitTo = frame
+        if request != nil { configure() }
     }
 
     private func watchMouse(_ on: Bool) {
@@ -371,7 +409,8 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let revision = self.revision
         let displays = Self.displays()
         guard !displays.isEmpty else { throw DisplayUnavailable() }
-        let regionWidth = Self.region(request, fitting: displays.map(\.bounds)).width
+        let window = fitTo
+        let regionWidth = Self.region(request, fitting: displays.map(\.bounds), window: window).width
         let outputWidth = min(regionWidth * displays.map(\.backingScale).max()!,
                               request.width * request.pixelRatio, Self.maxOutputWidth)
         let scale = outputWidth / regionWidth
@@ -440,11 +479,13 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         }
         guard revision == self.revision else { return }
         let fps = displays.map { min(request.framesPerSecond, $0.framesPerSecond) }.max()!
-        let geometry = Geometry(request: request, displays: displays, scale: scale, revision: revision, framesPerSecond: fps)
+        let geometry = Geometry(request: request, displays: displays, window: window, scale: scale, revision: revision,
+                                framesPerSecond: fps)
         queue.async {
             // A change of a capture's frame rate alone leaves the picture on the phone as it is.
             guard geometry != self.geometry else { return }
             self.geometry = geometry
+            self.textView = nil
             // A static screen sends no new frame for the new view; the kept ones show it.
             self.stale = true
             self.encodeLatest()
@@ -498,11 +539,12 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         configure()
     }
 
-    /// Region size in points: the pad's aspect at the requested zoom, but no larger than it takes to show
-    /// every display at once. So zooming out ends at the whole desktop, whichever way the phone is held.
-    /// The size follows from the request and the displays alone, not from where the pointer is.
-    private static func region(_ request: Request, fitting displays: [CGRect]) -> CGSize {
-        let width = request.width / request.zoom, height = request.height / request.zoom
+    /// Region size in points: the pad's aspect at the requested zoom, or at the zoom that shows `window`
+    /// whole, but no larger than it takes to show every display at once. So zooming out ends at the whole
+    /// desktop, whichever way the phone is held. The size does not depend on where the pointer is.
+    private static func region(_ request: Request, fitting displays: [CGRect], window: CGRect? = nil) -> CGSize {
+        let zoom = window.map { min(request.width / max($0.width, 1), request.height / max($0.height, 1), maxFitZoom) } ?? request.zoom
+        let width = request.width / zoom, height = request.height / zoom
         let all = displays.reduce(CGRect.null) { $0.union($1) }
         let fit = min(1, max(all.width / width, all.height / height))
         return CGSize(width: width * fit, height: height * fit)
@@ -558,6 +600,32 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let limits = grown.last!
         return CGRect(x: origin(of: size.width, around: cursor.x, limits: limits.minX...limits.maxX, all: all.minX...all.maxX),
                       y: origin(of: size.height, around: cursor.y, limits: limits.minY...limits.maxY, all: all.minY...all.maxY),
+                      width: size.width, height: size.height)
+    }
+
+    /// The region that shows `window` whole, in global points: as large as the pad's aspect allows, so the
+    /// window fills the pad's width or its height, whichever limits.
+    ///
+    /// It lies around the window and inside the displays the window is on, as the pointer's view lies inside
+    /// the pointer's display; taller or wider than those, it has them in its middle (see `origin`). A point
+    /// outside it pushes it: the view moves just far enough to hold `point`, the pointer or the text caret,
+    /// and returns as the point does. So the menu bar and the other windows stay within reach, with no jump.
+    static func fitted(_ request: Request, displays: [CGRect], to window: CGRect, holding point: CGPoint) -> CGRect {
+        let size = region(request, fitting: displays, window: window)
+        let all = displays.reduce(CGRect.null) { $0.union($1) }
+        let home = displays.filter { $0.intersects(window) }.reduce(CGRect.null) { $0.union($1) }
+        let limits = home.isNull ? all : home
+        let margin = pointerMargin * size.width / request.width
+        func place(_ length: Double, around centre: Double, limits: ClosedRange<Double>, all: ClosedRange<Double>, holding point: Double) -> Double {
+            let rest = origin(of: length, around: centre, limits: limits, all: all)
+            let margin = min(margin, length / 2)
+            let pushed = min(max(rest, point + margin - length), point - margin)
+            // Not beyond the desktop for the margin's sake: at its edge the pointer reaches the picture's edge.
+            guard length <= all.upperBound - all.lowerBound else { return pushed }
+            return min(max(all.lowerBound, pushed), all.upperBound - length)
+        }
+        return CGRect(x: place(size.width, around: window.midX, limits: limits.minX...limits.maxX, all: all.minX...all.maxX, holding: point.x),
+                      y: place(size.height, around: window.midY, limits: limits.minY...limits.maxY, all: all.minY...all.maxY, holding: point.y),
                       width: size.width, height: size.height)
     }
 
@@ -665,7 +733,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             let numbered = picture.map { (number: window.send(now: ProcessInfo.processInfo.systemUptime), content: $0) }
             if numbered == nil { stats.places += 1 } else { stats.pictures += 1 }
             self.deliver(LiveUpdate(pointer: inside(cursor), focus: inside(focus), followsText: followsText,
-                                    request: geometry.request.number, width: view.width,
+                                    fitted: geometry.window != nil, request: geometry.request.number, width: view.width,
                                     framesPerSecond: geometry.framesPerSecond, sequence: sequence, picture: numbered),
                          revision: geometry.revision)
         }

@@ -2,8 +2,8 @@ import CoreGraphics
 import Foundation
 
 /// Everything the agent and the page say to each other. On the page each message lives in the module it serves:
-/// `Web/live-view.js` reads the live view's updates, `Web/apps.js` the switcher's lists, and `Web/remote.js`
-/// sends the commands and routes what arrives.
+/// `Web/live-view.js` reads the live view's updates, `Web/apps.js` the switcher's lists, `Web/displays.js` the list
+/// of displays, and `Web/remote.js` sends the commands and routes what arrives.
 enum Wire {
     /// What the page says. A message is JSON; `t` names its kind, the other fields belong to one kind or another.
     enum Command {
@@ -22,7 +22,8 @@ enum Wire {
         case key(String, mods: [String], count: Int)
         case media(String)
         /// Nil switches the live view off. The page asks for 30 to 120 frames per second, as it measures its display,
-        /// and numbers its requests: every update names the one it was cut for.
+        /// and numbers its requests: every update names the one it was cut for. With `fit` set to `window` the
+        /// agent picks the region itself, around the window in front; `zoom` counts where there is none.
         case view(ScreenView.Request?)
         /// The page has drawn or discarded the picture with this number.
         case shown(UInt32)
@@ -31,6 +32,10 @@ enum Wire {
         /// Brings an app to the front. `window` names one of its windows by its id in the list; without it the
         /// app comes forward as after a click in the Dock.
         case focus(pid: Int32, window: Int?)
+        /// The page asks for the Mac's displays, see `Displays`, and hears of every change to them from then on.
+        case displays
+        /// Puts the pointer on the display with this id in the list.
+        case display(CGDirectDisplayID)
         /// The password of the Mac's user, for the lock screen. See `LockScreen`.
         case unlock(String)
         /// Nothing the agent acts on: an unknown kind, a missing field, a value out of range.
@@ -59,6 +64,8 @@ enum Wire {
         var v: UInt32?
         var pid: Int32?
         var win: Int?
+        var fit: String?
+        var id: Int64?
     }
 
     private static let decoder = JSONDecoder()
@@ -90,6 +97,8 @@ enum Wire {
         case "shown": m.n.flatMap(UInt32.init(exactly:)).map { .shown($0) }
         case "apps": .apps
         case "focus": m.pid.flatMap { $0 > 0 ? .focus(pid: $0, window: m.win) : nil }
+        case "displays": .displays
+        case "display": m.id.flatMap(UInt32.init(exactly:)).map { .display($0) }
         case "unlock": m.s.flatMap { (1...256).contains($0.count) ? .unlock($0) : nil }
         default: nil
         }
@@ -100,7 +109,7 @@ enum Wire {
         guard m.on == true, let width = m.w, let height = m.h, let zoom = m.zoom, let pixelRatio = m.dpr,
               let codec = m.codec, let fps = m.fps else { return nil }
         return ScreenView.Request(width: width, height: height, zoom: zoom, pixelRatio: pixelRatio, h264: codec == "h264",
-                                  fps: fps, number: m.v ?? 0)
+                                  fps: fps, fit: m.fit == "window", number: m.v ?? 0)
     }
 
     /// The token was right. `page` is `Web.version`: a page that was loaded from an older agent reloads itself.
@@ -140,7 +149,16 @@ enum Wire {
         return json(Message(id: id, png: png))
     }
 
-    /// For messages that carry text from outside the agent: names of apps, titles of windows.
+    /// The displays as they are arranged, and which one holds the pointer.
+    static func displays(_ list: [Displays.Display]) -> String {
+        struct Message: Encodable {
+            let t = "displays"
+            let list: [Displays.Display]
+        }
+        return json(Message(list: list))
+    }
+
+    /// For messages that carry text from outside the agent: names of apps and displays, titles of windows.
     private static func json(_ message: some Encodable) -> String {
         String(decoding: (try? JSONEncoder().encode(message)) ?? Data("{}".utf8), as: UTF8.self)
     }
@@ -158,8 +176,9 @@ extension LiveUpdate {
     static let headerSize = 35
 
     /// One binary message, little endian: UInt8 kind (0 pointer only, 1 JPEG, 2 H.264), UInt8 frames per second,
-    /// UInt8 flags (1: the view follows the text caret), Float32 pointer x and y, Float32 focus x and y, Float32 width,
-    /// UInt32 sequence, UInt32 number of the view request, UInt32 picture number, then the picture.
+    /// UInt8 flags (1: the view follows the text caret, 2: it is fitted to the window in front), Float32 pointer x
+    /// and y, Float32 focus x and y, Float32 width, UInt32 sequence, UInt32 number of the view request, UInt32
+    /// picture number, then the picture.
     var data: Data {
         let (kind, payload): (UInt8, Data) = switch picture?.content {
         case nil: (0, Data())
@@ -169,7 +188,7 @@ extension LiveUpdate {
         var data = Data(capacity: Self.headerSize + payload.count)
         data.append(kind)
         data.append(UInt8(clamping: framesPerSecond))
-        data.append(followsText ? 1 : 0)
+        data.append((followsText ? 1 : 0) | (fitted ? 2 : 0))
         for value in [Float32(pointer.x).bitPattern, Float32(pointer.y).bitPattern, Float32(focus.x).bitPattern,
                       Float32(focus.y).bitPattern, Float32(width).bitPattern, sequence, request, picture?.number ?? 0] {
             withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SETTINGS, TAP_MS, Touchpad, detents, gain, settingAt, settingFraction, settingText, stepSetting } from '../Web/touchpad.js';
 import { appLabel, readApps, tapApp, tapWindow, windowTitle } from '../Web/apps.js';
+import { arrange, displayLabel, readDisplays, tapDisplay } from '../Web/displays.js';
 import { SENTINEL, diff, relay } from '../Web/typing.js';
 import { KEYBOARD_MIN, frame } from '../Web/viewport.js';
 
@@ -326,5 +327,39 @@ test('only a list of the expected shape is shown', () => {
   for (const broken of [{ t: 'apps' }, { t: 'apps', list: 'x' }, { t: 'apps', list: [{ pid: 1 }] },
     { t: 'apps', list: [{ ...list[0], windows: [{ id: 'a', title: 'x' }] }] }, { t: 'apps', list: [{ ...list[0], pid: '412' }] }]) {
     assert.equal(readApps(broken), null, JSON.stringify(broken));
+  }
+});
+
+// ---- The display picker (displays.js)
+const laptop = { id: 1, name: 'Built-in Retina Display', x: 0, y: 0, w: 2056, h: 1329, pointer: true };
+const desk = { id: 69734662, name: 'Studio Display', x: -1939, y: 1329, w: 3008, h: 1692, pointer: false };
+
+test('the displays are drawn as they are arranged', () => {
+  // Two large displays side by side under a laptop: the map is twice as wide as it is tall.
+  const right = { ...desk, id: 3, x: 1069 };
+  const { ratio, tiles } = arrange([laptop, desk, right]);
+  assert.ok(Math.abs(ratio - 6016 / 3021) < 1e-9);
+  const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} is not ${b}`);
+  near(tiles[0].left, 1939 / 6016); near(tiles[0].top, 0); near(tiles[0].width, 2056 / 6016); near(tiles[0].height, 1329 / 3021);
+  near(tiles[1].left, 0); near(tiles[1].top, 1329 / 3021); near(tiles[1].width, 0.5);
+  near(tiles[2].left, 0.5); near(tiles[2].top + tiles[2].height, 1);
+  assert.deepEqual(tiles.map((t) => t.id), [1, 69734662, 3]);
+  // No tile leaves the map, and none lies on another.
+  for (const t of tiles) assert.ok(t.left >= 0 && t.top >= 0 && t.left + t.width <= 1 + 1e-9 && t.top + t.height <= 1 + 1e-9);
+  assert.deepEqual(arrange([laptop]), { ratio: 2056 / 1329, tiles: [{ id: 1, left: 0, top: 0, width: 1, height: 1 }] });
+});
+
+test('a tap on a display asks for the pointer there, and a tile says where the pointer is', () => {
+  assert.deepEqual(tapDisplay(desk), { t: 'display', id: 69734662 });
+  assert.equal(displayLabel(laptop), 'Display Built-in Retina Display, mit dem Zeiger');
+  assert.equal(displayLabel(desk), 'Display Studio Display');
+});
+
+test('only a list of displays of the expected shape is drawn', () => {
+  assert.deepEqual(readDisplays({ t: 'displays', list: [laptop, desk] }), [laptop, desk]);
+  assert.deepEqual(readDisplays({ t: 'displays', list: [] }), []);
+  for (const broken of [{ t: 'displays' }, { t: 'displays', list: [{ id: 1 }] }, { t: 'displays', list: [{ ...desk, w: 0 }] },
+    { t: 'displays', list: [{ ...desk, id: '2' }] }, { t: 'displays', list: [{ ...desk, x: null }] }, { t: 'displays', list: [{ ...desk, name: 3 }] }]) {
+    assert.equal(readDisplays(broken), null, JSON.stringify(broken));
   }
 });

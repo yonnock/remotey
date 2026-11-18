@@ -1,6 +1,7 @@
-// The page: connection, controls, keys and settings, wired to the touchpad, the viewport, the live view and
-// the switcher.
+// The page: connection, controls, keys and settings, wired to the touchpad, the viewport, the live view, the
+// switcher and the display picker.
 import { Switcher, readApps } from './apps.js';
+import { Picker, readDisplays } from './displays.js';
 import { Cadence, LiveView, Meter } from './live-view.js';
 import { SETTINGS, Touchpad, detents, settingAt, settingFraction, settingText, stepSetting } from './touchpad.js';
 import { relay } from './typing.js';
@@ -63,6 +64,7 @@ function connect() {
       pad.textContent = m.ax ? '' : 'Am Mac fehlt die Bedienungshilfen-Freigabe für Remotey (Systemeinstellungen, Datenschutz & Sicherheit).';
       setStatus(m.ax ? 'Verbunden' : 'Freigabe fehlt', m.ax ? 'ok' : 'bad');
       sentView = '';
+      fitted = 0;
       syncView();
       if (viewOn) cadence.measure(); // low power mode may have changed it while the page was away
       if (sheet === 'apps') askApps(); // the Mac is back while the switcher is open
@@ -80,6 +82,9 @@ function connect() {
       if (list) switcher.update(list);
     } else if (m.t === 'icon') {
       switcher.picture(m.id, m.png);
+    } else if (m.t === 'displays') {
+      const list = readDisplays(m);
+      if (list) picker.update(list);
     } else if (m.t === 'denied') {
       denied = true;
       pad.textContent = 'Zugangsschlüssel ungültig. Am Mac neu koppeln und den QR-Code scannen.';
@@ -120,7 +125,8 @@ function takeMods() {
 }
 // A modifier has a key on the deck and one above the keyboard; both show whether it is armed.
 function showMods() { document.querySelectorAll('[data-mod]').forEach((b) => b.classList.toggle('on', mods.has(b.dataset.mod))); }
-function sendKey(k) { send({ t: 'key', k, mods: takeMods(), n: 1 }); }
+// `held` is a modifier the key itself brings along, as the keys for an app's zoom do.
+function sendKey(k, held) { send({ t: 'key', k, mods: [...new Set([...(held ? [held] : []), ...takeMods()])], n: 1 }); }
 function sendClick(b) { send({ t: 'c', b, mods: takeMods() }); }
 
 // ---- Settings: pointer speed, acceleration and scroll speed, independent of each other. Each is a slider
@@ -202,7 +208,7 @@ const touchpad = new Touchpad({
   dragEnd: () => send({ t: 'b', b: 'left', d: false }),
   pinchStart() {
     if (!viewOn) return false;
-    pinchFrom = pinching = zoom();
+    pinchFrom = pinching = fitted || zoom(); // a fitted picture is pinched from the zoom it has
   },
   pinch(scale) {
     // Readout and preview stop where the Mac did (see `syncView`); the request at the end still asks for all of it.
@@ -212,6 +218,7 @@ const touchpad = new Touchpad({
   },
   pinchEnd(scale) {
     pinching = 0;
+    leaveFit();
     setZoom(pinchFrom * scale);
   },
 }, () => settings);
@@ -228,6 +235,8 @@ for (const [event, type] of [['touchstart', 'start'], ['touchmove', 'move'], ['t
 // display, and the trackpad lies on top of it. Without the live view the same surface is a plain trackpad.
 // The steps of the keys, and with their ends the range of the pinch. How far out a view really goes is up to
 // the Mac: it stops where every display is in the picture, and the value follows (see `placed`).
+// With "Auto" the Mac picks the region itself: the window in front, whole. The readout shows the zoom that
+// took, and its lamp is lit. A pinch or a zoom key takes the zoom back into the hand, from where it stands.
 const ZOOM_STEPS = [0.02, 0.03, 0.04, 0.06, 0.09, 0.12, 0.18, 0.25, 0.35, 0.5, 0.7, 1, 1.4, 2, 2.8, 4];
 const clampZoom = (z) => Math.min(ZOOM_STEPS.at(-1), Math.max(ZOOM_STEPS[0], z));
 const wide = matchMedia('(orientation: landscape) and (max-height: 540px)'); // a phone on its side
@@ -242,22 +251,26 @@ const zoomKey = () => (wide.matches ? 'zoom-wide' : 'zoom');
 const zoom = () => zooms[zoomKey()];
 let sentView = '', sentSize = null, requestNumber = 0;
 let floor = 0; // the zoom at which the Mac had every display in the picture, for a display of the current size
+let fit = store.get('fit', (v) => typeof v === 'boolean', false); // "Auto" is on
+let fitted = 0; // the zoom of the picture on the display while it is fitted to a window, else 0
 function syncView() {
   layout();
   body.classList.toggle('view', viewOn);
   view.hidden = !viewOn;
   $('#viewBtn').classList.toggle('on', viewOn);
-  // Readout and preview stop where the Mac did, also while it is asked for more.
-  const showing = Math.max(pinching || zoom(), floor);
+  // Readout and preview stop where the Mac did, also while it is asked for more. A fitted picture has the
+  // zoom the Mac chose for it, and is shown as it comes.
+  const showing = pinching ? Math.max(pinching, floor) : fitted || Math.max(zoom(), floor);
   showZoom(showing);
   if (!viewOn) $('#follow').hidden = true;
   store.set('view', viewOn);
   if (!liveView) return; // not paired
   liveView.show(viewOn);
-  liveView.zoomTo(showing);
+  liveView.zoomTo(fitted && !pinching ? 0 : showing);
   if (!ready || ws.readyState !== 1) return;
   const r = screenEl.getBoundingClientRect(); // measured after the layout change above
-  const request = { t: 'view', on: viewOn, w: r.width, h: r.height, zoom: zoom(),
+  // `zoom` goes along with "Auto" too: it counts while the Mac has no window in front to fit.
+  const request = { t: 'view', on: viewOn, w: r.width, h: r.height, zoom: zoom(), ...(fit && { fit: 'window' }),
     dpr: window.devicePixelRatio || 2, codec: liveView.codec, fps: cadence.framesPerSecond };
   // Layout observers call this freely; an unchanged request must not restart the stream.
   const text = JSON.stringify(request);
@@ -277,13 +290,36 @@ function placed(update, picture) {
   const shown = screenEl.clientWidth / update.width;
   const current = sentSize && Math.abs(screenEl.clientWidth - sentSize.w) < 1 && Math.abs(screenEl.clientHeight - sentSize.h) < 1;
   if (!picture || pinching || !current || update.v !== requestNumber) return;
+  // Fitted to a window: the zoom is the Mac's, and says nothing about how far out the hand may go.
+  if (fit && update.fitted) {
+    if (Math.abs(shown - fitted) > fitted * 0.001) { fitted = shown; syncView(); }
+    return;
+  }
+  if (fitted) { fitted = 0; syncView(); } // "Auto" without a window in front: the zoom set by hand
   if (shown > zoom() * 1.02) { floor = shown; setZoom(shown); }
   else if (zoom() < floor / 1.02) { floor = 0; syncView(); } // the Mac shows more than it could: a display was added
 }
 function showZoom(z) {
   const text = `${decimal(z >= 1 ? Math.round(z * 10) / 10 : Math.round(z * 100) / 100)}×`;
+  const readout = $('[data-act=fit]');
   $('#zoomValue').textContent = text;
-  $('[data-act=zoom-reset]').setAttribute('aria-label', `Zoom ${text}, antippen für 1×`);
+  readout.classList.toggle('on', fit);
+  readout.setAttribute('aria-pressed', fit);
+  readout.setAttribute('aria-label', `Zoom ${text}. Auto ${fit ? 'an: das Bild zeigt das vordere Fenster ganz' : 'aus'}`);
+}
+// "Auto" on or off. Off, the view is cut around the pointer again, at the zoom last set by hand.
+function setFit(on) {
+  fit = on;
+  fitted = 0;
+  store.set('fit', fit);
+  syncView();
+}
+// The hand takes the zoom: "Auto" ends, as moving the pointer ends "Folgt Text". The request follows with the new zoom.
+function leaveFit() {
+  if (!fit) return;
+  fit = false;
+  fitted = 0;
+  store.set('fit', fit);
 }
 function setZoom(z) {
   const key = zoomKey();
@@ -292,8 +328,10 @@ function setZoom(z) {
   syncView();
 }
 function stepZoom(direction) {
-  const next = direction > 0 ? ZOOM_STEPS.find((z) => z > zoom() * 1.001) : ZOOM_STEPS.findLast((z) => z < zoom() / 1.001);
-  if (next) setZoom(next);
+  const from = fitted || zoom(); // a fitted picture steps from the zoom it has
+  const next = direction > 0 ? ZOOM_STEPS.find((z) => z > from * 1.001) : ZOOM_STEPS.findLast((z) => z < from / 1.001);
+  leaveFit();
+  if (next) setZoom(next); else syncView();
 }
 // The readout follows the stream: written twice a second while messages arrive, and once more when they stop.
 const meterEl = $('#meter');
@@ -351,11 +389,17 @@ $('#pages').addEventListener('touchmove', (e) => {
 // sheet away, so the display shows what came forward. See apps.js.
 const switcher = new Switcher({ list: $('#apps'), title: $('#appsTitle'), note: $('#appsNote'),
   back: $('[data-act=apps-back]'), icon: $('#appsIcon') }, (message) => { send(message); setSheet(''); });
+// Under the apps, on a Mac with more than one display: the displays as they are arranged. A tap puts the
+// pointer on one and the sheet away, so the display shows where the pointer went. See displays.js.
+const picker = new Picker($('#displays'), (message) => { send(message); setSheet(''); });
 // Asked whenever the sheet opens, and when the connection goes or comes back while it is open. Whatever list
 // is on show stops counting at once: nothing of it can be tapped until the Mac has answered.
 function askApps() {
   switcher.reset();
-  if (ready) send({ t: 'apps' }); else switcher.say('Die Apps erscheinen, sobald der Mac verbunden ist.');
+  picker.reset();
+  if (!ready) return switcher.say('Die Apps erscheinen, sobald der Mac verbunden ist.');
+  send({ t: 'apps' });
+  send({ t: 'displays' });
 }
 
 // ---- Layout: orientation, typing, keyboard and the sheets. A sheet lies over the display, so opening one
@@ -433,7 +477,7 @@ follow((frame) => {
 });
 wide.addEventListener('change', syncView);
 // Keyboard and rotation resize the display; the captured region must follow.
-new ResizeObserver(() => { floor = 0; liveView?.layout(); syncView(); }).observe(screenEl);
+new ResizeObserver(() => { floor = 0; fitted = 0; liveView?.layout(); syncView(); }).observe(screenEl);
 
 // ---- Buttons. preventDefault on touchstart keeps the iOS keyboard open.
 function fire(b) {
@@ -443,11 +487,11 @@ function fire(b) {
   else if (d.act in SHEETS) setSheet(sheet === d.act ? '' : d.act);
   else if (d.act === 'apps-back') switcher.back();
   else if (d.act === 'zoom') stepZoom(Number(d.step));
-  else if (d.act === 'zoom-reset') setZoom(1);
+  else if (d.act === 'fit') setFit(!fit);
   else if (d.act === 'settings-reset') resetSettings();
   else if (d.act === 'done') field.blur();
   else if (d.act === 'type') field.focus();
-  else if (d.key) sendKey(d.key);
+  else if (d.key) sendKey(d.key, d.with);
   else if (d.media) send({ t: 'media', k: d.media });
   else if (d.click) sendClick(d.click);
   else if (d.mod) { mods.has(d.mod) ? mods.delete(d.mod) : mods.add(d.mod); showMods(); }

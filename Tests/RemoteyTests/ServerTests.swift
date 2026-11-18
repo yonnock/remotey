@@ -135,6 +135,15 @@ final class ServerTests: XCTestCase {
         }
         XCTAssertEqual(icons, Set(apps.compactMap { $0["icon"] as? String }))
 
+        // The displays for the picker: all of this Mac's, as they are arranged.
+        try await socket.send(.string(#"{"t":"displays"}"#))
+        let answer = try await next()
+        XCTAssertEqual(answer["t"] as? String, "displays")
+        let displays = try XCTUnwrap(answer["list"] as? [[String: Any]])
+        XCTAssertEqual(displays.count, NSScreen.screens.count)
+        XCTAssertEqual(displays.filter { $0["pointer"] as? Bool == true }.count, 1)
+        XCTAssertTrue(displays.allSatisfy { ($0["w"] as? Double ?? 0) > 0 && ($0["name"] as? String)?.isEmpty == false })
+
         // Asked again, the list comes without its icons: the next message is the answer to what follows it.
         for _ in 1...2 {
             try await socket.send(.string(#"{"t":"apps"}"#))
