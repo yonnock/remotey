@@ -20,6 +20,7 @@ struct SettingsPane: View {
         }
         .formStyle(.grouped)
         .scrollDisabled(true)
+        .tint(Accent.color)
         .frame(width: Self.width)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -183,11 +184,7 @@ private struct DeviceRow: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            Image(systemName: MacState.symbol(forDevice: device.name))
-                .font(.system(size: 20))
-                .foregroundStyle(.secondary)
-                .frame(width: 24)
-                .accessibilityHidden(true)
+            RowSymbol(name: MacState.symbol(forDevice: device.name))
             VStack(alignment: .leading, spacing: 2) {
                 Text(device.name).fontWeight(.semibold)
                 HStack(spacing: 5) {
@@ -202,7 +199,7 @@ private struct DeviceRow: View {
             .accessibilityElement(children: .combine)
             Spacer()
             Button(action: edit) {
-                Image(systemName: "info.circle")
+                Image(systemName: "info.circle").foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
             .help(Texts.Settings.details)
@@ -283,7 +280,7 @@ private struct SecurityPane: View {
                         Text(Texts.Settings.faceID)
                         Text(state.faceUnlock ? Texts.Settings.faceIDOn : Texts.Settings.faceIDOff)
                     } icon: {
-                        Image(systemName: "faceid").foregroundStyle(state.faceUnlock ? Color.green : Color.secondary)
+                        RowSymbol(name: "faceid")
                     }
                 }
             } footer: {
@@ -293,8 +290,11 @@ private struct SecurityPane: View {
                 ForEach([Setup.Item.tailscale, .https, .serve], id: \.self) { item in
                     SettingsSetupRow(row: state.row(item), perform: model.actions.perform)
                 }
-                LabeledContent(Texts.Settings.allowed) {
+                LabeledContent {
                     Text(state.owner.map(Texts.Settings.onlyOwner) ?? Texts.Settings.ownerUnknown).textSelection(.enabled)
+                } label: {
+                    // With a symbol like the rows above it, so its title stands where theirs do.
+                    Label { Text(Texts.Settings.allowed) } icon: { RowSymbol(name: "person.crop.circle") }
                 }
                 if state.facts.tailscale?.serve?.mapping == .ours {
                     HStack {
@@ -343,11 +343,7 @@ private struct SettingsSetupRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 11) {
-            Image(systemName: Self.symbol(row.item))
-                .font(.system(size: 17))
-                .foregroundStyle(.secondary)
-                .frame(width: 24)
-                .accessibilityHidden(true)
+            RowSymbol(name: Self.symbol(row.item))
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title)
                 Text(row.detail)
@@ -359,23 +355,27 @@ private struct SettingsSetupRow: View {
             .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
             if row.state == .ok, row.action.map(SetupRowView.showsWhenOK) != true {
-                Check.Mark(state: .done)
+                Check.Mark(state: .done, size: Self.mark)
             } else if let action = row.action, row.state != .working {
                 HStack(spacing: 8) {
-                    Check.Mark(state: Check.State(row.state))
+                    Check.Mark(state: Check.State(row.state), size: Self.mark)
                     Button(action.title) { perform(action) }
                 }
             } else {
-                Check.Mark(state: Check.State(row.state))
+                Check.Mark(state: Check.State(row.state), size: Self.mark)
             }
         }
         .padding(.vertical, 2)
     }
 
+    /// A state beside a form's controls: the size of a switch's knob, not of a heading.
+    static let mark: CGFloat = 17
+
+    /// The menu's symbols, so a line looks the same in both.
     static func symbol(_ item: Setup.Item) -> String {
         switch item {
         case .accessibility: return "hand.raised"
-        case .screenRecording: return "rectangle.dashed.badge.record"
+        case .screenRecording: return "display"
         case .tailscale: return "network"
         case .https: return "lock"
         case .serve: return "point.3.filled.connected.trianglepath.dotted"
@@ -383,6 +383,19 @@ private struct SettingsSetupRow: View {
         case .firstMove: return "hand.draw"
         case .loginItem: return "power"
         }
+    }
+}
+
+/// A row's symbol in the settings: one size, weight and column for every row, so the titles line up.
+private struct RowSymbol: View {
+    var name: String
+
+    var body: some View {
+        Image(systemName: name)
+            .font(.system(size: 16))
+            .foregroundStyle(.secondary)
+            .frame(width: 24, height: 24)
+            .accessibilityHidden(true)
     }
 }
 
