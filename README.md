@@ -66,7 +66,7 @@ Known limits:
 
 - A process running as you can read the files in `~/Library/Application Support/Remotey`. While the old token is accepted, it can read it and gets the same input and screen access as a phone. With the token off it finds only hashes, but it can still reach the loopback ports, send any header, and try the six digits while a pairing offer is open, five times per offer.
 - The checks of `Host`, `Origin` and Tailscale's headers follow Tailscale's source on `main`; a real handshake through `tailscale serve` has not been recorded.
-- "Trennen" (disconnect) in the menu ends a session, and the phone connects again at once. To keep a phone out, revoke it or pause remote control.
+- "Trennen" (disconnect) in the menu ends a session: the phone is told so and stays away until its user taps "Wieder verbinden" (Connect Again) or opens the page anew. It is no lock. To keep a phone out, revoke it or pause remote control.
 
 ## Setup
 
