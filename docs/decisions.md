@@ -560,6 +560,74 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
     - Kein Schalter in der Oberfläche: der Modus entscheidet. Verifier v16: T15 prüft erst, dass der Zeiger ohne
       Telefonform auf den Mac wartet (17 Bewegungen gesendet, Zeiger unverändert), dann wie bisher mit Telefonform.
 
+18. Einrichtungsassistent, das Modell ohne Oberfläche (Issue 2, Teil 1). Heute sind es etwa 15 Schritte von Hand und
+    vier Befehle im Terminal, sechs davon scheitern still. Der Assistent ist eine Liste, die sich etwa einmal je Sekunde
+    selbst prüft; jede Zeile hat genau einen Zustand und höchstens eine Taste. Diese Runde baut nur das Modell darunter,
+    in neuen Dateien; Fenster, Menü und Einstellungen kommen danach darauf.
+    - Entscheidung Form: drei Schichten. `Tailscale` (Werte aus dem Werkzeug) und `TailscaleCLI` (das Werkzeug, hinter
+      dem Protokoll `TailscaleClient`), `Permissions` und `LoginItem`, und `Setup` (reine Logik: `Facts` hinein,
+      `[Row]` heraus) mit `SetupAssistant` (sammelt die Fakten, führt die Tasten aus). Eine Zeile hat `state`
+      (`ok`, `actionNeeded`, `working`, `failed`), in jedem Zustand einen Satz (`detail`) und höchstens eine `Action`
+      mit eigenem Titel; `SetupAssistant.perform` führt sie aus, die Oberfläche muss keine kennen. Für das Menü gibt es
+      `summary` (eine Zeile), für das Fenster `rows` und `changed`, für die Einstellungen `facts.tailscale`
+      (Name, Besitzer, Version, Freigabe) und die Tasten `.removeServe` und `.setLoginItem`.
+    - Entscheidung Pflicht: Bedienungshilfen, Tailscale, HTTPS und die Freigabe müssen grün sein; ist eine nicht grün,
+      öffnet sich der Assistent beim Start von selbst (`launchCheck`), sonst nur beim ersten Start. Bildschirmaufnahme
+      (nur fürs Live-Bild), Kopplung, erste Bewegung und Anmeldeobjekt sind es nicht: wer sie beim ersten Mal ließ,
+      wird nicht bei jedem Start gefragt, und ob schon ein Telefon gekoppelt war, weiß nur der Server. Eine Zeile, die
+      noch prüft (`working`), öffnet ihn nicht, sie kann einen Augenblick später grün sein.
+    - Entscheidung Takt: der Assistent schaut nur, solange ihn jemand ansieht (`watch`/`unwatch` gezählt), dann jede
+      Sekunde, mit einem Timer im Modus `.common`, damit er auch bei offenem Menü läuft. Tailscale wird nie doppelt
+      gefragt; was sich währenddessen änderte, holt ein Blick danach nach. `changed` kommt nur, wenn sich etwas
+      änderte, nicht jede Sekunde. Werkzeug und Abruf laufen im Hintergrund mit Zeitgrenze: lesen 5 s, ändern 20 s,
+      warten auf eine Person (Zustimmung, Anmeldung) 600 s, Abruf 30 s. An der Grenze bekommt das Werkzeug `SIGTERM`,
+      nach einer Sekunde `SIGKILL`; stdin ist leer, damit keine Frage es aufhält.
+    - Tailscale: gesucht in `/opt/homebrew/bin`, `/usr/local/bin`, dann im Binary der App. Aus `status --json`:
+      `BackendState`, `Version` (ab 1.52, da kam `serve --bg --set-path`), `Self.DNSName` ohne Punkt am Ende, der
+      `LoginName` zu `Self.UserID`, `CertDomains` (leer: HTTPS im Tailnet aus) und `AuthURL`. Aus
+      `serve status --json`: unsere Freigabe ist es, wenn auf Port 8443 `/` auf `127.0.0.1` oder `localhost` mit dem
+      Port der Seite zeigt und `/ws` auf den danach; ein Port mit anderem Ziel heißt „zeigt auf …“ und wird beim
+      Freigeben umgestellt. `AllowFunnel` für `…:8443` ist ein eigener, roter Zustand: die Fernbedienung wäre aus dem
+      Internet erreichbar; seine Taste entfernt die Freigabe.
+    - Freigeben führt dieselben zwei Befehle aus wie scripts/tailscale-serve.sh. Ist Serve im Tailnet noch nicht
+      erlaubt, druckt das Werkzeug einen Link und wartet, bis jemand zustimmt; der Läufer reicht deshalb die Ausgabe
+      weiter, während es läuft, und die Zeile bietet den Link, bis das Werkzeug von selbst fertig wird. Gelesen wird
+      der Link nur aus ganzen Zeilen: der Test mit einem Link, der über zwei Stücke der Pipe kam, schlug zuerst fehl
+      (`…/f/se`). Entfernen nimmt nur die beiden Pfade weg, damit anderes auf dem Port bleibt, und liest danach nach,
+      ob sie weg sind, statt die Meldungen des Werkzeugs zu deuten. Anmelden (`login`) geht wie Freigeben über den
+      gedruckten Link. Ein Homebrew-Dienst, der nicht läuft, braucht `sudo`: die Taste kopiert den Befehl.
+    - Selbsttest: einmal je Name, sobald die Freigabe steht und kein Funnel an ist, wieder nach jedem Freigeben und auf
+      Tastendruck, nicht jede Sekunde. Er holt `https://<Name>:8443/` und vergleicht den Inhalt mit der eigenen Seite,
+      eine andere Seite oder 502 (Tailscale erreicht den Agenten nicht) ist rot.
+    - Gemessen am Mac des Nutzers, nur lesend (Homebrew-tailscale 1.104.7, macOS 27): Form von `status --json` und
+      `serve status --json` wie oben; die echte Ausgabe ergab „läuft, Name, Besitzer, Zertifikat, unsere Freigabe, kein
+      Funnel“. Die Testdaten im Repo sind erfunden. Und: vom Mac an seinen eigenen Namen nimmt tailscaled die Verbindung
+      an und schließt sie vor dem TLS-Handschlag (curl: „Connection reset by peer“, `URLSession`: -1200 mit
+      Stream-Fehler -9816, `errSSLClosedNoNotify`; tailscaled schreibt „TLS handshake error … socket is not
+      connected“), während das iPhone über dieselbe Adresse kommt (so in den Runden davor). Der Selbsttest kann am Mac
+      also nicht gelingen. Dieser eine Fall heißt `inconclusive`: die Zeile ist grün und sagt, dass erst das iPhone
+      zeigt, ob die Adresse antwortet. Ein Handschlag, der mit einer Meldung endet (ein Zertifikat, das Tailscale nicht
+      bekommt), bleibt rot. Damit holt der Selbsttest hier auch kein Zertifikat vorab: der Handschlag kommt nie so weit
+      (gefolgert aus dem Protokoll von tailscaled).
+    - Bildschirmaufnahme: `CGPreflightScreenCaptureAccess` behält seine erste Antwort bis zum Neustart. Ohne die
+      Erlaubnis lässt der Window Server die Titel der Fenster anderer Apps weg (`kCGWindowName`), mit ihr hat jedes
+      einen, wenn auch leeren. Gemessen mit einem kleinen Programm auf macOS 27, einmal aus der Shell (Erlaubnis da:
+      Preflight `true`, 14 von 14 fremden Fenstern mit Titel) und einmal als launchd-Job (keine Erlaubnis: `false`,
+      1 von 14, und das eine gehört WindowManager, einem Systemprozess). Die Prüfung zählt deshalb nur Fenster regulärer
+      Apps (`activationPolicy == .regular`): eines mit Titel heißt erlaubt, keines heißt nicht erlaubt, ohne ein
+      solches Fenster gilt Preflight. In keinem Lauf kam eine Abfrage. Das Fragen ist eine eigene Taste:
+      `CGRequestScreenCaptureAccess` beim ersten Druck (Dialog, und Remotey steht danach in der Liste), danach öffnet
+      sie den Bereich in den Einstellungen; Bedienungshilfen ebenso mit `AXIsProcessTrustedWithOptions`.
+    - Server.swift fragt vor dem Live-Bild weiter Preflight (diese Runde ändert keine bestehende Datei). Solange es so
+      ist, sagt die Zeile bei einer Erlaubnis nach dem Start „Neustart nötig“ (`needsRestart`) mit der Taste
+      „Remotey neu starten“. Fragt der Server `Permissions.screenRecording`, entfällt das.
+    - Anmeldeobjekt: `SMAppService.mainApp` mit vier Zuständen; „braucht Erlaubnis“ öffnet die Anmeldeobjekte, und
+      ohne Bundle (`swift run`) gibt es keines.
+    - Tests: `SetupTests` (jede Zeile in jedem Zustand, Zusammenfassung, wann der Assistent aufgeht), `SetupAssistantTests`
+      (Takt, Zustimmungslink, Selbsttest einmal, Fehler bis zum nächsten Versuch, mit Warteschlangen, die sofort
+      laufen), `TailscaleTests` (aufgezeichnete Ausgaben, die Befehle des Skripts), `PermissionsTests`,
+      `CommandTests` (gegen /bin/sh: Grenze, Ausgabe während des Laufs).
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -614,3 +682,13 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   als 300 ms von Anfang an (kostet einen Schritt auf die Hälfte, wie der Stillstand im Relay-Modell).
 - Runde 17: nur in Chromium und in Tests. Ob „Auto“ allein am iPhone wieder so läuft wie vor Runde 16, ist dort nicht
   geprüft; der Zeiger nimmt denselben Weg wie vorher (der Ort aus der Meldung des Macs).
+- Runde 18: am Mac des Nutzers wurde keine Erlaubnis umgeschaltet und nichts an Tailscale geändert. Dass die
+  Prüfung über Fenstertitel einer Erlaubnis im laufenden Prozess ohne Neustart folgt, ist gefolgert (zwei Prozesse,
+  einer mit, einer ohne Erlaubnis) und gelesen, nicht an einem Schalter gemessen; ebenso, dass Preflight seine erste
+  Antwort behält. macOS 14 bis 26 nicht geprüft, auch nicht, dass `CGWindowListCopyWindowInfo` dort nie fragt.
+  Die Links in die Einstellungen wurden nicht geöffnet. Freigeben, Entfernen, Anmelden und `up` liefen nie gegen das
+  echte Werkzeug: Wortlaut und Warten nach dem Zustimmungslink stammen aus dem Gedächtnis an Tailscales Quelltext,
+  geprüft nur an erfundenen Ausgaben; ob das Entfernen des letzten Pfads auch `AllowFunnel` löscht, ist offen (die
+  Zeile bleibt rot, bis der nächste Blick es zeigt). Tailscale.app ist hier nicht installiert: der Pfad ihres
+  Werkzeugs, seine Meldungen ohne laufende App und ob der Mac mit ihr seinen eigenen Namen erreicht, sind ungeprüft;
+  der Weg `answered` des Selbsttests lief nie echt. Die Grenze 1.52 ist aus dem Gedächtnis.
