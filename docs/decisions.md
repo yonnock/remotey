@@ -845,6 +845,101 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       Seitenverhältnis des Displays, dass T15 den Zeiger bei einem um 1 px breiteren Display einen halben Punkt daneben
       sah; die Seite war richtig.
 
+19. Glas über dem Mac (Analyse mit Mockups, Schritt zwei von zwei; Mockups 1 bis 11 der Analyse). Verifier v18, Basis =
+    4b85a83 mit v17, beide in derselben Chromium-Version.
+    - Gerüst: das Bildelement deckt das ganze Telefon, Ränder des Displays eingeschlossen; alles andere schwebt darüber.
+      Hochkant oben links der Mac-Knopf (Zustand als Zeichen und Wort, Name, Menü), oben rechts die Ansicht-Kapsel
+      (−, Anzeige mit Menü, +), unten die Maustasten (‹ › Klick Rechtsklick) und die Leiste (Auf dem Mac schreiben,
+      Apps, Steuerung). Quer stehen dieselben Knöpfe in den beiden Seitenrändern, die am iPhone ohnehin frei sind:
+      Mac, ‹ ›, Rechtsklick, Klick auf der einen Seite, Ansicht, Schreiben, Apps, Steuerung auf der anderen;
+      „Maustasten rechts“ tauscht die Seiten. `remote.js` hängt die Knöpfe beim Drehen um (`arrange`), damit die
+      Reihenfolge für Tastatur und VoiceOver der sichtbaren folgt.
+    - Ränder für den Mac: die Ansichtsanfrage trägt `inset`, gemessen an den Zonen der Bedienelemente (hochkant oben
+      und unten, quer links und rechts; beim Tippen oben und die Tippleiste). Blätter, Menüs und die Tour zählen nicht:
+      sie kommen und gehen, und eine neue Anfrage hieße ein neuer Strom. Geprüft, wo die Seite mit der Breite des
+      Bildes rechnet: Zoom (`clientWidth / width`), Vorschau beim Zoomen, Zeiger voraus und Anzeige rechnen mit dem
+      ganzen Element, wie der Kopf das gesendete Bild beschreibt; nichts davon musste sich ändern. Gemessen (T20):
+      Bildelement immer so groß wie das Telefon, `inset` hochkant [48, 0, 116, 0], quer [0, 64, 0, 64]; Apps,
+      Steuerung, Einstellungen und beide Menüs öffnen und schließen ohne neue Anfrage und ohne Größenänderung.
+    - Unverdeckter Anteil (T1, neu gemessen als Fläche zwischen den Rändern, die die Seite dem Mac meldet; vorher die
+      Fläche des Display-Elements, über dessen oberem Rand die Chips lagen): hochkant 70/74/81 → 71/75/83 %
+      (Höhe 71,1/75,4/82,8 %), quer 73/77/83 → 77/81/87 %. Alle 13 Hauptaktionen erreichbar (neu gezählt: Steuerung).
+      Live-Bild beim Tippen unverdeckt 208/88/166/86 → 227/107/180/100 px, weil die obere Reihe beim Tippen weicht,
+      wenn weniger als 420 px zu sehen sind (`cramped`), und die Tippleiste aus zwei Zeilen zu 44 px besteht.
+    - Glas und seine Kosten, nicht gemessen: Unschärfe über einem Bild, das sich 60-mal je Sekunde ändert, wird jedes
+      Bild neu gerechnet, und auf einem iPhone hat das niemand gemessen. Deshalb: Unschärfe nur auf den Kapseln, die
+      stillstehen (gemessen: 23/19/13 % der Fläche hochkant bei 320/375/440 px, quer 17/14/9 %, keine davon animiert);
+      Blätter, Menüs, Karten und die Tour bewegen sich und haben ein fast deckendes Material ohne Unschärfe; die
+      unsichtbare Tippleiste hat keine. „Durchsichtige Flächen“ in den Einstellungen schaltet die Unschärfe ganz ab,
+      ebenso „Transparenz reduzieren“ und „Kontrast erhöhen“ am Telefon (T20: 0 unscharfe Elemente in allen drei Fällen).
+      Wer am iPhone ruckelndes Bild bemerkt, schaltet sie dort ab; gemessen werden sollte es mit dem Messwert im Mac-Knopf.
+    - Designsystem umgesetzt: konzentrische Radien (Blatt 47 unten, 38 oben, Gruppen 22/31, Tasten 12, Knöpfe als
+      Kapsel), ein Akzent für „gewählt oder Hauptaktion“ (eingepasste Ansicht, gerasteter Modifier, Schalter an,
+      Entsperren auf gesperrtem Mac), Bewegung, die abbremst und nicht überschwingt (die Feder des Segmentschalters
+      ist weg), Symbole selbst gezeichnet in einem Stil (24er Raster, Strich 1,8, rund), weil die Lizenz der SF Symbols
+      Webseiten nicht deckt. Hell und Dunkel folgen dem Telefon; die Bühne hinter dem Bild bleibt schwarz, ohne Bild
+      ist der Grund hell oder dunkel. Erhöhter Kontrast: deckende Flächen, sichtbare Kanten, volle Schriftfarbe.
+    - Ohne Live-Bild (Mockup 2): eine ruhige Fläche im unverdeckten Teil, ein Hinweis bis zur ersten Bewegung (gemerkt),
+      ein Ring, wo ein Klick ankam. Oben rechts steht dann „Live-Bild“ statt der Ansicht-Kapsel.
+    - Schreiben (Mockup 3): esc tab | ⌘ ⌥ ⌃ ⇧ | ← ↓ ↑ → in einer Kapsel, ein gerasteter Modifier als Kreis im Akzent,
+      darunter Feld und ✓. Unter 360 px zwei Zeilen. „Folgt Text“ ist ein Schreibmarken-Zeichen in der Anzeige.
+    - Blätter (Mockups 4 bis 7): Apps als Raster wie im Dock (Fläche und Punkt für die App vorn, Zahl als helle Marke),
+      Fenster als gruppierte Liste mit Haken rechts und dem Satz, dass sich vorher nichts bewegt; Steuerung mit
+      Medien (Transport-Karte, Kacheln Stumm, leiser|lauter, Mac sperren) und Tasten (5 Spalten, Modifier mit Namen
+      wie auf der Tastatur des Landes: cmd/alt/ctrl auf deutschen, command/option/control auf US-Tastaturen, Pfeile als
+      umgedrehtes T, App-Zoom als eigene Zeile A− | 100 % | A+); kleinste Taste 34 → 48 px (T8). Einstellungen als
+      eigenes Blatt mit Gruppen: Zeiger (Schieber, Zurücksetzen), Live-Bild (Fenster einpassen, An iPhone anpassen,
+      Bildrate und Verzögerung), Bedienung (Maustasten rechts, Durchsichtige Flächen), Hilfe (Gesten-Tour), am Ende der
+      Name, unter dem der Mac dieses iPhone gekoppelt hat. Nicht modal: Bewegen und Scrollen auf dem Bild darüber gehen
+      weiter (T6 misst die nächste Bewegung bei offenem Blatt: 2,0-fach). Jedes Blatt ist nach seiner Schließtaste in
+      unter 200 ms weg (T7: 199 → 179 ms; T20 für alle drei), ein Tipp aufs Bild oder Wischen nach unten schließen es.
+    - Zustände: gesperrt (Mockup 8) wird der Schreib-Knopf zur Hauptaktion im Akzent, „Mit Face ID entsperren“ oder
+      „Mac entsperren“, und der Mac-Knopf sagt „Gesperrt“ mit Schloss. Erster Start (Mockup 9) mit Feld für die sechs
+      Ziffern; Fehler (Mockup 10) in den Formen der Zustandsmaschine, dazu „pausiert“ und „getrennt“; die Gesten-Tour
+      (Mockup 9b, `tour.js`): sechs Schritte, ohne Live-Bild fünf, jeder erledigt, sobald `touchpad.js` die Geste
+      erkennt (die Gesten gehen weiter an den Mac), überspringbar, einmal von selbst, sonst aus dem Mac-Menü und den
+      Einstellungen. `touchpad.js` ist unverändert; die Tour hört an seinen Ausgängen mit.
+    - Kopplung je Gerät (`pairing.js`, Node-Tests): Code aus dem Link, sechs Ziffern im Feld (Einfügen mit Leer- oder
+      Bindestrich, `one-time-code`, sofort bei sechs Ziffern), alter Token einmal zum Gerät, danach nur noch Tickets;
+      ein Agent ohne `/pair` und `/session` bekommt den Token wie bisher. Der Fragment-Teil verlässt die Adresse, sobald
+      er seine Arbeit getan hat; nur der Token eines alten Agenten bleibt dort, weil der Home-Bildschirm ihn sonst
+      verliert. Worte für falsch oder abgelaufen (der Mac unterscheidet sie nicht), keine offene Kopplung und zu viele
+      Versuche. `denied` mit `revoked` vergisst das Gerät und führt zum Feld; mit `ticket` wird einmal neu versucht.
+      `mac` setzt Bedienungshilfen und Pause sofort (Zustand `paused` in `connection.js`), eine erteilte
+      Bildschirmaufnahme holt das Live-Bild zurück. Der Verifier spielt den Mac mit diesen Wegen (T19, T20).
+    - Bewusst gegen frühere Entscheidungen, mit den Kosten in Tipps:
+      Die Anzeige öffnet das Ansicht-Menü, statt Einpassen zu schalten (Runde 12): Einpassen an oder aus 1 → 2 Tipps,
+      dafür auffindbar; Zange und − / + beenden es weiter mit einer Geste.
+      „An iPhone anpassen“ ins Ansicht-Menü (Runde 13, Rasttaste im Kopf des Apps-Blatts): 2 → 2 Tipps.
+      Displays ins Ansicht-Menü (Runde 12, Karte im Apps-Blatt): 2 → 2 Tipps; Apps in Sicht bei 320 px 9 → 12.
+      Der Messwert verlässt das Bild (Runden 6, 7): eingeschaltet steht er statt des Namens im Mac-Knopf, immer im
+      Mac-Menü (1 Tipp); die Einstellung dazu liegt im Einstellungsblatt (3 Tipps wie vorher in der Schublade).
+      Live-Bild aus 1 → 2 Tipps (Mac-Knopf, Live-Bild), an weiter 1 Tipp (der Knopf steht dann oben rechts).
+      Mac sperren als eigene Kachel (Runde 14, unter Stumm): 2 Tipps über Steuerung oder über den Mac-Knopf.
+      Zustand in Grün und Rot, mit Zeichen und Wort; die Zeigermarke ist neutral (Runde 6, eine Signalfarbe).
+      Blätter liegen über der Leiste und den Maustasten (die Schublade ließ das Dock frei): wie in den Mockups; das
+      Blatt ist mit einem Tipp aufs Bild weg. „Tippen, dann ziehen“ bleibt verworfen; die Tour lehrt drei Finger
+      und „Klick halten“.
+    - Wo der Bau von den Mockups abweicht, und warum:
+      Quer (Mockup 11) stehen Mac-Knopf und Ansicht-Kapsel in den Seitenleisten statt über dem Bild: darüber lägen sie
+      auf der Menüleiste des Macs (links Apple- und App-Menü) oder kosteten einen oberen Rand von 52 px, und der
+      Anteil fiele unter 73/77/83 %. Im Seitenrand zeigt der Mac-Knopf nur das Zeichen; der Name steht im Menü.
+      Blätter und Menüs sind nicht aus Glas, sondern aus fast deckendem Material: sie bewegen sich über dem Bild.
+      Kein eigener Schlüssel-Knopf zum Passwortfeld im gesperrten Zustand (Mockup 8): ein Weg zum Entsperren, über
+      dieselbe Taste; nach abgelehntem Face ID öffnet der nächste Tipp das Feld.
+      Die Zeile „Mit Face ID entsperren · Ein“ der Einstellungen fehlt: die Seite weiß nur bei gesperrtem Mac, ob ein
+      Passkey eingerichtet ist; eingerichtet wird am Mac.
+      Schalter im Akzent statt in Grün: Grün heißt hier „verbunden“. Die Schrittnummern des ersten Starts sind neutral,
+      der Akzent bleibt bei Hauptaktionen. Der Menüpunkt im ersten Start heißt, wie er am Mac heute heißt.
+    - Nebenbei gefunden und behoben: `Awake` rief `setTimeout` als eigene Methode auf, was Browser mit „Illegal
+      invocation“ ablehnen; `touched()` warf, bevor es den Wake Lock erbat, und der Bildschirm blieb nie wach (seit
+      Runde 18, Fundament). Test in `connection.test.mjs`, der mit dem alten Code scheitert. Der Verifier sammelt jetzt
+      die Ausnahmen der Seite (`page.errors`).
+    - Verifier v18: Aufgaben auf das neue Layout umgestellt (siehe Kopf von `ui-verify.mjs`), neu T19 Kopplung,
+      T20 Glas, Ränder und der Zustand des Macs, T21 Tour, T22 Seiten quer; `--gallery=DIR` legt alle Bildschirme hell
+      und dunkel mit einem erfundenen Mac-Bild ab, `--docs=DIR` die Bilder des README. 27 von 27 Prüfungen bestanden.
+      Zeiger und Scrollen gleich (schnell 250 px bei 60 Hz 768 → 779, Streuung).
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -936,3 +1031,13 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   ohne laufenden Strom trennt die Seite dann alle 15 s und verbindet neu. Die Freigabe des Wake Locks und das
   Schlüsselbild nach einem echten Dekoderfehler in WebKit sind nur in Tests gelaufen. Englische Texte von mir, nicht
   von einem Muttersprachler gegengelesen.
+- Runde 19: kein iPhone, nur Chromium mit Touch-Emulation, ohne echte Safe Areas, ohne Tastatur und ohne Dynamic Type.
+  Nicht gemessen: was die Unschärfe über dem laufenden Bild auf einem iPhone kostet (Bildrate, Akku, Wärme), ob die
+  Kapseln in den Ecken eines echten Displays quer ganz zu sehen sind, ob `prefers-reduced-transparency` in Safari
+  ankommt (sonst gilt nur die Einstellung), ob iOS den Code aus der Mitteilung für `one-time-code` anbietet und ob eine
+  Web-App vom Home-Bildschirm wirklich ohne das Cookie von Safari startet (die Seite ist dafür gebaut, belegt ist es
+  nicht). Die Kopplung je Gerät lief nur gegen den Mac des Verifiers; der Agent mit `/pair`, `/session`, Tickets und
+  `mac` entstand gleichzeitig und wurde nicht angesprochen. `inset` ist am echten Mac nicht gelaufen: dass die
+  Menüleiste an der Unterkante der oberen Knöpfe beginnt, ist aus dem Vertrag, nicht gesehen. Die Bilder der Galerie
+  zeigen ein gezeichnetes Mac-Bild. Englische Texte von mir, nicht gegengelesen. Das README beschreibt noch die alte
+  Oberfläche (Dock, Schublade, „Auto“ auf der Anzeige) und darf hier nicht geändert werden; seine Bilder sind neu.
