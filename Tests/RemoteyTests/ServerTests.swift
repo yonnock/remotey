@@ -87,18 +87,22 @@ final class ServerTests: XCTestCase {
         XCTAssertTrue(ok.hasPrefix(#"{"t":"ok""#), ok)
         let mac = text(try await good.receive())
         XCTAssertTrue(mac.hasPrefix(#"{"t":"mac""#), mac)
-        // Read, so that the pong below is not held up behind it.
         let lock = text(try await good.receive())
         XCTAssertTrue(lock.hasPrefix(#"{"t":"lock""#), lock)
         try await Task.sleep(for: .seconds(1))
-        // Still connected: an unknown message is ignored, a closed socket would fail the ping.
+        // Still connected: an unknown message is ignored, and the agent answers the page's own ping. The
+        // socket's ping frame is not asked: URLSession holds its pong back behind any message not yet read.
         try await good.send(.string(#"{"t":"noop"}"#))
-        let alive = expectation(description: "pong")
-        good.sendPing { error in
-            XCTAssertNil(error)
-            alive.fulfill()
+        try await good.send(.string(#"{"t":"ping"}"#))
+        let patience = Task {
+            try await Task.sleep(for: .seconds(5))
+            good.cancel(with: .goingAway, reason: nil)
         }
-        await fulfillment(of: [alive], timeout: 2)
+        defer { patience.cancel() }
+        var heard: [String] = []
+        while heard.last != Wire.pong {
+            do { heard.append(text(try await good.receive())) } catch { return XCTFail("no pong after \(heard): \(error)") }
+        }
         good.cancel(with: .goingAway, reason: nil)
     }
 

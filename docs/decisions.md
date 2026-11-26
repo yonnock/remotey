@@ -1166,6 +1166,10 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       mitten in einer Aufgabe eine Anfrage mehr (in T13 mit `fps: 30` statt 60). Verifier v22: der Bildtakt der Seite
       ist auf jeder Maschine 60 je Sekunde; was eine Aufgabe selbst stoppt, läuft weiter mit der Uhr der Maschine.
       Und ein Swift-Test las `mac`, sobald `ok` da war; die Nachricht kommt als eigene danach und fehlte dort einmal.
+      Im vierten Lauf bestanden Verifier und Kopplung; ein Swift-Test wartete 2 s vergeblich auf das Pong des
+      Sockets (`URLSession.sendPing`). Hier nicht nachzustellen, auch nicht in 22 Läufen unter Last; die Ursache
+      ist nicht belegt. Der Test fragt jetzt den Herzschlag des Agenten (`ping`, `pong`) und liest vorbei, was
+      sonst kommt; bleibt die Antwort aus, nennt er, was stattdessen kam.
     - Agent, ein zweites Entsperren nahm dem ersten die Rotation: `Server.unlock` notierte das neue Siegel, bevor der
       Sperrbildschirm den zweiten Versuch abwies, und die Absage löschte es. Der Mac ging auf, das Salt blieb, die
       Zählung der Absagen auch. Jetzt wird ein zweiter Versuch abgewiesen, bevor etwas notiert ist (Test mit zwei
