@@ -226,6 +226,9 @@ enum Wire {
     /// The answer to `ping`.
     static let pong = #"{"t":"pong"}"#
 
+    /// The Mac's user ended this session. The page does not connect again until its user asks for it.
+    static let bye = #"{"t":"bye"}"#
+
     /// Whether the Mac's lock screen is up. Follows `accepted`, and comes again whenever it changes. With a
     /// phone enrolled for Face ID, a locked Mac names the passkey to ask for, the salt of the secret that
     /// opens the password and a challenge, which counts for one `unlock` on this connection; the next one

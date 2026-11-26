@@ -457,6 +457,8 @@ final class PairingServerTests: XCTestCase {
         server.end(device.id)
         let ended = await eventually { phone.closed && server.sessions.count == 1 }
         XCTAssertTrue(ended)
+        XCTAssertEqual(phone.heard("bye").count, 1, "told first, so the page does not come straight back")
+        XCTAssertTrue(old.heard("bye").isEmpty, "the other phone is not told to go")
         XCTAssertNil(server.sessions.first?.device)
         XCTAssertNotNil(server.devices.first?.seen)
         old.close()

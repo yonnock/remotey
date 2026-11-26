@@ -448,9 +448,11 @@ final class Server {
         }
     }
 
-    /// Closes the connection. The page connects again by itself; to keep a phone out, revoke it or pause.
+    /// Ends a session from the Mac. The page hears `bye` first and stays away until its user connects again:
+    /// closed without a word, it would be back within the second. To keep a phone out for good, revoke it.
     func end(_ session: Session.ID) {
-        clients.values.first { $0.authed && $0.session == session }?.connection.cancel()
+        guard let client = clients.values.first(where: { $0.authed && $0.session == session }) else { return }
+        send(client, Wire.bye) { client.connection.cancel() }
     }
 
     private func sessionsDidChange() {
