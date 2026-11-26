@@ -3,7 +3,7 @@
 // the keyboard can be "opened". Chromium is not iOS Safari: this checks the page's own logic and layout,
 // not WebKit's keyboard, safe areas or gesture handling.
 // Usage: node scripts/ui-verify.mjs [--web=Web] [--json=out.json] [--only=T1,T9] [--shots=DIR]
-// --shots saves pictures of the page at moments T8, T10, T11, T12, T13 and T14 name, for looking at what they measure.
+// --shots saves pictures of the page at moments T8, T10 to T14, T16 and T17 name, for looking at what they measure.
 import { spawn } from 'node:child_process';
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
@@ -33,7 +33,14 @@ import { extname, join, resolve } from 'node:path';
 //     before the fake Mac answers, keeps it there with the answer, and stops it at the display's edge. T12 counts
 //     the page's question for the displays when it connects apart from the one the sheet asks.
 // 16: T15 draws the pointer ahead only with "Telefonform" on, and first checks that without it the pointer waits.
-export const VERIFIER_VERSION = 16;
+// 17: the words come from a table (Web/strings.js) and the page runs in German unless a task asks for English;
+//     the new names (Klick, Rechtsklick, Live-Bild, Fenster einpassen, An iPhone anpassen, Steuerung,
+//     Einstellungen, Zurücksetzen, Auf dem Mac schreiben, Mac entsperren, Mit Face ID entsperren) replace the old
+//     ones in every check. "Auto" and "Form" are symbols over the zoom (T11, T13). T16 walks the connection's
+//     states with a fake Mac that is out of reach, not running, refuses the key or lacks a permission; T17 checks
+//     type sizes, capitals, the longer words at 320 px in both languages and 44 pt touch targets; T18 checks
+//     the protocol fixes: heartbeat, long text in pieces, icons kept across a reconnect, the readout as a setting.
+export const VERIFIER_VERSION = 17;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -106,13 +113,23 @@ const ICON = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDw
 // Runs in the page before its own scripts.
 const harness = `(() => {
   const sent = window.__sent = [];
+  // The fake Mac. \`__mac\` says how it answers a new socket: 'up' (default), 'down' (the socket fails, as when
+  // the Mac is out of reach or Remotey is not running), 'noax' (no Accessibility permission) or 'deny' (the key
+  // is refused). \`__probe\` is what a request for the page's own origin gets: a status, or null for no answer.
+  window.__sockets = [];
   window.WebSocket = class {
-    constructor() { window.__socket = this; this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 0); }
+    constructor() {
+      window.__socket = this; this.readyState = 0; window.__sockets.push(performance.now());
+      if (window.__mac === 'down') { setTimeout(() => { this.readyState = 3; this.onclose?.(); }, 0); return; }
+      setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 0);
+    }
     send(data) {
       const m = JSON.parse(data);
       sent.push({ ...m, at: performance.now() });
       if (m.t === 'view') window.__view = m; // outlives a task's clearing of the list
-      if (m.t === 'auth') setTimeout(() => this.onmessage?.({ data: JSON.stringify({ t: 'ok', ax: true, page: 'test' }) }), 0);
+      if (m.t === 'auth') setTimeout(() => this.onmessage?.({ data: JSON.stringify(window.__mac === 'deny' ? { t: 'denied' }
+        : { t: 'ok', ax: window.__mac !== 'noax', page: 'test' }) }), 0);
+      if (m.t === 'ping' && !window.__silent) setTimeout(() => this.onmessage?.({ data: JSON.stringify({ t: 'pong' }) }), 0);
       if (m.t === 'apps') setTimeout(() => {
         this.onmessage?.({ data: JSON.stringify({ t: 'apps', list: ${JSON.stringify(APPS)} }) });
         this.onmessage?.({ data: JSON.stringify({ t: 'icon', id: 'safari', png: '${ICON}' }) });
@@ -123,6 +140,14 @@ const harness = `(() => {
     }
     close() { this.readyState = 3; }
   };
+  window.__probe = 200;
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (url, options) => (options?.method === 'HEAD'
+    ? (window.__probe === null ? Promise.reject(new TypeError('Load failed')) : Promise.resolve(new Response(null, { status: window.__probe })))
+    : realFetch(url, options));
+  Object.defineProperty(navigator, 'onLine', { get: () => window.__online !== false, configurable: true });
+  // The phone's language: German, unless a task asks for another one.
+  Object.defineProperty(navigator, 'languages', { get: () => [localStorage.getItem('test-lang') ?? 'de-DE'], configurable: true });
   const vv = new EventTarget();
   Object.assign(vv, { width: innerWidth, height: innerHeight, offsetTop: 0, offsetLeft: 0, pageTop: 0, pageLeft: 0, scale: 1 });
   window.__vv = { set(next) { Object.assign(vv, next); vv.dispatchEvent(new Event('resize')); vv.dispatchEvent(new Event('scroll')); },
@@ -134,7 +159,9 @@ const harness = `(() => {
   // chose the zoom itself, for the window in front, which the picture then shows as a light sheet.
   window.__picture = async (points, fitted = false) => {
     const request = window.__view, socket = window.__socket;
-    const canvas = Object.assign(document.createElement('canvas'), { width: 64, height: Math.max(2, Math.round(64 * request.h / request.w)) });
+    // 256 pixels across: a narrower picture rounds its height so far off the display's aspect that the pointer is drawn
+    // half a point beside its place (seen in version 17, with a display one pixel wider than before).
+    const canvas = Object.assign(document.createElement('canvas'), { width: 256, height: Math.max(2, Math.round(256 * request.h / request.w)) });
     const context = canvas.getContext('2d');
     context.fillRect(0, 0, canvas.width, canvas.height);
     if (fitted) { context.fillStyle = '#d9dce1'; context.fillRect(0, canvas.height * 0.3, canvas.width, canvas.height * 0.4); }
@@ -160,10 +187,12 @@ const harness = `(() => {
     window.__socket.onmessage?.({ data: packet.buffer });
     await new Promise((r) => setTimeout(r, 50));
   };
-  try { localStorage.clear(); localStorage.setItem('remotey-view', '1'); localStorage.setItem('remotey-zoom', '0.5'); } catch {}
+  try { const lang = localStorage.getItem('test-lang'); localStorage.clear(); if (lang) localStorage.setItem('test-lang', lang);
+    localStorage.setItem('remotey-view', '1'); localStorage.setItem('remotey-zoom', '0.5'); } catch {}
 })();`;
 
-async function openPage(width, height) {
+// `lang`: the phone's language; `token`: false for a phone that was never paired.
+async function openPage(width, height, { lang = 'de-DE', token = true } = {}) {
   const { targetId } = await cdp('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
   const s = (method, params) => cdp(method, params, sessionId);
@@ -171,8 +200,9 @@ async function openPage(width, height) {
   await s('Runtime.enable');
   await s('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 3, mobile: true });
   await s('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  await s('Page.addScriptToEvaluateOnNewDocument', { source: `try { localStorage.setItem('test-lang', ${JSON.stringify(lang)}); } catch {}` });
   await s('Page.addScriptToEvaluateOnNewDocument', { source: harness });
-  await s('Page.navigate', { url: `${origin}/#test-token` });
+  await s('Page.navigate', { url: token ? `${origin}/#test-token` : `${origin}/` });
   await sleep(600);
   const evaluate = async (expression) => {
     const { result, exceptionDetails } = await s('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -236,16 +266,16 @@ async function reachable(page, selector, visible) {
 }
 
 const CONTROLS = {
-  'Links (Drag)': '[data-hold=left]', 'Rechts': '[data-click=right]', 'Zurück': '[data-click=back]',
-  'Vorwärts': '[data-click=forward]', 'Bild': '[data-act=view]', 'Apps': '[data-act=apps]',
-  'Zoom': '#zoom, [data-act=zoom-in]', 'Tastatur': '#field, [data-act=type]', 'Play': '[data-media=play]',
-  'Lauter': '[data-media=volup]', 'Esc': '[data-key=escape]', 'Einstellungen': '[data-setting], [data-page=settings]',
+  'Klick (Ziehen)': '[data-hold=left]', 'Rechtsklick': '[data-click=right]', 'Zurück': '[data-click=back]',
+  'Vorwärts': '[data-click=forward]', 'Live-Bild': '[data-act=view]', 'Apps': '[data-act=apps]',
+  'Zoom': '#zoom, [data-act=zoom-in]', 'Auf dem Mac schreiben': '#field, [data-act=type]', 'Play': '[data-media=play]',
+  'Lauter': '[data-media=volup]', 'esc': '[data-key=escape]', 'Einstellungen': '[data-setting], [data-page=settings]',
 };
 // Some controls sit behind a page switch or drawer; this opens it the way a user would and counts the taps.
 async function reach(page, name, selector, visible) {
   let direct = await reachable(page, selector, visible), taps = 1;
   if (direct.ok) return { ...direct, taps };
-  for (const opener of ['[data-act=deck]', `[data-act=page][data-page=${['Play', 'Lauter'].includes(name) ? 'media' : name === 'Esc' ? 'keys' : 'settings'}]`]) {
+  for (const opener of ['[data-act=deck]', `[data-act=page][data-page=${['Play', 'Lauter'].includes(name) ? 'media' : name === 'esc' ? 'keys' : 'settings'}]`]) {
     if (!(await page.tap(opener))) continue;
     taps++;
     await sleep(350);
@@ -813,15 +843,15 @@ await task('T10', async () => {
       && lockKey.open.open && !lockKey.open.shut && !lockKey.open.on && lockKey.open.pressed === 'false' && lockKey.open.name === 'Mac sperren'
       && lockKey.locked.shut && !lockKey.locked.open && lockKey.locked.on && lockKey.locked.pressed === 'true' && lockKey.locked.name === 'Mac entsperren'
       && lockKey.unlocks.focused && lockKey.unlocks.type === 'password' && lockKey.unlocks.sent === 0
-      && open.type === 'text' && open.keys && !open.padlock && open.label === 'Tippen…'
+      && open.type === 'text' && open.keys && !open.padlock && open.label === 'Auf dem Mac schreiben'
       && locked.type === 'password' && locked.autocomplete === 'current-password' && locked.padlock && !locked.keys
-      && locked.label === 'Entsperren…' && locked.name === 'Mac entsperren' && locked.value === '' && locked.hint === 'Passwort des Macs'
+      && locked.label === 'Mac entsperren' && locked.name === 'Mac entsperren' && locked.value === '' && locked.hint === 'Passwort des Macs'
       && typed.value === 'geheim' && typed.sent.length === 0
       && JSON.stringify(sent.sent) === '[{"t":"unlock","s":"geheim"}]' && sent.value === '' && sent.focused && sent.hint === 'Entsperre…'
       && early.value === 'neu' && early.sent === 1 && refused.failed && refused.hint === 'Nicht entsperrt, nochmal?' && refused.value === 'neu'
       && JSON.stringify(second.sent.at(-1)) === '{"t":"unlock","s":"neu"}' && second.sent.length === 2 && second.value === ''
       && unready.failed && unready.hint === 'Mac nicht bereit, nochmal?' && !retry.failed && retry.hint === 'Passwort des Macs'
-      && opened.type === 'text' && !opened.focused && !opened.failed && opened.hint === '' && opened.label === 'Tippen…' && opened.keys
+      && opened.type === 'text' && !opened.focused && !opened.failed && opened.hint === '' && opened.label === 'Auf dem Mac schreiben' && opened.keys
       && JSON.stringify(relayed) === '[{"t":"text","s":"hi"},{"t":"key","k":"return","mods":[],"n":1}]' };
 });
 
@@ -834,11 +864,13 @@ await task('T11', async () => {
   const r = await page.rect('#screen');
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
   const views = async () => (await page.sent()).filter((m) => m.t === 'view').map(({ at, v, ...m }) => m);
-  const state = () => page.evaluate(`(() => { const key = document.querySelector('[data-act=fit]'), lamp = key.querySelector('.legend');
+  // Since version 17 the lamp is a symbol over the zoom: a window while the view is fitted, none while it is not.
+  const state = () => page.evaluate(`(() => { const key = document.querySelector('[data-act=fit]'), lamp = document.querySelector('#fitLamp');
     return { readout: document.querySelector('#zoomValue').textContent, on: key.classList.contains('on'), pressed: key.getAttribute('aria-pressed'),
-      lamp: getComputedStyle(lamp).color, label: key.getAttribute('aria-label'), preview: document.querySelector('#picture').style.transform,
+      lamp: getComputedStyle(lamp).display === 'none' ? '' : key.dataset.lamp, label: key.getAttribute('aria-label'), preview: document.querySelector('#picture').style.transform,
       stored: localStorage.getItem('remotey-fit'), w: Math.round(key.getBoundingClientRect().width), h: Math.round(key.getBoundingClientRect().height),
-      clipped: lamp.scrollWidth > key.clientWidth || document.querySelector('#zoomValue').scrollWidth > key.clientWidth }; })()`);
+      clipped: document.querySelector('#zoomValue').scrollWidth > key.clientWidth
+        || (getComputedStyle(lamp).display !== 'none' && lamp.getBoundingClientRect().top < key.getBoundingClientRect().top - 0.5) }; })()`);
   const text = (z) => `${String(Math.round(z * 100) / 100).replace('.', ',')}×`;
   const off = await state();
   await page.evaluate(`window.__picture(${r.w / 0.5})`); // the first JPEG only switches the page from H.264 to JPEG
@@ -888,11 +920,10 @@ await task('T11', async () => {
   const gone = { ...(await state()), views: (await views()).length };
   await page.close();
   const fits = (list) => list.map((m) => `${m.fit ?? '-'} ${m.zoom}`).join();
-  const amber = 'rgb(242, 184, 75)';
   return { off, asked, first, second, turned, stepped, pinched, none, gone,
-    ok: !off.on && off.pressed === 'false' && off.lamp !== amber && off.readout === '0,5×' && !off.clipped && off.h >= 32
-      && asked.on && asked.pressed === 'true' && asked.lamp === amber && asked.stored === 'true' && fits(asked.views) === 'window 0.5'
-      && asked.label.includes('Auto an')
+    ok: !off.on && off.pressed === 'false' && off.lamp === '' && off.readout === '0,5×' && !off.clipped && off.h >= 32
+      && asked.on && asked.pressed === 'true' && asked.lamp === 'window' && asked.stored === 'true' && fits(asked.views) === 'window 0.5'
+      && asked.label.includes('Fenster einpassen an') && off.label.includes('Fenster einpassen aus')
       && first.readout === text(r.w / 1512) && first.views === 0 && first.preview === '' && !first.clipped
       && second.readout === text(r.w / 900) && second.views === 0 && second.preview === ''
       && turned.views.length >= 1 && turned.views.every((m) => m.fit === 'window') && turned.readout === text(wide.w / 1800) && turned.on
@@ -1002,8 +1033,9 @@ await task('T13', async () => {
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
   const views = async () => (await page.sent()).filter((m) => m.t === 'view').map(({ at, v, ...m }) => m);
   const asked = (list) => list.map((m) => (m.on ? `${m.fit ?? '-'} ${m.shape ?? '-'}` : 'off')).join();
-  const state = () => page.evaluate(`(() => { const key = document.querySelector('[data-act=shape]'), lamp = document.querySelector('#fitLamp');
-    return { readout: document.querySelector('#zoomValue').textContent, lamp: lamp.textContent, lit: document.querySelector('[data-act=fit]').classList.contains('on'),
+  const state = () => page.evaluate(`(() => { const key = document.querySelector('[data-act=shape]'), lamp = document.querySelector('#zoomValue');
+    return { readout: document.querySelector('#zoomValue').textContent, lamp: { phone: 'Form', window: 'Auto', '': '' }[document.querySelector('[data-act=fit]').dataset.lamp],
+      lit: document.querySelector('[data-act=fit]').classList.contains('on'),
       latch: key.classList.contains('on'), pressed: key.getAttribute('aria-pressed'), shown: getComputedStyle(key).display !== 'none',
       stored: [localStorage.getItem('remotey-shape'), localStorage.getItem('remotey-fit')].join(), open: document.body.classList.contains('apps'),
       clipped: lamp.scrollWidth > lamp.parentElement.clientWidth }; })()`);
@@ -1069,7 +1101,7 @@ await task('T13', async () => {
   await page.close();
   return { ...out, before, on, listed, shaped, stepped, held, pinched, turned, off, again, hidden: asked(hidden), back: asked(back), plain,
     ok: Object.values(out.layout).every((l) => l.h >= 36 && l.w >= 44 && l.inside && l.clear && l.whole && l.title)
-      && !before.latch && before.pressed === 'false' && before.shown && before.lamp === 'Auto'
+      && !before.latch && before.pressed === 'false' && before.shown && before.lamp === ''
       && on.latch && on.pressed === 'true' && on.stored === 'true,true' && on.open && asked(on.views) === 'window 0.5'
       && !listed.shown
       && shaped.readout === '0,5×' && shaped.lamp === 'Form' && shaped.lit && !shaped.clipped && shaped.views === 0
@@ -1077,7 +1109,7 @@ await task('T13', async () => {
       && held.readout === '0,6×' && held.views.length === 0
       && pinched.misactions === 0 && pinched.views.length === 1 && pinched.views[0].fit === 'window' && Math.abs(pinched.views[0].shape - 1.2) < 0.01 && pinched.lit
       && turned.views.length >= 1 && turned.views.every((m) => m.fit === 'window' && m.shape === 0.5)
-      && asked(off.views) === '- -' && !off.lit && off.lamp === 'Auto' && off.latch && off.stored === 'true,false'
+      && asked(off.views) === '- -' && !off.lit && off.lamp === '' && off.latch && off.stored === 'true,false'
       && asked(again.views).startsWith('window ') && again.lit
       && asked(hidden) === 'off' && asked(back) === 'off,window 1.2'
       && !plain.latch && plain.stored === 'false,true' && asked(plain.views) === 'window -' && plain.lamp === 'Auto' && plain.lit };
@@ -1160,6 +1192,7 @@ await task('T14', async () => {
   const challenges = [random(), random(), random(), random()];
   const lock = (i) => say({ t: 'lock', on: true, key: { id: enrol.cred, salt: offer.salt, challenge: challenges[i] } });
   await lock(0);
+  const named = await state(); // the key names the way: Face ID
   const first = await tapType();
   // The Mac typed the sealed password and stayed locked: the next tap opens the field for the password.
   await say({ t: 'unlock', ok: false, why: 'password' }); await lock(1);
@@ -1189,23 +1222,24 @@ await task('T14', async () => {
   const open = await state();
   await page.close();
   const answers = [first, second, third].map((t) => t.unlocks[0]);
-  return { before, layout, offered, later, failed, taking, done, gone, enrol, first, refused, field, second, unready, third, declined, after, byLockKey, open,
+  return { before, layout, offered, later, failed, taking, done, gone, enrol, named, first, refused, field, second, unready, third, declined, after, byLockKey, open,
     vector: { origin, offer, challenge: challenges[0] },
     ok: before.hidden && Object.values(layout).every((l) => !l.hidden && l.inside && l.whole && l.keyH >= 44)
-      && !offered.hidden && offered.state === 'offer' && offered.title === 'Entsperren mit Face ID' && offered.text.includes('„Test-Mac“') && offered.key === 'Einrichten'
-      && later.hidden && failed.state === 'failed' && failed.key === 'Nochmal' && failed.sent === 0 && !failed.hidden
+      && !offered.hidden && offered.state === 'offer' && offered.title === 'Mit Face ID entsperren' && offered.text.includes('„Test-Mac“') && offered.key === 'Einrichten'
+      && later.hidden && failed.state === 'failed' && failed.key === 'Erneut versuchen' && failed.sent === 0 && !failed.hidden
       && !!enrol && checked(enrol, 'webauthn.create', offer.challenge) && raw(enrol.prf).length === 32 && raw(enrol.key).length === 91
       && taking.state === 'busy' && taking.key === 'Richte ein…' && !done.hidden && done.state === 'done' && done.title === 'Eingerichtet' && gone.hidden
       && byLockKey.unlocks.length === 1 && checked(byLockKey.unlocks[0], 'webauthn.get', challenges[3], enrol.key) && !byLockKey.focused
       && first.unlocks.length === 1 && first.label === 'Entsperre…' && !first.focused
       && answers.every((a, i) => a && !('s' in a) && a.prf === enrol.prf && checked(a, 'webauthn.get', challenges[i], enrol.key))
       && refused.label === 'Abgelehnt' && !refused.focused
-      && field.focused && field.type === 'password' && field.label === 'Entsperren…' && field.unlocks.length === 0
+      && named.label === 'Mit Face ID entsperren'
+      && field.focused && field.type === 'password' && field.label === 'Mac entsperren' && field.unlocks.length === 0
       && second.unlocks.length === 1 && !second.focused
       && unready.label === 'Nicht bereit' && third.unlocks.length === 1 && !third.focused
-      && declined.unlocks.length === 0 && declined.label === 'Entsperren…' && !declined.focused
+      && declined.unlocks.length === 0 && declined.label === 'Mac entsperren' && !declined.focused
       && after.focused && after.unlocks.length === 0
-      && open.label === 'Tippen…' && open.type === 'text' };
+      && open.label === 'Auf dem Mac schreiben' && open.type === 'text' };
 });
 
 // T15: the pointer ahead of the Mac, while the window in front has the phone's shape. A move shows on the page at
@@ -1259,6 +1293,232 @@ await task('T15', async () => {
       && points > 20 && Math.abs(ahead.x - start.x - points * pixelsPerPoint) < 1 && ahead.y === start.y
       && Math.abs(answered.x - ahead.x) < 0.5 && Math.abs(taken.x - 100 * pixelsPerPoint) < 0.5 && Math.abs(taken.y - 100 * pixelsPerPoint) < 0.5
       && swiped < -100 && Math.abs(edge.x) < 0.5 && edge.y === taken.y && clicks === 0 };
+});
+
+// T16: the connection's states. Each says what it is on the display in words with a symbol, and a failure shows a
+// notice with its likely cause and one button. A failed try is repeated at a growing interval, at once on a tap.
+// Baseline: one red dot and "Keine Verbindung zum Mac." for every failure, a try every second.
+await task('T16', async () => {
+  const look = (page) => page.evaluate(`(() => { const n = document.querySelector('#notice'), s = document.querySelector('#status');
+    const sym = [...s.querySelectorAll('svg')].find((e) => getComputedStyle(e).display !== 'none');
+    const nsym = [...n.querySelectorAll('.sym')].filter((e) => getComputedStyle(e).display !== 'none').map((e) => e.dataset.for);
+    return { link: document.body.dataset.link, status: document.querySelector('#statusText').textContent, symbol: sym?.getAttribute('class') ?? null,
+      notice: n.hidden ? null : { kind: n.dataset.kind, title: n.querySelector('h2').textContent, text: n.querySelector('p').textContent,
+        button: n.querySelector('button').textContent, symbols: nsym },
+      welcome: !document.querySelector('#welcome').hidden }; })()`);
+  const sockets = (page) => page.evaluate('window.__sockets.slice()');
+  const out = {};
+  // Never paired: the first start's steps, and no socket.
+  const fresh = {};
+  for (const [label, [width, height]] of [['narrow portrait', PHONES.narrow], ['small portrait', PHONES.small], ['narrow landscape', [568, 320]]]) {
+    const page = await openPage(width, height, { token: false });
+    fresh[label] = await page.evaluate(`(() => { const w = document.querySelector('#welcome'), c = w.querySelector('.card').getBoundingClientRect();
+      return { shown: !w.hidden, steps: [...w.querySelectorAll('li')].map((li) => li.textContent), title: w.querySelector('h1').textContent,
+        back: !w.querySelector('[data-act=welcome-back]').hidden, sockets: window.__sockets.length, link: document.body.dataset.link,
+        inside: c.left >= 0 && c.right <= innerWidth, scrolls: w.scrollHeight > w.clientHeight }; })()`);
+    if (label === 'small portrait') await page.shot('welcome');
+    await page.close();
+  }
+  out.unpaired = fresh;
+  // Connected, with and without the Accessibility permission.
+  let page = await openPage(...PHONES.small);
+  out.connected = await look(page);
+  await page.close();
+  page = await openPage(...PHONES.small);
+  await page.evaluate(`(window.__mac = 'noax', window.__socket.onclose())`); await sleep(300);
+  out.noAccess = await look(page);
+  await page.shot('no-access');
+  await page.evaluate(`window.__mac = 'up'`); await page.clear();
+  await page.tap('#noticeAct'); await sleep(300);
+  out.noAccess.after = { ...(await look(page)), auth: (await page.sent()).filter((m) => m.t === 'auth').length };
+  await page.close();
+  // The Mac out of reach: the socket fails and nothing answers. Tries come later each time; a tap tries at once.
+  page = await openPage(...PHONES.small);
+  await page.evaluate(`(window.__mac = 'down', window.__probe = null, window.__sockets.length = 0, window.__socket.onclose())`);
+  await sleep(300);
+  out.unreachable = await look(page);
+  await page.shot('unreachable');
+  await sleep(3600);
+  const times = await sockets(page);
+  out.unreachable.intervals = times.slice(1).map((at, i) => Math.round(at - times[i]));
+  out.unreachable.stillShown = (await look(page)).notice?.kind;
+  const before = (await sockets(page)).length;
+  await page.tap('#noticeAct'); await sleep(50);
+  out.unreachable.tap = { tried: (await sockets(page)).length - before };
+  // Remotey not running: the origin answers 502.
+  await page.evaluate(`window.__probe = 502`); await sleep(1200);
+  out.stopped = await look(page);
+  await page.shot('stopped');
+  // No network on the phone; then it returns and the page connects at once.
+  await page.evaluate(`window.__online = false`); await sleep(2500);
+  out.offline = await look(page);
+  await page.evaluate(`(window.__online = true, window.__mac = 'up', window.__probe = 200, window.__sockets.length = 0, dispatchEvent(new Event('online')))`);
+  await sleep(150);
+  out.online = { ...(await look(page)), sockets: (await sockets(page)).length };
+  await page.close();
+  // A connection that worked and is lost: tried again at once, no notice in between.
+  page = await openPage(...PHONES.small);
+  await page.evaluate(`(window.__sockets.length = 0, window.__socket.onclose())`); await sleep(100);
+  out.blip = { ...(await look(page)), sockets: (await sockets(page)).length };
+  await page.close();
+  // The key refused: no more tries; the button shows how to pair again, and back.
+  page = await openPage(...PHONES.small);
+  await page.evaluate(`(window.__mac = 'deny', window.__socket.onclose())`); await sleep(300);
+  out.denied = await look(page);
+  await page.shot('denied');
+  const refused = (await sockets(page)).length;
+  await page.tap('#noticeAct'); await sleep(200);
+  out.denied.steps = await look(page);
+  await page.tap('[data-act=welcome-back]'); await sleep(200);
+  out.denied.back = await look(page);
+  await sleep(1500);
+  out.denied.tries = (await sockets(page)).length - refused;
+  await page.close();
+  // The Mac refuses the live view: Screen Recording is missing, or another device took it over.
+  page = await openPage(...PHONES.small);
+  const say = (m) => page.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify(m))} })`);
+  await say({ t: 'view', ok: false }); await sleep(100);
+  out.permission = { ...(await look(page)), view: await page.evaluate(`document.querySelector('[data-act=view]').getAttribute('aria-pressed')`) };
+  await say({ t: 'view', ok: false, why: 'taken' }); await sleep(100);
+  out.taken = await look(page);
+  await page.shot('taken');
+  await page.clear();
+  await page.tap('#noticeAct'); await sleep(200);
+  out.taken.after = { ...(await look(page)), asked: (await page.sent()).filter((m) => m.t === 'view').map((m) => m.on) };
+  await page.close();
+  const n = (o) => o.notice ?? {};
+  const growing = out.unreachable.intervals;
+  return { ...out,
+    ok: Object.values(fresh).every((f) => f.shown && f.steps.length === 3 && f.title === 'Mit dem Mac verbinden' && !f.back && f.sockets === 0 && f.link === 'unpaired' && f.inside)
+      && out.connected.status === 'Verbunden' && out.connected.symbol === 'ok' && !out.connected.notice
+      && out.noAccess.status === 'Kein Zugriff' && out.noAccess.symbol === 'bad' && n(out.noAccess).title === 'Steuern nicht erlaubt'
+      && n(out.noAccess).button === 'Erneut prüfen' && n(out.noAccess).symbols.join() === 'noAccess' && out.noAccess.after.auth === 1 && !out.noAccess.after.notice
+      && out.unreachable.status === 'Nicht verbunden' && out.unreachable.symbol === 'bad' && n(out.unreachable).title === 'Mac nicht erreichbar'
+      && n(out.unreachable).button === 'Erneut versuchen' && n(out.unreachable).symbols.join() === 'unreachable'
+      && growing.length >= 2 && growing.length <= 4 && growing.every((ms, i) => i === 0 || ms > growing[i - 1] * 1.5)
+      && out.unreachable.stillShown === 'unreachable' && out.unreachable.tap.tried === 1
+      && n(out.stopped).title === 'Remotey läuft nicht' && n(out.stopped).symbols.join() === 'stopped'
+      && n(out.offline).title === 'iPhone offline' && out.offline.status === 'Offline'
+      && out.online.sockets === 1 && out.online.status === 'Verbunden' && !out.online.notice
+      && out.blip.sockets === 1 && !out.blip.notice && out.blip.status === 'Verbunden'
+      && n(out.denied).title === 'Kopplung ungültig' && n(out.denied).button === 'So geht’s' && out.denied.status === 'Nicht gekoppelt'
+      && out.denied.steps.welcome && !out.denied.back.welcome && out.denied.tries === 0
+      && n(out.permission).kind === 'permission' && n(out.permission).title === 'Live-Bild nicht erlaubt' && out.permission.view === 'false' && out.permission.status === 'Verbunden'
+      && n(out.taken).kind === 'taken' && n(out.taken).button === 'Hierher holen' && !out.taken.after.notice && out.taken.after.asked.at(-1) === true };
+});
+
+// T17: words and type. On every phone, upright and sideways, in German and in English, with the tray on each page
+// and the switcher open: no text under 11 px, no capitals set with letter-spacing, none of the page's own words
+// cut off, and the controls that stay in the coming layout (dock, zoom) take a finger of 44 pt.
+// Baseline: 8 px for "Auto", 10 px in nine places, capitals with letter-spacing on every legend.
+await task('T17', async () => {
+  const out = {};
+  const survey = (page) => page.evaluate(`(() => {
+    const shown = (e) => { const r = e.getBoundingClientRect(), st = getComputedStyle(e);
+      return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && !e.closest('[hidden]') && !e.closest('body:not(.typing) #typebar'); };
+    const texts = [...document.querySelectorAll('body *')].filter((e) => [...e.childNodes].some((c) => c.nodeType === 3 && c.textContent.trim()) && shown(e));
+    const sizes = texts.map((e) => ({ e, size: parseFloat(getComputedStyle(e).fontSize) }));
+    const small = sizes.filter((x) => x.size < 11 - 0.01).map((x) => x.e.textContent.trim().slice(0, 20) + ' ' + x.size);
+    const caps = texts.filter((e) => { const st = getComputedStyle(e); return st.textTransform === 'uppercase' || (parseFloat(st.letterSpacing) > 0.5 && /[A-ZÄÖÜ]{3}/.test(e.textContent)); })
+      .map((e) => e.textContent.trim().slice(0, 20));
+    // The page's own words: an element that names a key, the type key's words, the chip, the setting names.
+    const own = [...document.querySelectorAll('[data-text], #typeLabel, #typeShort, #statusText, #noticeAct')].filter(shown);
+    // Measured on the words themselves: a key's wider touch target (::after) is no overflow.
+    const cut = own.filter((e) => { const range = document.createRange(); range.selectNodeContents(e); const w = range.getBoundingClientRect(), box = e.getBoundingClientRect();
+      const clip = e.closest('.slot, .key, .cap, button') ?? e, c = clip.getBoundingClientRect();
+      return w.width > box.width + 1 || w.left < c.left - 0.5 || w.right > c.right + 0.5 || (getComputedStyle(e).textOverflow === 'ellipsis' && e.scrollWidth > e.clientWidth + 1); })
+      .map((e) => e.textContent.trim() + ' ' + Math.round(e.getBoundingClientRect().width) + (e.closest('#typebar') ? ' typebar' : ''));
+    return { smallest: Math.min(...sizes.map((x) => x.size)), small, caps, cut };
+  })()`);
+  // A 44 × 44 box around each control's centre: its edges and corners must reach the control.
+  const targets = (page) => page.evaluate(`(() => {
+    const list = ['[data-act=zoom][data-step="-1"]', '[data-act=fit]', '[data-act=zoom][data-step="1"]', '[data-click=back]', '[data-click=forward]',
+      '[data-hold=left]', '[data-click=right]', '[data-act=type]', '[data-act=apps]', '[data-act=deck]', '[data-act=view]'];
+    const small = [];
+    for (const sel of list) {
+      const e = document.querySelector(sel), r = e.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+      // A round finger of 44 pt: the circle's edge in eight directions.
+      const misses = [[-21, 0], [21, 0], [0, -21], [0, 21], [-15, -15], [15, 15], [-15, 15], [15, -15]].filter(([dx, dy]) => {
+        const hit = document.elementFromPoint(x + dx, y + dy); return !hit || !(hit === e || e.contains(hit)); });
+      if (misses.length) small.push(sel + ' ' + Math.round(r.width) + '×' + Math.round(r.height) + ' misses ' + misses.length);
+    }
+    return small;
+  })()`);
+  for (const lang of ['de-DE', 'en-US']) {
+    for (const [phone, [w, h]] of Object.entries(PHONES)) {
+      for (const orientation of ['portrait', 'landscape']) {
+        const page = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]), { lang });
+        await page.evaluate(`window.__picture(${w})`); await sleep(150);
+        const views = { main: await survey(page), targets: await targets(page) };
+        await page.tap('[data-act=deck]'); await sleep(450);
+        for (const p of ['media', 'keys', 'settings']) {
+          await page.tap(`[data-act=page][data-page=${p}]`); await sleep(250);
+          views[p] = await survey(page);
+          if (phone === 'narrow' && orientation === 'portrait') await page.shot(`tray-${p}-${lang.slice(0, 2)}`);
+        }
+        await page.tap('[data-act=deck]'); await sleep(350);
+        await page.tap('[data-act=apps]'); await sleep(450);
+        views.apps = await survey(page);
+        if (phone === 'narrow' && orientation === 'portrait') await page.shot(`apps-${lang.slice(0, 2)}`);
+        await page.tap('[data-act=apps]'); await sleep(350);
+        // A locked Mac with Face ID: the longest words the type key has.
+        await page.evaluate(`window.__socket.onmessage({ data: JSON.stringify({ t: 'lock', on: true, key: { id: 'AA', salt: 'AA', challenge: 'AA' } }) })`);
+        await sleep(100);
+        views.locked = await survey(page);
+        if (orientation === 'portrait') await page.shot(`main-${phone}-${lang.slice(0, 2)}`);
+        else await page.shot(`main-${phone}-landscape-${lang.slice(0, 2)}`);
+        out[`${lang} ${phone} ${orientation}`] = views;
+        await page.close();
+      }
+    }
+  }
+  const all = Object.values(out).flatMap((v) => Object.entries(v).filter(([k]) => k !== 'targets').map(([, s]) => s));
+  return { smallest: Math.min(...all.map((s) => s.smallest)), small: [...new Set(all.flatMap((s) => s.small))],
+    caps: [...new Set(all.flatMap((s) => s.caps))], cut: [...new Set(all.flatMap((s) => s.cut))],
+    targets: Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.targets]).filter(([, v]) => v.length)),
+    ok: all.every((s) => s.smallest >= 11 && !s.caps.length && !s.cut.length) && Object.values(out).every((v) => !v.targets.length) };
+});
+
+// T18: the page's half of the protocol fixes. In sight the page says `ping` every 5 s; long text goes in pieces the
+// Mac takes; the icons stay across a reconnect and are named in the request; frame rate and delay show only when
+// the setting asks for it.
+await task('T18', async () => {
+  const page = await openPage(...PHONES.small);
+  await page.clear();
+  await sleep(5600);
+  const pings = (await page.sent()).filter((m) => m.t === 'ping').length;
+  // A paste of 2500 characters, with accents, a flag and an emoji with skin tone among them.
+  const text = 'é'.repeat(999) + '🇩🇪' + 'Grüße 👋🏽 '.repeat(150);
+  await page.clear();
+  await page.evaluate(`(() => { const f = document.querySelector('#field'); f.focus(); f.setRangeText(${JSON.stringify(text)}, f.value.length, f.value.length, 'end');
+    f.dispatchEvent(new InputEvent('input', { inputType: 'insertFromPaste' })); })()`);
+  const pieces = (await page.sent()).filter((m) => m.t === 'text').map((m) => m.s);
+  const graphemes = (s) => [...new Intl.Segmenter().segment(s)].length;
+  const long = { pieces: pieces.length, largest: Math.max(...pieces.map(graphemes)), whole: pieces.join('') === text, flag: pieces.some((p) => p.endsWith('🇩🇪')) };
+  await page.evaluate(`document.querySelector('#field').blur()`); await sleep(200);
+  // Icons: the first opening gets Safari's; after a reconnect the request names it.
+  await page.tap('[data-act=apps]'); await sleep(450);
+  await page.tap('[data-act=apps]'); await sleep(300);
+  await page.evaluate(`window.__socket.onclose()`); await sleep(300);
+  await page.clear();
+  await page.tap('[data-act=apps]'); await sleep(450);
+  const asked = (await page.sent()).filter((m) => m.t === 'apps').map(({ at, ...m }) => m);
+  const icon = await page.evaluate(`!!document.querySelector('[data-pid="501"] img[src^="data:image/png"]')`);
+  await page.tap('[data-act=apps]'); await sleep(300);
+  // The readout: hidden at first, shown by the setting, kept.
+  await page.evaluate(`window.__picture(375)`); await sleep(100);
+  const meter = () => page.evaluate(`getComputedStyle(document.querySelector('#meter')).display !== 'none'`);
+  const hidden = await meter();
+  await page.tap('[data-act=deck]'); await sleep(450);
+  await page.tap('[data-act=page][data-page=settings]'); await sleep(250);
+  await page.tap('[data-act=meter]'); await sleep(100);
+  const shown = { meter: await meter(), pressed: await page.evaluate(`document.querySelector('[data-act=meter]').getAttribute('aria-pressed')`),
+    stored: await page.evaluate(`localStorage.getItem('remotey-meter')`) };
+  await page.close();
+  return { pings, long, asked, icon, meter: { hidden, ...shown },
+    ok: pings === 1 && long.pieces >= 3 && long.largest <= 1000 && long.whole && long.flag
+      && JSON.stringify(asked) === '[{"t":"apps","have":["safari"]}]' && icon
+      && !hidden && shown.meter && shown.pressed === 'true' && shown.stored === 'true' };
 });
 
 socket.close();
