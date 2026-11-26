@@ -1,7 +1,10 @@
 // The phone's passkey for unlocking the Mac: made once, when the agent offers an enrolment, and asked for
 // whenever the Mac is locked. iOS shows Face ID for both (or Touch ID, or asks for the phone's code). The
 // passkey also gives out a secret (WebAuthn's PRF extension) with which the agent has sealed the Mac's
-// password; without one the phone cannot be enrolled. See FaceUnlock.swift and Passkey.swift.
+// password; without one the phone cannot be enrolled. The secret is the same for the same salt, so with
+// every unlock the agent names a fresh salt (`next`) beside the current one, and the passkey gives out the
+// secret for both: the agent seals the password under the second once the Mac has opened, and a recorded
+// secret opens nothing after that. See FaceUnlock.swift and Passkey.swift.
 
 /** Base64 as WebAuthn writes it: `-` and `_`, no padding. */
 export function encode(buffer) {
@@ -40,8 +43,10 @@ export async function create(offer, host = location.hostname, credentials = navi
 }
 
 /**
- * Asks the phone for the passkey `key` names ({ id, salt, challenge } from the agent's `lock`) and returns
- * the `unlock` message: its signature for the challenge and the secret. Rejects if the user declines.
+ * Asks the phone for the passkey `key` names ({ id, salt, next, challenge } from the agent's `lock`) and
+ * returns the `unlock` message: its signature for the challenge, the secret for `salt` and, as `next`, the
+ * one for `next`. Without a second secret the message goes without it, and the agent keeps the salt it has.
+ * Rejects if the user declines or the passkey gives out no secret.
  */
 export async function get(key, host = location.hostname, credentials = navigator.credentials) {
   const credential = await credentials.get({ publicKey: {
@@ -49,10 +54,11 @@ export async function get(key, host = location.hostname, credentials = navigator
     rpId: host,
     allowCredentials: [{ type: 'public-key', id: decode(key.id) }],
     userVerification: 'required',
-    extensions: { prf: { eval: { first: decode(key.salt) } } },
+    extensions: { prf: { eval: { first: decode(key.salt), ...(key.next && { second: decode(key.next) }) } } },
   } });
-  const response = credential.response, secret = credential.getClientExtensionResults().prf?.results?.first;
-  if (!secret) throw new Error('The passkey gave out no secret');
+  const response = credential.response, results = credential.getClientExtensionResults().prf?.results;
+  if (!results?.first) throw new Error('The passkey gave out no secret');
+  const prf = encode(results.first), next = key.next && results.second ? encode(results.second) : null;
   return { t: 'unlock', auth: encode(response.authenticatorData), client: encode(response.clientDataJSON),
-    sig: encode(response.signature), prf: encode(secret) };
+    sig: encode(response.signature), prf, ...(next && next !== prf && { next }) };
 }

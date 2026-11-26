@@ -290,4 +290,125 @@ final class ScreenViewTests: XCTestCase {
         XCTAssertTrue(away.contains(CGPoint(x: 4000, y: 500)))
         XCTAssertEqual(away.size, rest.size)
     }
+
+    // MARK: Under the page's controls
+
+    private func request(_ width: Double, _ height: Double, zoom: Double = 1, fit: Bool = false, shape: Double? = nil,
+                         inset: [Double] = [0, 0, 0, 0]) throws -> ScreenView.Request {
+        try XCTUnwrap(ScreenView.Request(width: width, height: height, zoom: zoom, pixelRatio: 3, h264: true, fps: 60, fit: fit, shape: shape,
+                                         inset: ScreenView.Inset(top: inset[0], right: inset[1], bottom: inset[2], left: inset[3])))
+    }
+
+    /// The page from before, or one whose controls cover nothing: the same views, bit for bit.
+    func testWithoutMarginsEveryViewIsAsBefore() throws {
+        let displays = [CGRect(x: 0, y: 0, width: 2560, height: 1440), CGRect(x: 2560, y: 323, width: 1728, height: 1117)]
+        let window = CGRect(x: 400, y: 200, width: 1200, height: 800)
+        for zoom in [0.02, 0.5, 1, 2.3] {
+            let plain = try XCTUnwrap(ScreenView.Request(width: 390, height: 844, zoom: zoom, pixelRatio: 3, h264: true, fps: 60, fit: true, shape: 1))
+            let zero = try request(390, 844, zoom: zoom, fit: true, shape: 1)
+            XCTAssertEqual(zero, plain)
+            XCTAssertEqual(ScreenView.shape(for: zero), CGSize(width: 390, height: 844))
+            for point in [CGPoint(x: 0, y: 0), CGPoint(x: 2559.5, y: 700.25), CGPoint(x: 4287, y: 1439), CGPoint(x: 900, y: 120)] {
+                XCTAssertEqual(ScreenView.view(zero, displays: displays, window: nil, around: point),
+                               ScreenView.viewport(plain, displays: displays, around: point))
+                XCTAssertEqual(ScreenView.view(zero, displays: displays, window: window, around: point),
+                               ScreenView.fitted(plain, displays: displays, to: window, holding: point))
+            }
+        }
+    }
+
+    /// The view is cut for the part between the controls; the picture reaches under them. At the desktop's
+    /// edge that part shows the edge, so the menu bar begins at the lower edge of the top controls, and
+    /// under them is black.
+    func testThePartBetweenTheControlsIsCutAsTheWholeElementWasAndThePictureGrowsUnderThem() throws {
+        let display = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let covered = try request(390, 844, inset: [100, 0, 200, 0])
+        let between = try request(390, 544)
+        for point in [CGPoint(x: 0, y: 0), CGPoint(x: 1727, y: 1116), CGPoint(x: 900, y: 500)] {
+            let inner = ScreenView.viewport(between, displays: [display], around: point)
+            XCTAssertEqual(ScreenView.inner(covered, displays: [display], window: nil, around: point), inner)
+            XCTAssertEqual(ScreenView.view(covered, displays: [display], window: nil, around: point),
+                           CGRect(x: inner.minX, y: inner.minY - 100, width: 390, height: 844), "\(point)")
+        }
+        // The pointer at the top left corner: the menu bar starts right under the top controls.
+        XCTAssertEqual(ScreenView.view(covered, displays: [display], window: nil, around: .zero), CGRect(x: 0, y: -100, width: 390, height: 844))
+        // And at the bottom right one: the Dock ends right above the bottom controls, black below.
+        XCTAssertEqual(ScreenView.view(covered, displays: [display], window: nil, around: CGPoint(x: 1727, y: 1116)),
+                       CGRect(x: 1728 - 390, y: 1117 - 544 - 100, width: 390, height: 844))
+        // Zoomed in, the margins are as many points as they are pixels at that zoom.
+        let zoomed = ScreenView.view(try request(390, 844, zoom: 2, inset: [100, 10, 200, 30]), displays: [display], window: nil, around: .zero)
+        XCTAssertEqual(zoomed, CGRect(x: -15, y: -50, width: 195, height: 422))
+    }
+
+    func testZoomedOutThePartBetweenTheControlsShowsTheWholeDesktop() throws {
+        let display = CGRect(x: 0, y: 0, width: 3008, height: 1692)
+        let covered = try request(390, 844, zoom: 0.02, inset: [100, 0, 200, 0])
+        let inner = ScreenView.inner(covered, displays: [display], window: nil, around: CGPoint(x: 5, y: 5))
+        XCTAssertEqual(inner.width, 3008, accuracy: 0.001, "upright the width limits")
+        XCTAssertEqual(inner.midY, display.midY, accuracy: 0.001)
+        let view = ScreenView.view(covered, displays: [display], window: nil, around: CGPoint(x: 5, y: 5))
+        XCTAssertEqual(view.width, 3008, accuracy: 0.001)
+        XCTAssertEqual(view.height, 3008 * 844 / 390, accuracy: 0.01)
+        XCTAssertEqual(view.minY, inner.minY - 100 * 3008 / 390, accuracy: 0.001)
+        // Sideways the height limits, and the desktop fills the height between the controls.
+        let sideways = ScreenView.inner(try request(844, 390, zoom: 0.02, inset: [60, 0, 100, 0]), displays: [display], window: nil,
+                                        around: CGPoint(x: 5, y: 5))
+        XCTAssertEqual(sideways.height, 1692, accuracy: 0.001)
+        XCTAssertEqual(sideways.minY, 0, accuracy: 0.001)
+    }
+
+    /// A window fitted between the controls: it fills that part, and the pointer pushes the view 20 pixels
+    /// from the controls' edge, not from the element's.
+    func testAFittedWindowFillsThePartBetweenTheControls() throws {
+        let display = CGRect(x: 0, y: 0, width: 3008, height: 1692)
+        let window = CGRect(x: 400, y: 200, width: 1200, height: 800)
+        let covered = try request(700, 330, fit: true, inset: [50, 0, 80, 0])
+        let rest = ScreenView.view(covered, displays: [display], window: window, around: CGPoint(x: 900, y: 500))
+        // 200 pixels between the controls show the window's 800 points: four points a pixel.
+        XCTAssertEqual(rest.minY, 200 - 50 * 4, accuracy: 0.001)
+        XCTAssertEqual(rest.height, 330 * 4, accuracy: 0.001)
+        XCTAssertEqual(rest.width, 700 * 4, accuracy: 0.001)
+        XCTAssertEqual(rest.minX, 0, accuracy: 0.001, "held on the display")
+        // Up to the menu bar: the pointer stays 20 pixels below the top controls.
+        let above = ScreenView.view(covered, displays: [display], window: window, around: CGPoint(x: 900, y: 120))
+        XCTAssertEqual(above.minY + 50 * 4, 120 - 20 * 4, accuracy: 0.001)
+        XCTAssertEqual(above.size, rest.size)
+        // At the display's edge the part between the controls stops there.
+        XCTAssertEqual(ScreenView.view(covered, displays: [display], window: window, around: CGPoint(x: 900, y: 3)).minY, -50 * 4, accuracy: 0.001)
+    }
+
+    func testAShapedWindowTakesTheShapeOfThePartBetweenTheControls() throws {
+        let covered = try request(390, 844, fit: true, shape: 0.5, inset: [100, 10, 200, 20])
+        XCTAssertEqual(ScreenView.shape(for: covered), CGSize(width: 720, height: 1088))
+        // The window in that shape fills the part between the controls at that zoom.
+        let display = CGRect(x: 0, y: 0, width: 3008, height: 1692)
+        let window = CGRect(x: 600, y: 300, width: 720, height: 1088)
+        let inner = ScreenView.inner(covered, displays: [display], window: window, around: CGPoint(x: 700, y: 400))
+        XCTAssertEqual(inner, window)
+        XCTAssertEqual(ScreenView.view(covered, displays: [display], window: window, around: CGPoint(x: 700, y: 400)),
+                       CGRect(x: 600 - 40, y: 300 - 200, width: 780, height: 1688))
+    }
+
+    /// "Folgt Text" keeps the caret between the controls: near their edge the view centres it again.
+    func testTypedTextStaysBetweenTheControls() throws {
+        let covered = try request(400, 300, inset: [0, 0, 100, 0])
+        let display = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let around = { ScreenView.inner(covered, displays: [display], window: nil, around: $0) }
+        func caret(_ y: Double) -> TextFocus.Target { .init(rect: CGRect(x: 800, y: y, width: 0, height: 16), exact: true) }
+        let first = try XCTUnwrap(ScreenView.textView(for: caret(500), held: nil, around: around))
+        XCTAssertEqual(first, CGRect(x: 600, y: 408, width: 400, height: 200))
+        XCTAssertEqual(covered.outer(first), CGRect(x: 600, y: 408, width: 400, height: 300))
+        // Well inside the whole element, but near the bottom controls: centred again.
+        XCTAssertEqual(ScreenView.textView(for: caret(590), held: first, around: around)?.midY, 598)
+    }
+
+    func testMarginsAreBoundedAndLeaveSomethingBetweenThem() throws {
+        let odd = try request(390, 844, inset: [-5, .nan, 10_000, .infinity])
+        XCTAssertEqual(odd.inset, ScreenView.Inset(top: 0, right: 0, bottom: 794, left: 0))
+        XCTAssertEqual(odd.inner.height, 50)
+        let both = try request(390, 844, inset: [0, 300, 0, 100])
+        XCTAssertEqual(both.inset.left + both.inset.right, 340, accuracy: 0.0001)
+        XCTAssertEqual(both.inset.right / both.inset.left, 3, accuracy: 0.0001, "shrunk alike")
+        XCTAssertEqual(both.inner.width, 50, accuracy: 0.0001)
+    }
 }

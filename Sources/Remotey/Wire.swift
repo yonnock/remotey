@@ -41,8 +41,8 @@ enum Wire {
         /// The password of the Mac's user, for the lock screen. See `LockScreen`.
         case unlock(String)
         /// The phone's passkey answers the challenge of the last `lock`, with the secret that opens the
-        /// password kept on the Mac. See `FaceUnlock`.
-        case unlockWithPasskey(Passkey.Answer, secret: Data)
+        /// password kept on the Mac, and `next`, its secret for the salt `lock` named next. See `FaceUnlock`.
+        case unlockWithPasskey(Passkey.Answer, secret: Data, next: Data?)
         /// The phone made a passkey for the enrolment the agent offers. `publicKey`, `authenticator` and
         /// `client` are what the browser gave the page about it, `secret` what the passkey gives out.
         case enrol(id: Data, publicKey: Data, authenticator: Data, client: Data, secret: Data)
@@ -74,15 +74,18 @@ enum Wire {
         var win: Int?
         var fit: String?
         var shape: Double?
+        /// What the page's controls cover of the display element: top, right, bottom, left.
+        var inset: [Double]?
         var id: Int64?
         // Of a passkey, each base64url: its id, its public key, the authenticator's and the browser's data,
-        // the signature, the secret.
+        // the signature, the secret, the secret for the next salt.
         var cred: String?
         var key: String?
         var auth: String?
         var client: String?
         var sig: String?
         var prf: String?
+        var next: String?
     }
 
     private static let decoder = JSONDecoder()
@@ -126,7 +129,7 @@ enum Wire {
             } else if let authenticator = bytes(m.auth), let client = bytes(m.client), let signature = bytes(m.sig),
                       let secret = bytes(m.prf) {
                 .unlockWithPasskey(Passkey.Answer(authenticator: authenticator, client: client, signature: signature),
-                                   secret: secret)
+                                   secret: secret, next: bytes(m.next))
             } else {
                 nil
             }
@@ -145,8 +148,10 @@ enum Wire {
     private static func view(_ m: Fields) -> ScreenView.Request? {
         guard m.on == true, let width = m.w, let height = m.h, let zoom = m.zoom, let pixelRatio = m.dpr,
               let codec = m.codec, let fps = m.fps else { return nil }
+        // Anything but four margins covers nothing; `Request` bounds each.
+        let inset = m.inset.flatMap { $0.count == 4 ? ScreenView.Inset(top: $0[0], right: $0[1], bottom: $0[2], left: $0[3]) : nil }
         return ScreenView.Request(width: width, height: height, zoom: zoom, pixelRatio: pixelRatio, h264: codec == "h264",
-                                  fps: fps, fit: m.fit == "window", shape: m.shape, number: m.v ?? 0)
+                                  fps: fps, fit: m.fit == "window", shape: m.shape, number: m.v ?? 0, inset: inset ?? .zero)
     }
 
     /// The token was right. `page` is `Web.version`: a page that was loaded from an older agent reloads itself.
@@ -160,12 +165,15 @@ enum Wire {
     static let viewRefused = #"{"t":"view","ok":false}"#
 
     /// Whether the Mac's lock screen is up. Follows `accepted`, and comes again whenever it changes. With a
-    /// phone enrolled for Face ID, a locked Mac names the passkey to ask for and gives it a challenge, which
-    /// counts for one `unlock` on this connection; the next one comes with another `lock`.
-    static func lock(_ on: Bool, passkey: (key: FaceUnlock.Key, challenge: Data)? = nil) -> String {
+    /// phone enrolled for Face ID, a locked Mac names the passkey to ask for, the salt of the secret that
+    /// opens the password and a challenge, which counts for one `unlock` on this connection; the next one
+    /// comes with another `lock`. `next` is a fresh salt: the passkey's secret for it seals the password once
+    /// this try has opened the Mac.
+    static func lock(_ on: Bool, passkey: (key: FaceUnlock.Key, ask: FaceUnlock.Ask)? = nil) -> String {
         guard on, let passkey else { return #"{"t":"lock","on":\#(on)}"# }
         return #"{"t":"lock","on":true,"key":{"id":"\#(passkey.key.passkey.id.base64URL)","#
-            + #""salt":"\#(passkey.key.salt.base64URL)","challenge":"\#(passkey.challenge.base64URL)"}}"#
+            + #""salt":"\#(passkey.key.salt.base64URL)","next":"\#(passkey.ask.next.base64URL)","#
+            + #""challenge":"\#(passkey.ask.challenge.base64URL)"}}"#
     }
 
     /// The Mac is still locked after an `unlock`. One that unlocks says so with `lock`.

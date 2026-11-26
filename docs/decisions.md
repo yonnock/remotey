@@ -627,6 +627,69 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       (Takt, Zustimmungslink, Selbsttest einmal, Fehler bis zum nächsten Versuch, mit Warteschlangen, die sofort
       laufen), `TailscaleTests` (aufgezeichnete Ausgaben, die Befehle des Skripts), `PermissionsTests`,
       `CommandTests` (gegen /bin/sh: Grenze, Ausgabe während des Laufs).
+18. Entsperren härter, Live-Bild unter den Bedienelementen (nach einer Durchsicht des Codes: vier Lücken beim
+    Entsperren, und die Seite soll das Bild über das ganze Telefon legen, mit Bedienelementen als Glas darüber).
+    - Sonderzeichen im Passwort: `Input.keymap` kannte nur die Tasten ohne Umschalt, dazu Umschalt für Großbuchstaben.
+      `! ? @ € { }` gingen als Unicode-Text mit dem Tastencode der A-Taste; liest das Anmeldefenster den Tastencode,
+      kommt ein anderes Zeichen an, und zweimal abgelehnt ist das versiegelte Passwort gelöscht. Jetzt sucht die
+      Tabelle über die Ebenen ohne, Umschalt, Wahl und Umschalt+Wahl, in dieser Reihenfolge, und die erste Taste der
+      ersten Ebene gewinnt: ein Zeichen ohne Umschalt bleibt ohne, Kurzbefehle bleiben, wie sie waren. Tote Tasten
+      bleiben draußen, Unicode bleibt für Zeichen ohne Taste. Gemessen beim Test: ein Ereignis, das mit einem
+      Tastencode angelegt wird, trägt den Text der Taste ohne Umschalt („1“ für „!“), auch mit gesetztem Umschalt-Flag.
+      Damit eine App, die den Text liest, und eine, die Code und Flags liest, dasselbe Zeichen sehen, trägt ein
+      Zeichen, das Umschalt oder Wahl braucht, sich selbst als Text. Ein auf dem Telefon gerasteter Modifier kommt
+      dazu: ⌘ und `?` ist auf US ⌘⇧/, wie an der Tastatur. So geht auch ⌘+ auf US jetzt als ⌘⇧= statt als Unicode.
+      Tests: eine erfundene Belegung (Ebenen, Vorrang, tote Taste) und die aktive, wie sie ist: `!?@` gehen auf US
+      wie auf Deutsch als ihre Taste mit ihren Modifiern.
+    - Return ohne zweiten Blick: `LockScreen.unlock` tippt jetzt in Blöcken zu vier Zeichen, wartet nach jedem
+      25 ms, damit die Tasten angekommen sind, und fragt vor jedem Block und vor Return, ob der Mac noch gesperrt ist
+      und das Feld die Tastatur hat. Öffnet ihn Touch ID oder eine Uhr dabei, erreichen höchstens ein Block und was
+      noch unterwegs war die App vorn; Return nie. Verliert das Feld die Tastatur, endet der Versuch als `field` (nur
+      ein Teil ist getippt; das zählt nicht als Ablehnung). Kosten: 25 ms je Block, bei 16 Zeichen 125 ms.
+    - Rotierendes Geheimnis: PRF gibt für dasselbe Salt denselben Wert. Wer ein Entsperren auf der Loopback-Strecke
+      mitschneidet und die Datei liest, hatte das Passwort für immer; „eine aufgezeichnete Antwort wird abgelehnt“ galt
+      für die Signatur, nicht für das Geheimnis. Jetzt nennt jedes `lock` neben `salt` ein frisches `next`, die Seite
+      fragt PRF für beide (`eval: { first, second }`) und schickt `prf` und `next`. Der Agent öffnet mit `prf`,
+      versiegelt dasselbe Passwort gleich unter `next` und hält das im Speicher; erst wenn der Mac danach offen ist,
+      kommt es in die Datei, mit `next` als neuem Salt. Ein mitgeschnittenes Geheimnis öffnet danach nichts mehr.
+      Entscheidungen zu den Rändern:
+      Lehnt der Mac das Passwort ab, bleibt alles, wie es war (die Rotation wird verworfen, die Ablehnung gezählt).
+      Gibt das Telefon kein zweites Geheimnis, eines gleich dem ersten oder eines, das keines sein kann, wird
+      entsperrt wie bisher und nicht rotiert. Geht eine Antwort verloren, ändert sich nichts: die Seite hält keinen
+      Zustand, sie nimmt das Salt, das der nächste `lock` nennt, und der nennt, was in der Datei steht. Geändert wird
+      die Datei nur nach einem Entsperren, nur wenn sie noch das Salt hat, von dem die Rotation ausging (nicht nach
+      einem neuen Einrichten oder Entfernen dazwischen), und nur ganz: geschrieben wird daneben und dann ersetzt, und
+      erst ein geschriebener Schlüssel gilt im Speicher. Verworfen: den alten Schlüssel bis zum nächsten Entsperren
+      zu behalten, falls das zweite Geheimnis falsch wäre. Er hielte das mitgeschnittene Geheimnis eine Runde länger
+      gültig; prüfen lässt sich das zweite Geheimnis ohne eine weitere Frage an Face ID nicht, ein Browser, der für
+      `second` einen falschen Wert gibt, ist nicht bekannt. Bliebe es dabei, zeigten zwei Ablehnungen nichts an (das
+      Geheimnis öffnet dann nicht, es wird gar nicht getippt): „Abgelehnt“ und Einrichten von vorn.
+      Das Format der Datei ist unverändert (Passkey, Salt, versiegelt, Ablehnungen): die Einrichtung auf dem Mac des
+      Nutzers (gelesen wurden nur die Namen und Längen der Felder) gilt weiter und rotiert beim ersten Entsperren.
+      Ein fester Vektor in diesem Format, mit festem Schlüssel, Geheimnis und Salt, steht in `FaceUnlockTests`. Der
+      Vektor aus Chromium in `PasskeyTests` betrifft nur die Signatur und bleibt. `TestPhone` gibt jetzt wie PRF für
+      jedes Salt ein eigenes Geheimnis (HMAC über einen Samen), sonst sähen die Tests keine Rotation.
+    - Passwort ungeprüft: `FaceUnlockWindow.isPassword` sagte ja, wo OpenDirectory nicht zu fragen war, und so wurde
+      jeder Tippfehler versiegelt. Jetzt gibt es drei Antworten: richtig, falsch (nur `kODErrorCredentialsInvalid`)
+      und unbekannt (kein Verzeichnis, kein Eintrag, jeder andere Fehler, auch ein gesperrtes Konto). Unbekannt sagt
+      das Fenster („ließ sich nicht prüfen“) und verlangt das Passwort noch einmal; abgelegt wird es nur, wenn beide
+      gleich sind, wie beim Setzen eines neuen Passworts. Ein immer gleich falsch getipptes kommt so durch; der
+      Sperrbildschirm lehnt es ab, und zweimal abgelehnt wird es gelöscht. Verworfen: das Passwort gegen den
+      Schlüsselbund oder `pam` prüfen, beides kein besserer Weg zum selben Verzeichnis.
+    - Live-Bild unter den Bedienelementen: die Ansichtsanfrage trägt optional `inset: [oben, rechts, unten, links]` in
+      CSS-Pixeln, die Ränder des Elements, die Bedienelemente verdecken. Alles, was der Agent für den Ausschnitt
+      rechnet (um Zeiger, Schreibmarke oder Fenster, die 20 Pixel, ab denen der Zeiger schiebt, das Einpassen, die
+      Größe in Telefonform, die Grenzen an Displaykanten, das Herauszoomen bis zum ganzen Schreibtisch, „Folgt Text“),
+      rechnet er für das Rechteck dazwischen, als wäre das das ganze Element (`Request.inner`). Danach wächst der
+      Ausschnitt um die Ränder, geteilt durch den Zoom (`Request.outer`), und füllt das Element; jenseits des
+      Schreibtischs ist das schwarz. Die Menüleiste beginnt so an der Unterkante der oberen Bedienelemente. Der Kopf
+      jedes Bildes beschreibt das gesendete Bild, also den äußeren Ausschnitt; Breite in Punkten = `w / zoom`, wie
+      bisher. Ohne `inset`, mit vier Nullen oder mit einer anderen Zahl von Werten ist alles wie vorher, Bit für Bit
+      (Test über Zoom, Displays, Fenster und Punkte). Geklemmt: nicht endliche und negative Ränder zählen 0, zwei
+      gegenüberliegende lassen mindestens 50 px dazwischen und schrumpfen sonst im selben Verhältnis.
+    - Prüfungen: `swift test` 142 Tests, `node --test scripts/` 70 Tests, `scripts/ui-verify.mjs` (Seite in Chromium,
+      T14 mit einem `lock` ohne `next`, wie ein älterer Agent ihn schickt). Jeder neue Swift-Test scheitert ohne seine
+      Änderung (für das Tippen in Blöcken vorgeführt: sechs Fehler im alten `LockScreen`).
 
 ## Not verified
 
@@ -692,3 +755,12 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   Zeile bleibt rot, bis der nächste Blick es zeigt). Tailscale.app ist hier nicht installiert: der Pfad ihres
   Werkzeugs, seine Meldungen ohne laufende App und ob der Mac mit ihr seinen eigenen Namen erreicht, sind ungeprüft;
   der Weg `answered` des Selbsttests lief nie echt. Die Grenze 1.52 ist aus dem Gedächtnis.
+- Runde 18: nichts davon lief am echten Sperrbildschirm oder am iPhone (der Mac des Nutzers wurde nicht gesperrt).
+  Offen: ob das Anmeldefenster Sonderzeichen jetzt richtig bekommt (Code, Flags und Text stimmen in den Ereignissen
+  überein, gelesen wird es dort nicht); ob 25 ms reichen, damit ein Block im Feld angekommen ist, bevor wieder
+  gefragt wird; ob Safari auf iOS für `second` einen Wert gibt (in Runde 15 nannte es `second` ohne Wert, als nur
+  `first` gefragt war) und ob es der Wert für dieses Salt ist. Gibt Safari keinen, wird nicht rotiert, und das
+  Geheimnis bleibt so fest wie vorher. Welche Fehler OpenDirectory für ein falsches Passwort wirklich meldet, ist
+  nur aus dem Header (`kODErrorCredentialsInvalid`), nicht gemessen: ein Versuch mit falschem Passwort zählte als
+  fehlgeschlagene Anmeldung. Die Ränder unter den Bedienelementen sind nur gerechnet; die Seite sendet `inset` noch
+  nicht, Bild, Kopf und schwarze Flächen liefen nicht am Mac.

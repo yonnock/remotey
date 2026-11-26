@@ -48,14 +48,26 @@ final class FaceUnlockServerTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
     }
 
-    /// The challenge of a `lock` that names the phone's passkey.
-    private func challenge(in message: [String: Any]) throws -> Data {
+    /// What a `lock` that names the phone's passkey asks for: a signature for the challenge, the secret for
+    /// the salt, and the secret for the next salt.
+    private struct Ask: Equatable {
+        let challenge: Data
+        let salt: Data
+        let next: Data
+    }
+
+    private func ask(in message: [String: Any]) throws -> Ask {
         XCTAssertEqual(message["t"] as? String, "lock")
         XCTAssertEqual(message["on"] as? Bool, true)
         let key = try XCTUnwrap(message["key"] as? [String: String], "\(message)")
         XCTAssertEqual(key["id"], phone.id.base64URL)
-        XCTAssertNotNil(key["salt"].flatMap(Data.init(base64URL:)))
-        return try XCTUnwrap(key["challenge"].flatMap(Data.init(base64URL:)))
+        func data(_ name: String) throws -> Data { try XCTUnwrap(key[name].flatMap(Data.init(base64URL:)), name) }
+        return Ask(challenge: try data("challenge"), salt: try data("salt"), next: try data("next"))
+    }
+
+    /// The page's answer to `ask`, signed for `challenge` if not for the ask's own, with both secrets unless `rotates` is false.
+    private func answer(_ ask: Ask, challenge: Data? = nil, rotates: Bool = true) -> String {
+        phone.message(phone.answer(challenge ?? ask.challenge), salt: ask.salt, next: rotates ? ask.next : nil)
     }
 
     private var keysDown: [Int] {
@@ -63,14 +75,14 @@ final class FaceUnlockServerTests: XCTestCase {
     }
 
     /// The page's `enrol` message for a passkey made for `challenge`.
-    private func enrolment(for challenge: Data) -> String {
+    private func enrolment(for challenge: Data, salt: Data) -> String {
         #"{"t":"enrol","cred":"\#(phone.id.base64URL)","key":"\#(phone.publicKey.base64URL)","#
             + #""auth":"\#(phone.authenticator().base64URL)","client":"\#(phone.client("webauthn.create", challenge: challenge).base64URL)","#
-            + #""prf":"\#(phone.secret.base64URL)"}"#
+            + #""prf":"\#(phone.secret(for: salt).base64URL)"}"#
     }
 
-    /// Enrols the phone at the open Mac with the password "ab", then locks the Mac. Returns the first challenge.
-    private func enrolAndLock() async throws -> Data {
+    /// Enrols the phone at the open Mac with the password "ab", then locks the Mac. Returns the first ask.
+    private func enrolAndLock() async throws -> Ask {
         let open = try await next()
         XCTAssertEqual(open as NSDictionary, ["t": "lock", "on": false])
         XCTAssertFalse(server.unlocksWithFaceID)
@@ -81,45 +93,52 @@ final class FaceUnlockServerTests: XCTestCase {
         XCTAssertEqual(offer["t"] as? String, "enrol")
         XCTAssertEqual(offer["name"] as? String, Host.current().localizedName)
         let asked = try XCTUnwrap((offer["challenge"] as? String).flatMap(Data.init(base64URL:)))
-        XCTAssertNotNil((offer["salt"] as? String).flatMap(Data.init(base64URL:)))
-        try await socket.send(.string(enrolment(for: asked)))
+        let salt = try XCTUnwrap((offer["salt"] as? String).flatMap(Data.init(base64URL:)))
+        try await socket.send(.string(enrolment(for: asked, salt: salt)))
         let enrolled = try await next()
         XCTAssertEqual(enrolled as NSDictionary, ["t": "enrolled", "ok": true])
         XCTAssertEqual(ended, true)
         XCTAssertTrue(server.unlocksWithFaceID)
         // Locked: the Mac names the passkey and gives a challenge.
+        return try await lockAgain()
+    }
+
+    private func lockAgain() async throws -> Ask {
         sessionLocked = true
         lock.note(true)
-        return try challenge(in: try await next())
+        return try ask(in: try await next())
     }
 
     func testAPhoneEnrolsAtAnOpenMacAndItsPasskeyTypesThePasswordIntoTheLockScreen() async throws {
         let first = try await enrolAndLock()
 
         // An answer to another challenge, as a recording would be: refused, nothing typed, a new challenge.
-        try await socket.send(.string(phone.message(phone.answer(Passkey.challenge()))))
+        try await socket.send(.string(answer(first, challenge: Passkey.challenge())))
         let refused = try await next()
         XCTAssertEqual(refused as NSDictionary, ["t": "unlock", "ok": false, "why": "key"])
-        let second = try challenge(in: try await next())
-        XCTAssertNotEqual(second, first)
+        let second = try ask(in: try await next())
+        XCTAssertNotEqual(second.challenge, first.challenge)
+        XCTAssertNotEqual(second.next, first.next)
+        XCTAssertEqual(second.salt, first.salt)
         XCTAssertTrue(events.isEmpty)
         // The first challenge went with that try.
-        try await socket.send(.string(phone.message(phone.answer(first))))
+        try await socket.send(.string(answer(first)))
         let spent = try await next()
         XCTAssertEqual(spent["why"] as? String, "key")
-        let third = try challenge(in: try await next())
+        let third = try ask(in: try await next())
         XCTAssertTrue(events.isEmpty)
 
         // The passkey's answer: the sealed password goes into the lock screen, then Return.
-        try await socket.send(.string(phone.message(phone.answer(third))))
+        try await socket.send(.string(answer(third)))
         let stayed = try await next()
         XCTAssertEqual(stayed as NSDictionary, ["t": "unlock", "ok": false, "why": "password"], "this lock screen never opens")
         XCTAssertEqual(keysDown.count, 3)
         XCTAssertEqual(keysDown.last, kVK_Return)
-        let fourth = try challenge(in: try await next())
+        let fourth = try ask(in: try await next())
+        XCTAssertEqual(fourth.salt, first.salt, "a password the Mac refused is not sealed anew")
 
         // The Mac refuses that password a second time: it is no longer kept, and the lock names no passkey.
-        try await socket.send(.string(phone.message(phone.answer(fourth))))
+        try await socket.send(.string(answer(fourth)))
         let again = try await next()
         XCTAssertEqual(again["why"] as? String, "password")
         XCTAssertEqual(keysDown.count, 6)
@@ -131,14 +150,14 @@ final class FaceUnlockServerTests: XCTestCase {
 
     func testAMacThatOpensForThePasswordForgetsAnEarlierRefusal() async throws {
         let first = try await enrolAndLock()
-        try await socket.send(.string(phone.message(phone.answer(first))))
+        try await socket.send(.string(answer(first)))
         let stayed = try await next()
         XCTAssertEqual(stayed["why"] as? String, "password")
-        let second = try challenge(in: try await next())
+        let second = try ask(in: try await next())
         XCTAssertEqual(FaceUnlock(file: file).key?.refusals, 1)
         // This time the lock screen takes the password: the session opens at Return.
         opensAtReturn = true
-        try await socket.send(.string(phone.message(phone.answer(second))))
+        try await socket.send(.string(answer(second)))
         let opened = try await next()
         XCTAssertEqual(opened as NSDictionary, ["t": "lock", "on": false])
         XCTAssertEqual(keysDown.count, 6)
@@ -156,12 +175,54 @@ final class FaceUnlockServerTests: XCTestCase {
         lock.note(true)
         let locked = try await next()
         XCTAssertEqual(locked as NSDictionary, ["t": "lock", "on": true])
-        try await socket.send(.string(enrolment(for: asked)))
+        let salt = try XCTUnwrap((offer["salt"] as? String).flatMap(Data.init(base64URL:)))
+        try await socket.send(.string(enrolment(for: asked, salt: salt)))
         let refused = try await next()
         XCTAssertEqual(refused as NSDictionary, ["t": "enrolled", "ok": false])
         let over = try await next()
         XCTAssertEqual(over as NSDictionary, ["t": "enrol", "off": true])
         XCTAssertEqual(ended, false)
         XCTAssertFalse(server.unlocksWithFaceID)
+    }
+
+    /// Once the Mac has opened, the password is sealed under the secret for the salt that try named next.
+    /// A recorded answer with its secret opens nothing after that.
+    func testAnUnlockThatOpensTheMacSealsThePasswordUnderTheNextSalt() async throws {
+        let first = try await enrolAndLock()
+        opensAtReturn = true
+        try await socket.send(.string(answer(first)))
+        let opened = try await next()
+        XCTAssertEqual(opened as NSDictionary, ["t": "lock", "on": false])
+        XCTAssertEqual(FaceUnlock(file: file).key?.salt, first.next)
+
+        let second = try await lockAgain()
+        XCTAssertEqual(second.salt, first.next)
+        // The secret of the first unlock, as recorded, with a fresh signature: only the secret is old.
+        try await socket.send(.string(phone.message(phone.answer(second.challenge), salt: first.salt)))
+        let refused = try await next()
+        XCTAssertEqual(refused["why"] as? String, "key", "the secret for the old salt")
+        let third = try ask(in: try await next())
+        XCTAssertEqual(keysDown.count, 3, "nothing typed for it")
+        XCTAssertEqual(third.salt, first.next)
+        try await socket.send(.string(answer(third)))
+        let again = try await next()
+        XCTAssertEqual(again as NSDictionary, ["t": "lock", "on": false])
+        XCTAssertEqual(keysDown.count, 6)
+        XCTAssertEqual(FaceUnlock(file: file).key?.salt, third.next)
+    }
+
+    /// A page that asks the passkey for one secret only, as before: the Mac opens and the salt stays.
+    func testAnUnlockWithoutTheSecondSecretOpensAndKeepsTheSalt() async throws {
+        let first = try await enrolAndLock()
+        opensAtReturn = true
+        try await socket.send(.string(answer(first, rotates: false)))
+        let opened = try await next()
+        XCTAssertEqual(opened as NSDictionary, ["t": "lock", "on": false])
+        XCTAssertEqual(FaceUnlock(file: file).key?.salt, first.salt)
+        let second = try await lockAgain()
+        XCTAssertEqual(second.salt, first.salt)
+        try await socket.send(.string(answer(second)))
+        _ = try await next()
+        XCTAssertEqual(FaceUnlock(file: file).key?.salt, second.next)
     }
 }

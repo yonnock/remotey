@@ -15,8 +15,10 @@ final class Server {
     private let apps = Apps()
     private let lock: LockScreen
     private let faceUnlock: FaceUnlock
-    /// A password from the passkey is on its way into the lock screen.
+    /// A password from the passkey is on its way into the lock screen, and what it is sealed under once
+    /// the Mac takes it.
     private var typesSealedPassword = false
+    private var rotation: FaceUnlock.Rotation?
     private var enrolmentEnds: DispatchWorkItem?
     private var enrolmentEnded: ((Bool) -> Void)?
     private var displays = Displays()
@@ -51,8 +53,9 @@ final class Server {
         /// The page asked for the displays on this connection, so it hears when they change: it shows them in
         /// its picker, and stops the pointer it draws at their edges.
         var watchesDisplays = false
-        /// What the phone's passkey has to sign to unlock the Mac from this connection, once.
-        var challenge: Data?
+        /// What the phone's passkey has to sign to unlock the Mac from this connection, once, and the salt
+        /// of the secret it seals the password under after that.
+        var ask: FaceUnlock.Ask?
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
@@ -79,8 +82,9 @@ final class Server {
             if !locked, self.viewer != nil { self.screen.followText(false) }
             if self.viewer != nil { self.screen.locked = locked }
             // The Mac took the password that was sealed for the passkey.
-            if !locked, self.typesSealedPassword { self.faceUnlock.opened() }
+            if !locked, self.typesSealedPassword { self.faceUnlock.opened(rotating: self.rotation) }
             self.typesSealedPassword = false
+            self.rotation = nil
             self.clients.values.filter(\.authed).forEach { self.send($0, self.lockState(for: $0)) }
         }
         // Displays were connected, removed, rearranged or changed their mode: an open picker follows.
@@ -152,24 +156,28 @@ final class Server {
     /// own challenge, and a new one every time it says so.
     private func lockState(for client: Client) -> String {
         guard lock.isLocked, let key = faceUnlock.key else {
-            client.challenge = nil
+            client.ask = nil
             return Wire.lock(lock.isLocked)
         }
-        let challenge = Passkey.challenge()
-        client.challenge = challenge
-        return Wire.lock(true, passkey: (key, challenge))
+        let ask = faceUnlock.ask()
+        client.ask = ask
+        return Wire.lock(true, passkey: (key, ask))
     }
 
     /// Types `password` into the lock screen. A refusal goes to the page, followed by the state of the lock,
     /// which carries the next challenge for the passkey.
-    private func unlock(with password: String, sealed: Bool, for client: Client) {
+    private func unlock(with password: String, sealed: Bool, rotation: FaceUnlock.Rotation? = nil, for client: Client) {
         if viewer === client { screen.followText(true) } // the view shows the field the password goes into
-        if sealed { typesSealedPassword = true }
+        if sealed {
+            typesSealedPassword = true
+            self.rotation = rotation
+        }
         lock.unlock(with: password, typing: input) { [weak self, weak client] failure in
             guard let self else { return }
             // A password the Mac refuses again and again is no longer its password: the passkey's is dropped.
             if sealed {
                 self.typesSealedPassword = false
+                self.rotation = nil // a password the Mac refused is not sealed anew
                 if failure == .password { self.faceUnlock.refused() }
             }
             guard let client else { return }
@@ -381,16 +389,17 @@ final class Server {
             // The page asked for a Mac that is open by now: it missed the news.
             guard lock.isLocked else { return send(client, Wire.lock(false)) }
             unlock(with: password, sealed: false, for: client)
-        case .unlockWithPasskey(let answer, let secret):
+        case .unlockWithPasskey(let answer, let secret, let next):
             guard lock.isLocked else { return send(client, Wire.lock(false)) }
             // The challenge counts once, whatever comes of it.
-            let challenge = client.challenge
-            client.challenge = nil
-            guard let challenge, let password = faceUnlock.password(for: answer, challenge: challenge, secret: secret) else {
+            let ask = client.ask
+            client.ask = nil
+            guard let ask, let password = faceUnlock.password(for: answer, challenge: ask.challenge, secret: secret) else {
                 send(client, Wire.passkeyRefused)
                 return send(client, lockState(for: client))
             }
-            unlock(with: password, sealed: true, for: client)
+            unlock(with: password, sealed: true,
+                   rotation: faceUnlock.rotation(of: password, secret: secret, to: ask.next, next: next), for: client)
         case .enrol(let id, let publicKey, let authenticator, let clientData, let secret):
             // Only on a Mac that is open, where its user started the offer from the menu.
             guard !lock.isLocked, faceUnlock.offer != nil,

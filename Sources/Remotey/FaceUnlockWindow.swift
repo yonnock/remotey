@@ -13,7 +13,25 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         case done
     }
 
+    /// What the directory says about a password.
+    enum Verdict: Equatable {
+        case right, wrong
+        /// It could not be asked, or it gave another answer than yes or no.
+        case unknown
+    }
+
+    /// What a password typed into the window leads to.
+    enum Outcome: Equatable {
+        case seal
+        case refuse(String)
+        /// Unchecked: typed once more, it is sealed if both are the same.
+        case confirm
+    }
+
     private let server: Server
+    private let check: (String) -> Verdict
+    /// The first entry of a password the directory could not check, until it is typed again.
+    private var unconfirmed: String?
     private(set) var window: NSWindow?
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
@@ -31,8 +49,9 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
     /// How long the window says that the phone is enrolled before it closes.
     static let farewell: TimeInterval = 2.5
 
-    init(server: Server) {
+    init(server: Server, check: @escaping (String) -> Verdict = FaceUnlockWindow.verdict) {
         self.server = server
+        self.check = check
         super.init()
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         title.alignment = .center
@@ -81,6 +100,7 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         window.contentView = content
         self.window = window
         field.stringValue = ""
+        unconfirmed = nil
         set(.password())
         window.center()
         NSApp.activate(ignoringOtherApps: true)
@@ -133,7 +153,17 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         guard case .password = step, !password.isEmpty else { return }
         field.stringValue = ""
         // A typo would be sealed and typed into the lock screen at every unlock.
-        guard Self.isPassword(password) else { return set(.password(problem: "Das ist nicht das Passwort dieses Macs.")) }
+        let earlier = unconfirmed
+        unconfirmed = nil
+        switch Self.judge(password, verdict: earlier == nil ? check(password) : .unknown, earlier: earlier) {
+        case .refuse(let why): return set(.password(problem: why))
+        case .confirm:
+            unconfirmed = password
+            field.placeholderString = "Passwort noch einmal"
+            return set(.password(problem: Self.unchecked))
+        case .seal: break
+        }
+        field.placeholderString = "Passwort dieses Macs"
         set(.waiting)
         server.offerFaceUnlock(password: password) { [weak self] enrolled in
             guard let self else { return }
@@ -147,16 +177,44 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         field.stringValue = ""
+        unconfirmed = nil
+        field.placeholderString = "Passwort dieses Macs"
         server.withdrawFaceUnlock()
     }
 
-    /// Whether `password` is the password of the user this runs as. True as well where the directory
-    /// cannot be asked: the lock screen will tell.
-    static func isPassword(_ password: String) -> Bool {
+    static let unchecked = "Das Passwort ließ sich nicht prüfen. Bitte noch einmal eingeben: "
+        + "nur wenn beide gleich sind, wird es abgelegt."
+
+    /// What `password` leads to. `earlier` is its first entry, where the directory could not check it: a typo
+    /// is then caught by comparing, as a new password is set. A password that is consistently wrong gets
+    /// through that way; the lock screen refuses it, and twice refused it is deleted (`FaceUnlock`).
+    static func judge(_ password: String, verdict: Verdict, earlier: String?) -> Outcome {
+        if let earlier { return password == earlier ? .seal : .refuse("Die beiden Eingaben waren verschieden.") }
+        return switch verdict {
+        case .right: .seal
+        case .wrong: .refuse("Das ist nicht das Passwort dieses Macs.")
+        case .unknown: .confirm
+        }
+    }
+
+    /// Asks the directory whether `password` is the password of the user this runs as.
+    static func verdict(_ password: String) -> Verdict {
         guard let node = try? ODNode(session: ODSession.default(), type: ODNodeType(kODNodeTypeAuthentication)),
               let record = try? node.record(withRecordType: kODRecordTypeUsers, name: NSUserName(), attributes: nil) else {
-            return true
+            return .unknown
         }
-        return (try? record.verifyPassword(password)) != nil
+        do {
+            try record.verifyPassword(password)
+            return .right
+        } catch {
+            return verdict(error)
+        }
+    }
+
+    /// Only "credentials invalid" says that the password is wrong. Anything else (an account locked after
+    /// too many tries, a directory that does not answer) says nothing about it.
+    static func verdict(_ error: Error) -> Verdict {
+        let error = error as NSError
+        return error.domain == ODFrameworkErrorDomain && error.code == Int(kODErrorCredentialsInvalid.rawValue) ? .wrong : .unknown
     }
 }

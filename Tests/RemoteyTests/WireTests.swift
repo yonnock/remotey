@@ -67,9 +67,10 @@ final class WireTests: XCTestCase {
         }
         let key = FaceUnlock.Key(passkey: Passkey(id: Data([251, 255]), publicKey: Data([1]), origin: "https://mac.example.ts.net:8443"),
                                  salt: Data([1, 2]), sealed: Data([9]))
-        let locked = try object(Wire.lock(true, passkey: (key, Data([3, 4]))))
-        XCTAssertEqual(locked as NSDictionary, ["t": "lock", "on": true, "key": ["id": "-_8", "salt": "AQI", "challenge": "AwQ"]])
-        XCTAssertEqual(try object(Wire.lock(false, passkey: (key, Data([3, 4])))) as NSDictionary, ["t": "lock", "on": false],
+        let ask = FaceUnlock.Ask(challenge: Data([3, 4]), next: Data([7]))
+        let locked = try object(Wire.lock(true, passkey: (key, ask)))
+        XCTAssertEqual(locked as NSDictionary, ["t": "lock", "on": true, "key": ["id": "-_8", "salt": "AQI", "next": "Bw", "challenge": "AwQ"]])
+        XCTAssertEqual(try object(Wire.lock(false, passkey: (key, ask))) as NSDictionary, ["t": "lock", "on": false],
                        "an open Mac asks for no passkey")
         XCTAssertEqual(try object(Wire.passkeyRefused) as NSDictionary, ["t": "unlock", "ok": false, "why": "key"])
         let offer = FaceUnlock.Offer(challenge: Data([5]), salt: Data([6]))
@@ -81,11 +82,17 @@ final class WireTests: XCTestCase {
 
     func testThePasskeysMessagesOfThePage() throws {
         func command(_ json: String) throws -> Wire.Command { try Wire.command(from: Data(json.utf8)) }
-        guard case .unlockWithPasskey(let answer, let secret) = try command(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#) else {
+        guard case .unlockWithPasskey(let answer, let secret, let next) =
+            try command(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ","next":"Bg"}"#) else {
             return XCTFail("not an unlock by passkey")
         }
         XCTAssertEqual(answer, Passkey.Answer(authenticator: Data([1, 2]), client: Data([3]), signature: Data([4])))
         XCTAssertEqual(secret, Data([5]))
+        XCTAssertEqual(next, Data([6]))
+        for (json, why) in [(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#, "from a page that asks for one secret"),
+                            (#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ","next":"!"}"#, "a second secret that is none")] {
+            guard case .unlockWithPasskey(_, Data([5]), nil) = try command(json) else { return XCTFail(why) }
+        }
         guard case .unlock("geheim") = try command(#"{"t":"unlock","s":"geheim","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#) else {
             return XCTFail("a typed password counts as one")
         }
@@ -197,6 +204,12 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(try shaped(#""fit":"window","shape":9"#)?.shape, 2, "at twice its size at most, as a fitted window")
         XCTAssertEqual(try shaped(#""fit":"window","shape":0"#)?.shape, 0.05)
         XCTAssertNil(try shaped(#""shape":0.6"#)?.shape, "only a window the view is fitted to")
+        XCTAssertEqual(try shaped(#""inset":[60,0,120,8.5]"#)?.inset, ScreenView.Inset(top: 60, right: 0, bottom: 120, left: 8.5))
+        XCTAssertEqual(try shaped(#""v":4"#)?.inset, .zero, "a page that sends none")
+        for odd in [#""inset":[60,0,120]"#, #""inset":[]"#, #""inset":[1,2,3,4,5]"#] {
+            XCTAssertEqual(try shaped(odd)?.inset, .zero, odd)
+        }
+        XCTAssertEqual(try shaped(#""inset":[-60,0,9000,0]"#)?.inset, ScreenView.Inset(top: 0, right: 0, bottom: 794, left: 0), "bounded")
         for off in [#"{"t":"view","on":false}"#, #"{"t":"view","on":true,"w":390,"h":844}"#,
                     on.replacingOccurrences(of: "390", with: "5")] {
             guard case .view(nil) = try command(off) else { return XCTFail(off) }

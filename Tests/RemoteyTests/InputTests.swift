@@ -137,4 +137,82 @@ final class InputTests: XCTestCase {
         input.move(dx: 0.3, dy: 0.3)
         XCTAssertEqual(events.filter { $0.type == .mouseMoved }.count, 3, "the rest is kept for the sender of fractions")
     }
+
+    // MARK: Keyboard
+
+    /// A layout that exists only here: key 0 types a and A, key 1 types 1, ! with Shift and @ with Option,
+    /// key 2 is dead with Option (as ´ is), key 3 types ? only with Shift and Option.
+    private static func layout(_ code: CGKeyCode, _ flags: CGEventFlags) -> String? {
+        let shift = flags.contains(.maskShift), option = flags.contains(.maskAlternate)
+        switch (code, shift, option) {
+        case (0, false, false): return "a"
+        case (0, true, false): return "A"
+        case (1, false, false): return "1"
+        case (1, true, false): return "!"
+        case (1, false, true): return "@"
+        case (2, false, false): return "e"
+        case (2, _, true): return nil
+        case (3, true, true): return "?"
+        case (4, false, false): return "!" // a second key for !, as some layouts have
+        case (5, false, false): return " "
+        default: return ""
+        }
+    }
+
+    func testACharacterIsFoundWithTheModifiersItNeedsTheFewestFirst() {
+        let map = Input.keymap(translate: Self.layout)
+        XCTAssertEqual(map["a"], Input.Key(code: 0, flags: []))
+        XCTAssertEqual(map["A"], Input.Key(code: 0, flags: .maskShift))
+        XCTAssertEqual(map["@"], Input.Key(code: 1, flags: .maskAlternate))
+        XCTAssertEqual(map["?"], Input.Key(code: 3, flags: [.maskShift, .maskAlternate]))
+        XCTAssertEqual(map["!"], Input.Key(code: 4, flags: []), "a key without Shift beats one with it")
+        XCTAssertEqual(map["e"], Input.Key(code: 2, flags: []))
+        XCTAssertNil(map[" "], "space has a key name of its own")
+        XCTAssertEqual(Set(map.keys), ["a", "A", "1", "!", "@", "e", "?"], "nothing of the dead key")
+    }
+
+    private var keys: [String] {
+        events.filter { $0.type == .keyDown }.map { event in
+            let names: [(CGEventFlags, String)] = [(.maskCommand, "cmd"), (.maskShift, "shift"), (.maskAlternate, "alt"), (.maskControl, "ctrl")]
+            let mods = names.filter { event.flags.contains($0.0) }.map(\.1)
+            var length = 0
+            var chars = [UniChar](repeating: 0, count: 4)
+            event.keyboardGetUnicodeString(maxStringLength: chars.count, actualStringLength: &length, unicodeString: &chars)
+            let unicode = String(utf16CodeUnits: chars, count: length)
+            return (["\(event.getIntegerValueField(.keyboardEventKeycode))"] + mods + (unicode.isEmpty ? [] : ["'\(unicode)'"]))
+                .joined(separator: " ")
+        }
+    }
+
+    /// On this Mac's layout, whichever it is: a CI runner has a US one, a desk in Germany a German one. Every
+    /// character that needs Shift or Option goes as its key with those, as the login window reads it.
+    func testTheActiveLayoutTypesShiftedAndOptionCharactersAsTheirKeys() throws {
+        let map = Input.keymap()
+        try XCTSkipIf(map.isEmpty, "no keyboard layout in this session")
+        XCTAssertTrue(map.values.contains { $0.flags.contains(.maskShift) }, "a layer with Shift")
+        XCTAssertTrue(map.values.contains { $0.flags.contains(.maskAlternate) }, "a layer with Option")
+        // These have keys on every Latin layout, most with Shift or Option.
+        let typed = "!?@"
+        for ch in typed { XCTAssertNotNil(map[ch], "\(ch)") }
+        input.type(typed)
+        XCTAssertEqual(keys, typed.map { ch in
+            let key = map[ch]!
+            return (["\(key.code)"] + [(CGEventFlags.maskShift, "shift"), (.maskAlternate, "alt")].filter { key.flags.contains($0.0) }.map(\.1)
+                + ["'\(ch)'"]).joined(separator: " ")
+        })
+        XCTAssertTrue(map.values.allSatisfy { ($0.flags.subtracting([.maskShift, .maskAlternate])).isEmpty })
+    }
+
+    func testAModifierArmedOnThePhoneGoesWithTheModifiersTheCharacterNeeds() throws {
+        let map = Input.keymap()
+        let shifted = try XCTUnwrap(map.first { $0.value.flags == .maskShift }, "a character with Shift on this layout")
+        input.key(String(shifted.key), mods: ["cmd"], count: 1)
+        input.key(String(shifted.key), mods: ["shift"], count: 1)
+        XCTAssertEqual(keys, ["\(shifted.value.code) cmd shift '\(shifted.key)'", "\(shifted.value.code) shift '\(shifted.key)'"])
+    }
+
+    func testACharacterWithoutAKeyGoesAsUnicode() {
+        input.type("🙂")
+        XCTAssertEqual(keys, ["0 '🙂'"])
+    }
 }
