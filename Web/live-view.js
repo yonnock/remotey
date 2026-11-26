@@ -87,13 +87,21 @@ export function parseH264(picture) {
     key: picture[3] === 1, data: picture.subarray(4) };
 }
 
+// A decoder that fails can mostly go on from the next key frame: a lost picture, a fault in WebKit's decoder,
+// a stall after the phone was busy. So the page drops its decoder and asks the Mac for a key frame (`idr`).
+// Only a decoder that fails FAULTS times within FAULT_MS is taken for one this phone does not have, and the
+// stream goes to JPEG for the rest of the connection, so the phone still gets a picture.
+export const FAULTS = 3, FAULT_MS = 10_000;
+// Pictures that are no key frame and come later than this after the request: the Mac did not answer it.
+export const KEY_MS = 2_000;
+
 // Owns decoding for one WebSocket. Closing it invalidates every pending async callback.
 export class LiveView {
   // `picture` holds the canvas and `aim`, which is moved to the pointer's place and holds the marker and
   // `cursor`, the pointer's picture. `shown` answers a picture by number, `placed` reports every update
-  // that reached the display, and `fallback` says that `codec` is JPEG from now on, so the view has to be
-  // asked for again.
-  constructor(canvas, { picture, aim, cursor }, { shown, placed, fallback }) {
+  // that reached the display, `keyframe` asks the Mac for a key frame, and `fallback` says that `codec` is
+  // JPEG from now on, so the view has to be asked for again.
+  constructor(canvas, { picture, aim, cursor }, { shown, placed, keyframe = () => {}, fallback }) {
     this.canvas = canvas;
     this.picture = picture;
     // Opaque and not bound to the page's own drawing where the browser allows it: less work per frame.
@@ -102,7 +110,10 @@ export class LiveView {
     this.cursor = cursor;
     this.shown = shown;
     this.placed = placed;
+    this.keyframe = keyframe;
     this.fallback = fallback;
+    this.faults = []; // when the decoder failed lately
+    this.awaiting = 0; // when a key frame was asked for, while the page waits for it; else 0
     this.on = false;
     this.codec = typeof VideoDecoder === 'function' ? 'h264' : 'jpeg';
     this.pending = new Map();
@@ -171,7 +182,7 @@ export class LiveView {
     // Serialize submissions, not decoder outputs: some decoders need a second input before output.
     this.chain = this.chain.then(() => {
       if (!this.closed && epoch === this.epoch) return this.decode(buffer, epoch);
-    }).catch(() => this.useJPEG());
+    }).catch(() => this.fault());
   }
 
   async decode(buffer, epoch) {
@@ -199,10 +210,19 @@ export class LiveView {
     }
     if (kind !== H264 || this.codec !== 'h264') return;
     const { codec, key, data } = parseH264(picture);
+    // Without a decoder, or waiting for a key frame, a picture that builds on others cannot be shown. It is
+    // answered all the same, so the Mac's send window goes on, and the next key frame starts over.
+    if (!key && (!this.decoder || this.awaiting)) {
+      this.shown(meta.n);
+      if (!this.awaiting) this.recover();
+      else if (Date.now() - this.awaiting > KEY_MS) this.fault();
+      return;
+    }
+    if (key) this.awaiting = 0;
     if (!this.decoder || this.decoderCodec !== codec) {
-      if (!key) throw new Error('H.264 stream must start with an IDR');
       const config = { codec, optimizeForLatency: true };
-      if (!(await VideoDecoder.isConfigSupported(config)).supported) throw new Error('H.264 config unsupported');
+      // A phone that cannot decode this stream at all gets JPEG at once.
+      if (!(await VideoDecoder.isConfigSupported(config)).supported) { this.useJPEG(); return; }
       if (this.closed || epoch !== this.epoch) return;
       this.releaseDecoder();
       this.decoderCodec = codec;
@@ -219,10 +239,10 @@ export class LiveView {
             clearTimeout(this.timer);
             this.timer = 0;
             if (this.pending.size) this.watch();
-          } catch { this.useJPEG(); }
+          } catch { this.fault(); }
           finally { image.close(); }
         },
-        error: () => { if (!this.closed && epoch === this.epoch && this.decoder === decoder) this.useJPEG(); },
+        error: () => { if (!this.closed && epoch === this.epoch && this.decoder === decoder) this.fault(); },
       });
       this.decoder.configure(config);
     }
@@ -237,7 +257,22 @@ export class LiveView {
   // since the agent waits for answers. Pictures that keep coming out are no stall, however many are pending:
   // a burst after a Wi-Fi hold keeps some pending for a while, and a slow decoder lowers the frame rate.
   watch() {
-    this.timer = setTimeout(() => this.useJPEG(), 2000);
+    this.timer = setTimeout(() => this.fault(), 2000);
+  }
+
+  // The decoder failed: start over from a key frame, unless it failed too often of late.
+  fault() {
+    if (this.closed || this.codec === 'jpeg') return;
+    const now = Date.now();
+    this.faults = [...this.faults.filter((at) => now - at < FAULT_MS), now];
+    if (this.faults.length >= FAULTS) this.useJPEG(); else this.recover();
+  }
+
+  // Drops the decoder and asks the Mac for a key frame; the next one sets up a new decoder.
+  recover() {
+    this.releaseDecoder();
+    this.awaiting = Date.now();
+    this.keyframe();
   }
 
   draw(image, meta) {
@@ -326,6 +361,7 @@ export class LiveView {
     if (this.closed || this.codec === 'jpeg') return;
     this.epoch++;
     this.releaseDecoder();
+    this.awaiting = 0;
     this.codec = 'jpeg';
     this.fallback();
   }

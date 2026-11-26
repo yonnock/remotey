@@ -7,6 +7,26 @@ const segmenter = globalThis.Intl?.Segmenter ? new Intl.Segmenter() : null;
 /** User-perceived characters: an emoji with a skin tone or a flag is one backspace. */
 export const graphemes = (s) => (segmenter ? [...segmenter.segment(s)].length : Array.from(s).length);
 
+/**
+ * The Mac drops a text of more than 2000 characters without a word (Wire.swift counts Swift's characters,
+ * which are what Intl.Segmenter calls graphemes). Long text, as from a paste, goes in pieces of at most
+ * TEXT_MAX graphemes and TEXT_UNITS UTF-16 units, cut between two characters: an emoji, an accented letter or
+ * a flag is never split. Half the Mac's limit leaves room for the two counts to disagree on a rare sequence.
+ */
+export const TEXT_MAX = 1000, TEXT_UNITS = 8000;
+export function pieces(text) {
+  const parts = segmenter ? [...segmenter.segment(text)].map((s) => s.segment) : Array.from(text);
+  const out = [];
+  let piece = '', count = 0;
+  for (const part of parts) {
+    if (count === TEXT_MAX || (piece && piece.length + part.length > TEXT_UNITS)) { out.push(piece); piece = ''; count = 0; }
+    piece += part;
+    count++;
+  }
+  if (piece) out.push(piece);
+  return out;
+}
+
 /** What changed from `before` to `after`: how many characters went, and the text that came. */
 export function diff(before, after) {
   let p = 0;

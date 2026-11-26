@@ -1,16 +1,23 @@
 // The page: connection, controls, keys and settings, wired to the touchpad, the viewport, the live view, the
 // switcher and the display picker.
 import { Switcher, readApps } from './apps.js';
+import { Awake } from './awake.js';
+import { Heartbeat, Link, probe } from './connection.js';
 import { Picker, readDisplays } from './displays.js';
 import { Cadence, LiveView, Meter } from './live-view.js';
 import * as passkey from './passkey.js';
+import { localize, number, t } from './strings.js';
 import { SETTINGS, Touchpad, detents, settingAt, settingFraction, settingText, stepSetting } from './touchpad.js';
-import { relay } from './typing.js';
+import { pieces, relay } from './typing.js';
 import { follow } from './viewport.js';
 
 const $ = (s) => document.querySelector(s);
 const body = document.body, root = document.documentElement;
 const statusEl = $('#status'), pad = $('#pad'), field = $('#field'), screenEl = $('#screen'), view = $('#view');
+
+// ---- Words: in the phone's language, from strings.js. The steps of the first start are a list there.
+localize();
+$('#steps').replaceChildren(...t('welcome.steps').map((step) => Object.assign(document.createElement('li'), { textContent: step })));
 
 // ---- Stored on the phone. Every value is checked on the way in: an older page may have left another shape.
 const store = {
@@ -28,20 +35,26 @@ try {
   else token = localStorage.getItem('remotey-token') || '';
 } catch {}
 
-// ---- Connection
-let ws = null, liveView = null, ready = false, denied = false, retryTimer = 0;
+// ---- Connection. connection.js decides the state and when to try again; this part owns the socket and shows
+// the state: in words on the display, and for a failure a notice with its likely cause and one thing to do.
+let ws = null, liveView = null, ready = false;
 let served = null; // names the page the agent served when this one first connected
-// The LED carries the state; the text is for screen readers. state: '' (connecting), 'ok' or 'bad'.
-function setStatus(text, state = '') { statusEl.className = state; statusEl.firstElementChild.textContent = text; }
+const heartbeat = new Heartbeat();
+let beat = 0;
+const link = new Link({
+  open: openSocket,
+  drop: dropSocket,
+  probe: () => probe(),
+  online: () => navigator.onLine !== false,
+  changed: () => showLink(),
+  schedule: (fn, ms) => setTimeout(fn, ms),
+  cancel: (id) => clearTimeout(id),
+});
+/** Tries now. `ask`: the user asked for it, so a refused key is tried again and the state says "connecting". */
+const connect = (ask = false) => link.begin({ paired: !!token, ask });
 
-function connect() {
-  clearTimeout(retryTimer);
-  if (!token) { pad.textContent = 'Kein Zugangsschlüssel. Am Mac im Remotey-Menü „iPhone koppeln“ wählen und den QR-Code scannen.'; return setStatus('Nicht gekoppelt', 'bad'); }
-  if (denied) return;
-  setStatus('Verbinde…');
-  liveView?.close();
-  if (ws) { ws.onclose = null; ws.close(); }
-  ready = false;
+function openSocket() {
+  dropSocket();
   if (sheet === 'apps') askApps(); // the list on show is the old Mac's until the new connection answers
   // Behind `tailscale serve` the socket has its own path; locally the agent listens on the port after the page's.
   const url = location.protocol === 'https:' ? `wss://${location.host}/ws` : `ws://${location.hostname}:${(Number(location.port) || 80) + 1}/ws`;
@@ -50,11 +63,13 @@ function connect() {
   const player = liveView = new LiveView(view, { picture: $('#picture'), aim: $('#aim'), cursor: $('#cursor') }, {
     shown: (n) => { if (socket === ws && socket.readyState === 1) socket.send(JSON.stringify({ t: 'shown', n })); },
     placed: (update, picture) => placed(update, picture),
+    keyframe: () => { if (socket === ws && ready) socket.send(JSON.stringify({ t: 'idr' })); },
     fallback: () => { if (socket === ws) syncView(); },
   });
   socket.onopen = () => socket.send(JSON.stringify({ t: 'auth', token }));
   socket.onmessage = (e) => {
     if (socket !== ws) return;
+    heartbeat.heard(performance.now()); // whatever arrives says the connection lives
     if (typeof e.data !== 'string') { player.receive(e.data); return; }
     const m = JSON.parse(e.data);
     if (m.t === 'ok') {
@@ -62,8 +77,8 @@ function connect() {
       if (served !== null && m.page !== served) return location.reload();
       served = m.page;
       ready = true;
-      pad.textContent = m.ax ? '' : 'Am Mac fehlt die Bedienungshilfen-Freigabe für Remotey (Systemeinstellungen, Datenschutz & Sicherheit).';
-      setStatus(m.ax ? 'Verbunden' : 'Freigabe fehlt', m.ax ? 'ok' : 'bad');
+      link.accepted(m.ax === true);
+      listen();
       sentView = '';
       fitted = 0;
       syncView();
@@ -81,8 +96,10 @@ function connect() {
     } else if (m.t === 'cursor') {
       player.setCursor(m);
     } else if (m.t === 'view' && m.ok === false) {
+      // Screen Recording is missing (no `why` means the same), or another device took the live view over.
       setView(false);
-      pad.textContent = 'Am Mac fehlt die Freigabe „Bildschirmaufnahme“ für Remotey. Dort erlauben, Remotey neu starten, dann „Bild“ erneut antippen.';
+      viewNotice = m.why === 'taken' ? 'taken' : 'permission';
+      showNotice();
     } else if (m.t === 'apps') {
       const list = readApps(m);
       if (list) switcher.update(list);
@@ -92,46 +109,101 @@ function connect() {
       const list = readDisplays(m);
       if (list) { picker.update(list); player.setDisplays(list); }
     } else if (m.t === 'denied') {
-      denied = true;
-      pad.textContent = 'Zugangsschlüssel ungültig. Am Mac neu koppeln und den QR-Code scannen.';
-      setStatus('Abgelehnt', 'bad');
+      dropSocket();
+      link.refused();
     }
   };
   socket.onclose = () => {
     if (socket !== ws) return;
-    ready = false;
-    unlocking = byFace = false; // the answer to a password went with the connection
-    phoneKey = null; // and so did the challenge
-    setOffer(null);
-    if (locked) typeLabel('Entsperren…');
-    player.close();
-    if (denied) return;
-    setStatus('Getrennt', 'bad');
-    pad.textContent = 'Keine Verbindung zum Mac.';
-    if (sheet === 'apps') askApps();
-    if (document.visibilityState === 'visible') retryTimer = setTimeout(connect, 1000);
+    forget();
+    link.lost();
   };
+}
+// What goes with a connection: the socket, the answers it was waiting for, the challenge of the passkey.
+function forget() {
+  ready = false;
+  clearInterval(beat);
+  unlocking = byFace = false; // the answer to a password went with the connection
+  phoneKey = null; // and so did the challenge
+  setOffer(null);
+  if (locked) restLabel();
+  liveView?.close();
+  if (sheet === 'apps') askApps();
+}
+// Closes the socket without a word: the state machine has already decided what comes next.
+function dropSocket() {
+  if (!ws) return;
+  ws.onclose = null;
+  ws.close();
+  ws = null;
+  forget();
+}
+// While the page is in sight, a connection that falls silent is dead: see Heartbeat.
+function listen() {
+  clearInterval(beat);
+  heartbeat.heard(performance.now());
+  heartbeat.pingedAt = performance.now();
+  beat = setInterval(() => {
+    const now = performance.now(), due = heartbeat.check(now);
+    if (due === 'ping') send({ t: 'ping' });
+    else if (due === 'dead') { dropSocket(); link.lost(); }
+  }, 1000);
 }
 // Nothing is queued: what cannot leave now is dropped, so nothing arrives late after a reconnect.
 // True if the message left.
 function send(msg) {
-  if (!ready || ws.readyState !== 1) return false;
+  if (!ready || ws?.readyState !== 1) return false;
   ws.send(JSON.stringify(msg));
   return true;
 }
 
-// iOS suspends sockets in the background without closing them, so reconnect on every return.
-let wakeLock = null;
-async function keepAwake() {
-  try { if (!wakeLock || wakeLock.released) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+// The state, in words and with a symbol on the display. Without a key, the first start's steps instead.
+let welcome = false; // the steps are open from the notice of a refused key
+function showLink() {
+  const state = link.state;
+  body.dataset.link = state;
+  statusEl.className = state === 'connected' ? 'ok' : state === 'connecting' ? 'wait' : 'bad';
+  $('#statusText').textContent = t(`status.${state}`);
+  const steps = $('#welcome');
+  steps.hidden = state !== 'unpaired' && !welcome;
+  steps.querySelector('[data-act=welcome-back]').hidden = state === 'unpaired';
+  showNotice();
 }
+// One notice at a time: what keeps the Mac out of reach comes before what keeps the live view off.
+const NOTICES = { unreachable: 'retry', stopped: 'retry', offline: 'retry', noAccess: 'recheck', denied: 'howto', permission: 'retry', taken: 'takeBack' };
+let viewNotice = null; // 'permission' or 'taken': the Mac refused the live view
+function showNotice() {
+  const kind = link.state in NOTICES ? link.state : viewNotice;
+  const el = $('#notice');
+  el.hidden = !kind;
+  if (!kind) return;
+  el.dataset.kind = kind;
+  $('#noticeTitle').textContent = t(`notice.${kind}.title`);
+  $('#noticeText').textContent = t(`notice.${kind}.text`);
+  $('#noticeAct').textContent = t(`notice.${NOTICES[kind]}`);
+}
+function noticeAct() {
+  const kind = $('#notice').dataset.kind;
+  if (kind === 'denied') { welcome = true; showLink(); }
+  else if (kind === 'permission' || kind === 'taken') setView(true);
+  else connect(true);
+}
+
+// iOS suspends sockets in the background without closing them, so reconnect on every return. The screen
+// stays on while the phone is used, and goes dark as usual once it lies untouched (see awake.js).
+const awake = new Awake();
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { connect(); keepAwake(); return; }
+  if (document.visibilityState === 'visible') { connect(); awake.touched(); return; }
   // Out of sight the page shows no picture. Said now, the Mac stops the stream at once, and a window that took
   // the phone's shape gets its frame back before someone sits down at the Mac, not when the socket times out.
   send({ t: 'view', on: false });
   sentView = '';
+  clearInterval(beat);
+  link.stop();
+  awake.release();
 });
+// The network is back: no need to wait for the next try.
+addEventListener('online', () => { if (!link.up) connect(); });
 
 // ---- Sticky modifiers (apply to the next key or click, then release)
 const mods = new Set();
@@ -142,7 +214,9 @@ function takeMods() {
   return list;
 }
 // A modifier has a key on the deck and one above the keyboard; both show whether it is armed.
-function showMods() { document.querySelectorAll('[data-mod]').forEach((b) => b.classList.toggle('on', mods.has(b.dataset.mod))); }
+function showMods() {
+  document.querySelectorAll('[data-mod]').forEach((b) => { b.classList.toggle('on', mods.has(b.dataset.mod)); b.setAttribute('aria-pressed', mods.has(b.dataset.mod)); });
+}
 // `held` is a modifier the key itself brings along, as the keys for an app's zoom do.
 function sendKey(k, held) { send({ t: 'key', k, mods: [...new Set([...(held ? [held] : []), ...takeMods()])], n: 1 }); }
 function sendClick(b) { send({ t: 'c', b, mods: takeMods() }); }
@@ -152,7 +226,6 @@ function sendClick(b) { send({ t: 'c', b, mods: takeMods() }); }
 // at every move, so a change counts from the next one.
 const settings = Object.fromEntries(Object.entries(SETTINGS).map(([name, { initial }]) =>
   [name, store.get(`setting-${name}`, (v) => detents(name).includes(v), initial)]));
-const decimal = (n) => String(n).replace('.', ',');
 function showSettings() {
   for (const el of document.querySelectorAll('[data-setting]')) {
     const name = el.dataset.setting, value = settings[name], text = settingText(name, value);
@@ -172,11 +245,22 @@ function setSetting(name, value) {
 function resetSettings() {
   for (const [name, { initial }] of Object.entries(SETTINGS)) setSetting(name, initial);
 }
+// The frame rate and delay of the live view on the display: off unless asked for.
+let meterOn = store.get('meter', (v) => typeof v === 'boolean', false);
+function setMeter(on) {
+  meterOn = on;
+  store.set('meter', on);
+  body.classList.toggle('meter', on);
+  const key = $('[data-act=meter]');
+  key.classList.toggle('on', on);
+  key.setAttribute('aria-pressed', on);
+}
+setMeter(meterOn);
 for (const el of document.querySelectorAll('[data-setting]')) {
   const name = el.dataset.setting, slider = el.querySelector('[role=slider]'), all = detents(name);
   slider.setAttribute('aria-valuemin', all[0]);
   slider.setAttribute('aria-valuemax', all.at(-1));
-  // A tick for every detent; the longer one marks the default that "Std." returns to.
+  // A tick for every detent; the longer one marks the default that "Zurücksetzen" returns to.
   for (const v of all) {
     const tick = document.createElement('i');
     tick.style.setProperty('--at', settingFraction(name, v));
@@ -184,14 +268,15 @@ for (const el of document.querySelectorAll('[data-setting]')) {
     slider.prepend(tick);
   }
   // The finger sets the value where it is, on the first touch and while it slides. The track's ends sit
-  // half a thumb inside the element, so both ends are reachable with the thumb under the finger.
+  // half a thumb inside the element, so both ends are reachable with the thumb under the finger. The whole
+  // row takes the finger, its name and value too, so the touch target is the row's height.
   const at = (x) => {
     const r = slider.getBoundingClientRect(), inset = slider.lastElementChild.offsetWidth / 2;
     setSetting(name, settingAt(name, (x - r.left - inset) / Math.max(1, r.width - 2 * inset)));
   };
-  slider.addEventListener('touchstart', (e) => { e.preventDefault(); keepAwake(); slider.classList.add('pressed'); at(e.targetTouches[0].clientX); }, { passive: false });
-  slider.addEventListener('touchmove', (e) => { e.preventDefault(); at(e.targetTouches[0].clientX); }, { passive: false });
-  for (const type of ['touchend', 'touchcancel']) slider.addEventListener(type, () => slider.classList.remove('pressed'));
+  el.addEventListener('touchstart', (e) => { e.preventDefault(); awake.touched(); slider.classList.add('pressed'); at(e.targetTouches[0].clientX); }, { passive: false });
+  el.addEventListener('touchmove', (e) => { e.preventDefault(); at(e.targetTouches[0].clientX); }, { passive: false });
+  for (const type of ['touchend', 'touchcancel']) el.addEventListener(type, () => slider.classList.remove('pressed'));
   // Mouse and keyboard, for desktop browsers and assistive tech.
   slider.addEventListener('mousedown', (e) => {
     at(e.clientX);
@@ -247,7 +332,7 @@ const touches = (e) => [...e.targetTouches].map((t) => ({ id: t.identifier, x: t
 for (const [event, type] of [['touchstart', 'start'], ['touchmove', 'move'], ['touchend', 'end'], ['touchcancel', 'cancel']]) {
   pad.addEventListener(event, (e) => {
     e.preventDefault(); // the pad's touches are the Mac's, not the browser's: no scrolling, no page zoom
-    if (type === 'start') keepAwake();
+    if (type === 'start') awake.touched();
     touchpad.update(type, touches(e), e.timeStamp);
   }, { passive: false });
 }
@@ -295,6 +380,7 @@ function syncView() {
   body.classList.toggle('view', viewOn);
   view.hidden = !viewOn;
   $('#viewBtn').classList.toggle('on', viewOn);
+  $('#viewBtn').setAttribute('aria-pressed', viewOn);
   // Readout and preview stop where the Mac did, also while it is asked for more. A fitted picture has the
   // zoom the Mac chose for it, and is shown as it comes.
   const showing = pinching ? Math.max(pinching, floor) : fitted || (shaping() ? form() : Math.max(zoom(), floor));
@@ -305,7 +391,7 @@ function syncView() {
   liveView.show(viewOn);
   liveView.zoomTo((fitted || shaping()) && !pinching ? 0 : showing);
   liveView.lead(shaping()); // the pointer ahead of the Mac's answer: only where the picture stands still
-  if (!ready || ws.readyState !== 1) return;
+  if (!ready || ws?.readyState !== 1) return;
   const r = screenEl.getBoundingClientRect(); // measured after the layout change above
   // `zoom` goes along with "Auto" too: it counts while the Mac has no window in front to fit.
   const request = { t: 'view', on: viewOn, w: r.width, h: r.height, zoom: zoom(), ...(fit && { fit: 'window' }), ...(shaping() && { shape: form() }),
@@ -338,14 +424,14 @@ function placed(update, picture) {
   else if (zoom() < floor / 1.02) { floor = 0; syncView(); } // the Mac shows more than it could: a display was added
 }
 function showZoom(z) {
-  const text = `${decimal(z >= 1 ? Math.round(z * 10) / 10 : Math.round(z * 100) / 100)}×`;
+  const text = `${number(z >= 1 ? Math.round(z * 10) / 10 : Math.round(z * 100) / 100)}×`;
   const readout = $('[data-act=fit]');
   $('#zoomValue').textContent = text;
   readout.classList.toggle('on', fit);
   readout.setAttribute('aria-pressed', fit);
-  readout.setAttribute('aria-label', `Zoom ${text}. Auto ${!fit ? 'aus' : shape ? 'an: das vordere Fenster hat die Form des Telefons'
-    : 'an: das Bild zeigt das vordere Fenster ganz'}`);
-  $('#fitLamp').textContent = shaping() ? 'Form' : 'Auto';
+  readout.setAttribute('aria-label', t('zoom.label', text, fit, shape));
+  // The symbol over the zoom: a window while the view is fitted to one, a phone while it also has the phone's shape.
+  readout.dataset.lamp = shaping() ? 'phone' : fit ? 'window' : '';
   const latch = $('[data-act=shape]');
   latch.classList.toggle('on', shape);
   latch.setAttribute('aria-pressed', shape);
@@ -407,19 +493,19 @@ function showMeter() {
       meterEl.className = level === 'ok' ? '' : level;
       meterEl.firstElementChild.firstElementChild.textContent = fps;
       meterEl.lastElementChild.textContent = `${ms ?? '–'} ms`;
-      meterEl.setAttribute('aria-label', `Live-Bild: ${fps} Bilder pro Sekunde`
-        + (ms === null ? '' : `, ${ms} Millisekunden Verzögerung`));
+      meterEl.setAttribute('aria-label', t('meter.label', fps, ms));
     }
     if (fps && viewOn) showMeter();
   }, 500);
 }
 function setView(on) {
   viewOn = on;
+  if (on && viewNotice) { viewNotice = null; showNotice(); }
   syncView();
   if (on) cadence.measure(); else cadence.stop();
 }
 
-// ---- Tray pages: media keys, keys, Regler.
+// ---- Tray pages: media keys, keys, settings.
 const PAGES = ['media', 'keys', 'settings'];
 let page = store.get('page', (p) => PAGES.includes(p), 'media');
 function showPage() {
@@ -457,8 +543,10 @@ const picker = new Picker($('#displays'), (message) => { send(message); setSheet
 function askApps() {
   switcher.reset();
   picker.reset();
-  if (!ready) return switcher.say('Die Apps erscheinen, sobald der Mac verbunden ist.');
-  send({ t: 'apps' });
+  if (!ready) return switcher.say(t('apps.waiting'));
+  // The icons the page has from before are named, so the Mac sends only the others.
+  const have = switcher.known();
+  send({ t: 'apps', ...(have.length && { have }) });
   send({ t: 'displays' });
 }
 
@@ -497,7 +585,7 @@ for (const tray of Object.values(SHEETS)) {
   tray.addEventListener('touchstart', (e) => {
     const well = e.target.closest('.well');
     from = null;
-    if (e.touches.length > 1 || (well ? well.scrollHeight > well.clientHeight : e.target.closest('button, [role=slider], .switch'))) return;
+    if (e.touches.length > 1 || (well ? well.scrollHeight > well.clientHeight : e.target.closest('button, .setting, .switch'))) return;
     from = { y: e.touches[0].clientY, time: e.timeStamp, dy: 0, speed: 0, held: !well };
     if (well) return; // a tap on an icon stays a tap
     e.preventDefault();
@@ -550,6 +638,9 @@ function fire(b) {
   else if (d.act === 'fit') setFit(!fit);
   else if (d.act === 'shape') setShape(!shape);
   else if (d.act === 'settings-reset') resetSettings();
+  else if (d.act === 'meter') setMeter(!meterOn);
+  else if (d.act === 'notice') noticeAct();
+  else if (d.act === 'welcome-back') { welcome = false; showLink(); }
   else if (d.act === 'done') field.blur();
   else if (d.act === 'type') openField();
   else if (d.act === 'enrol') enrol();
@@ -570,7 +661,7 @@ document.querySelectorAll('button').forEach((b) => {
   const stop = () => { clearTimeout(delay); clearInterval(repeat); };
   b.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    keepAwake();
+    awake.touched();
     b.classList.add('pressed');
     // The Mac keeps the modifiers of the press until the release, so a drag carries them.
     if (b.dataset.hold) return send({ t: 'b', b: b.dataset.hold, d: true, mods: takeMods() });
@@ -602,9 +693,22 @@ document.querySelectorAll('button').forEach((b) => {
 let locked = false, unlocking = false; // unlocking: the Mac has a password and has not answered yet
 let phoneKey = null; // the passkey to ask for and its challenge, good for one try
 let asking = false, byFace = false, declined = false; // asking: iOS has a question on show; byFace: the try in flight
-const typeLabel = (text) => { $('#typeLabel').textContent = text; };
+// The type key's words, long and short (the short ones stand where the long ones do not fit).
+function typeLabel(long, short = long) {
+  $('#typeLabel').textContent = long;
+  $('#typeShort').textContent = short;
+  $('[data-act=type]').setAttribute('aria-label', locked ? long : t('type.label'));
+}
+// What the key says while nothing is under way: what a tap does. On a locked Mac it names the way, Face ID
+// or the password.
+function restLabel() {
+  if (!locked) typeLabel(t('type'), t('type.short'));
+  else if (phoneKey && !declined) typeLabel(t('unlock.face'), t('unlock.faceShort'));
+  else typeLabel(t('unlock.plain'), t('unlock.plainShort'));
+}
 const emptyField = relay(field, {
-  text: (s) => send({ t: 'text', s }),
+  // The Mac drops a long text: it goes in pieces (see typing.js).
+  text: (s) => { for (const piece of pieces(s)) send({ t: 'text', s: piece }); },
   backspace: (n) => send({ t: 'key', k: 'backspace', mods: [], n }),
   key: (k) => sendKey(k),
   armed: () => mods.size > 0,
@@ -614,7 +718,7 @@ const emptyField = relay(field, {
     if (unlocking) return false;
     unlocking = ready;
     send({ t: 'unlock', s });
-    hint(ready ? 'Entsperre…' : 'Keine Verbindung zum Mac');
+    hint(ready ? t('unlock.busy') : t('unlock.offline'));
   },
 });
 /** What the empty field says while the Mac is locked. `failed`: the last try did not open it. */
@@ -622,32 +726,31 @@ function hint(text, failed = false) {
   field.placeholder = text;
   field.classList.toggle('failed', failed);
 }
-field.addEventListener('input', () => { if (locked) hint('Passwort des Macs'); });
+field.addEventListener('input', () => { if (locked) hint(t('unlock.hint')); });
 function openField() {
   if (locked && phoneKey && !declined) return void unlockWithFace();
-  if (locked) typeLabel('Entsperren…');
+  if (locked) restLabel();
   field.focus();
 }
 async function unlockWithFace() {
   if (asking || unlocking) return;
   const key = phoneKey;
   asking = true;
-  typeLabel('Face ID…');
+  typeLabel(t('unlock.asking'));
   const message = await passkey.get(key).catch(() => null);
   asking = false;
   if (!locked) return;
-  typeLabel('Entsperren…');
-  if (!message) { declined = true; return; }
+  if (!message) { declined = true; restLabel(); return; }
   if (phoneKey === key) phoneKey = null; // its challenge is spent; the Mac sends the next one
-  if (!ready) return;
+  if (!ready) return restLabel();
   unlocking = byFace = true;
   send(message);
-  typeLabel('Entsperre…');
+  typeLabel(t('unlock.busy'));
 }
 function setLocked(on, key = null) {
   unlocking = false;
   phoneKey = on && key && passkey.available() ? key : null;
-  if (on === locked) return;
+  if (on === locked) return; // a new challenge, which comes after every try: the key still says how that went
   byFace = declined = false;
   // A field that changes its kind while it has the keyboard keeps the old keyboard: it is put away first.
   field.blur();
@@ -656,25 +759,24 @@ function setLocked(on, key = null) {
   field.type = on ? 'password' : 'text';
   field.autocomplete = on ? 'current-password' : 'off';
   field.enterKeyHint = on ? 'go' : 'send';
-  field.setAttribute('aria-label', on ? 'Passwort zum Entsperren des Macs' : 'Text an den Mac senden');
-  hint(on ? 'Passwort des Macs' : '');
-  typeLabel(on ? 'Entsperren…' : 'Tippen…');
-  $('[data-act=type]').setAttribute('aria-label', on ? 'Mac entsperren' : 'Tastatur öffnen');
+  field.setAttribute('aria-label', on ? t('unlock.field') : t('field'));
+  hint(on ? t('unlock.hint') : '');
+  restLabel();
   const lockKey = $('[data-act=lock]');
   lockKey.classList.toggle('on', on);
   lockKey.setAttribute('aria-pressed', on);
-  lockKey.setAttribute('aria-label', on ? 'Mac entsperren' : 'Mac sperren');
+  lockKey.setAttribute('aria-label', on ? t('lock.unlock') : t('lock.lock'));
   emptyField();
 }
 function unlockFailed(why) {
   unlocking = false;
   if (!locked) return;
-  hint(why === 'field' ? 'Mac nicht bereit, nochmal?' : 'Nicht entsperrt, nochmal?', true);
+  hint(why === 'field' ? t('unlock.notReady') : t('unlock.again'), true);
   if (!byFace) return;
   // The field is not open: the key says it. A Mac that was not ready is asked again with Face ID.
   byFace = false;
   declined = why !== 'field';
-  typeLabel(why === 'field' ? 'Nicht bereit' : 'Abgelehnt');
+  typeLabel(why === 'field' ? t('unlock.unready') : t('unlock.refused'));
 }
 
 // ---- Enrolling for Face ID: started from the agent's menu at the Mac, which then offers it to the phone.
@@ -682,7 +784,7 @@ function unlockFailed(why) {
 // Mac has the passkey and has not answered), failed, done.
 const enrolSheet = $('#enrol'), enrolKey = $('[data-act=enrol]');
 let offer = null, taken = false, confirmed = 0; // taken: this phone has answered the offer with its passkey
-function showEnrol(state, title, text, key = 'Einrichten') {
+function showEnrol(state, title, text, key = t('enrol.go')) {
   enrolSheet.dataset.state = state;
   $('#enrolTitle').textContent = title;
   $('#enrolText').textContent = text;
@@ -692,7 +794,7 @@ function setOffer(next) {
   offer = next;
   taken = false;
   clearTimeout(confirmed);
-  if (next) showEnrol('offer', 'Entsperren mit Face ID', `Dieses iPhone entsperrt dann „${next.name}“. Den Passkey dafür in „Passwörter“ sichern.`);
+  if (next) showEnrol('offer', t('enrol.title'), t('enrol.offer', next.name));
   enrolSheet.hidden = !next;
 }
 async function enrol() {
@@ -704,11 +806,11 @@ async function enrol() {
   asking = false;
   if (offer !== mine) return;
   taken = !!message && ready;
-  if (taken) { send(message); enrolKey.textContent = 'Richte ein…'; } else enrolFailed();
+  if (taken) { send(message); enrolKey.textContent = t('enrol.busy'); } else enrolFailed();
 }
 function enrolFailed() {
   taken = false;
-  showEnrol('failed', 'Entsperren mit Face ID', 'Das hat nicht geklappt. Den Passkey bitte in „Passwörter“ sichern.', 'Nochmal');
+  showEnrol('failed', t('enrol.title'), t('enrol.failed'), t('enrol.again'));
 }
 function enrolled(ok) {
   if (!ok) { if (offer) enrolFailed(); return; }
@@ -716,13 +818,15 @@ function enrolled(ok) {
   const mine = taken;
   setOffer(null);
   if (!mine) return;
-  showEnrol('done', 'Eingerichtet', 'Ist der Mac gesperrt, fragt „Entsperren…“ jetzt nach Face ID.');
+  showEnrol('done', t('enrol.done'), t('enrol.doneText'));
   enrolSheet.hidden = false;
   confirmed = setTimeout(() => { enrolSheet.hidden = true; }, 2500);
 }
 // The tray comes back after typing; the switcher does not, its list would be old by then.
-field.addEventListener('focus', () => { keepAwake(); typing = true; if (sheet === 'apps') sheet = ''; syncView(); });
-field.addEventListener('blur', () => { typing = false; declined = false; syncView(); });
+field.addEventListener('focus', () => { awake.touched(); typing = true; if (sheet === 'apps') sheet = ''; syncView(); });
+field.addEventListener('blur', () => { typing = false; declined = false; if (locked) restLabel(); syncView(); });
 
+restLabel();
+showLink();
 connect();
-keepAwake();
+awake.touched();

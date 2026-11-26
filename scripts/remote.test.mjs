@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SETTINGS, TAP_MS, Touchpad, detents, gain, settingAt, settingFraction, settingText, stepSetting } from '../Web/touchpad.js';
-import { appLabel, readApps, tapApp, tapWindow, windowTitle } from '../Web/apps.js';
+import { ICONS, Switcher, appLabel, readApps, tapApp, tapWindow, windowTitle } from '../Web/apps.js';
 import { arrange, displayLabel, readDisplays, tapDisplay } from '../Web/displays.js';
-import { SENTINEL, diff, relay } from '../Web/typing.js';
+import { SENTINEL, TEXT_MAX, TEXT_UNITS, diff, pieces, relay } from '../Web/typing.js';
 import { KEYBOARD_MIN, frame } from '../Web/viewport.js';
+import { speak } from '../Web/strings.js';
+
+// The page's words in German, as the checks below spell them; strings.test.mjs covers the choice of language.
+speak('de');
 
 const defaults = Object.fromEntries(Object.entries(SETTINGS).map(([k, { initial }]) => [k, initial]));
 
@@ -376,4 +380,33 @@ test('only a list of displays of the expected shape is drawn', () => {
     { t: 'displays', list: [{ ...desk, id: '2' }] }, { t: 'displays', list: [{ ...desk, x: null }] }, { t: 'displays', list: [{ ...desk, name: 3 }] }]) {
     assert.equal(readDisplays(broken), null, JSON.stringify(broken));
   }
+});
+
+// ---- Long text: the Mac drops more than 2000 characters, so it goes in pieces, never cut inside a character.
+test('long text goes in pieces of whole characters', () => {
+  assert.deepEqual(pieces('kurz'), ['kurz']);
+  assert.deepEqual(pieces(''), []);
+  const text = 'é'.repeat(TEXT_MAX - 1) + '🇩🇪' + '👋🏽'.repeat(TEXT_MAX + 5);
+  const parts = pieces(text);
+  assert.equal(parts.join(''), text);
+  assert.equal(parts.length, 3);
+  assert.ok(parts[0].endsWith('🇩🇪'), 'the flag stays whole at the cut');
+  const count = (s) => [...new Intl.Segmenter().segment(s)].length;
+  assert.ok(parts.every((p) => count(p) <= TEXT_MAX && p.length <= TEXT_UNITS));
+  // Characters of many units each: the cut comes by size before the count.
+  const heavy = pieces(('e' + '́'.repeat(30)).repeat(600));
+  assert.ok(heavy.every((p) => p.length <= TEXT_UNITS) && heavy.length > 2);
+});
+
+// ---- Icons across reconnects: named in the request, at most ICONS of them.
+test('the switcher keeps its icons and names the newest', () => {
+  // The switcher's icon store alone: no page around it.
+  const switcher = Object.assign(Object.create(Switcher.prototype), { pictures: new Map(),
+    parts: { icon: { dataset: {} }, list: { querySelectorAll: () => [] } } });
+  for (let i = 0; i < ICONS + 10; i++) switcher.picture(`app${i}`, 'AA');
+  switcher.picture('app20', 'AA'); // arrives again: newest now
+  const known = switcher.known();
+  assert.equal(known.length, ICONS);
+  assert.equal(known.at(-1), 'app20');
+  assert.ok(!known.includes('app0') && !known.includes('app9') && known.includes('app10'), 'the oldest go');
 });

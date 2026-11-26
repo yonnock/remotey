@@ -776,6 +776,74 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       Name), DNS-Rebinding (ihr `Host` ist ihr Name), auch das Füllen der 32 Plätze, denn der Handshake scheitert
       sofort statt nach 5 s. Was nicht: ein Prozess auf dem Mac, der sendet, was er will. `HeaderFields` liest
       Kopfzeilen für beide Wege und ist für Gerätschlüssel und `Tailscale-User-*` wiederverwendbar.
+18. Fundament für die neue Oberfläche (Analyse mit Mockups, Schritt eins von zwei: der Umbau zu „Glas über dem Mac“
+    folgt). Verifier v17 (neu: T16 Zustände der Verbindung, T17 Schrift und Wörter, T18 Protokoll), Basis = 37dff3d mit
+    v16, beide in derselben Chromium-Version.
+    - Wörter: eine Tabelle (`Web/strings.js`), Deutsch und Englisch, gewählt nach der ersten Sprache des Telefons, die
+      die Seite spricht, sonst Englisch. Das Markup nennt nur Schlüssel (`data-text`, `data-label`), die Module fragen
+      `t()`; ein Test prüft, dass außer dem Titel und „fps“ kein Wort mehr im Markup steht und beide Sprachen dieselben
+      Schlüssel haben. Neue Namen: Klick, Rechtsklick, Auf dem Mac schreiben (schmal „Schreiben“, per Container-Abfrage),
+      Live-Bild, Fenster einpassen, An iPhone anpassen, Steuerung, Einstellungen, Zeigertempo, Beschleunigung,
+      Scrolltempo, Zurücksetzen, Mit Face ID entsperren (mit Passkey) oder Mac entsperren, esc und tab klein. Zahlen
+      mit Komma oder Punkt nach Sprache. Die Schritte des ersten Starts nennen den Menüpunkt, wie er heute heißt
+      („iPhone koppeln (QR-Code)…“), nicht den der Analyse.
+    - Zeichen statt Wort, wo kein Platz ist: „Auto“ und „Form“ über dem Zoom sind jetzt ein Fenster- oder
+      Telefonsymbol, das nur bei eingeschaltetem Einpassen steht (vorher 8 px Versalien, an oder aus nur an der Farbe);
+      die Taste „Bild“ ist ein Display mit Bild oder durchgestrichen, mit `aria-pressed`.
+    - Schrift: Systemschrift, Stufen nach den Textstilen von iOS als Tokens in 1/17 der Grundgröße. Die Grundgröße ist
+      `-apple-system-body`, wo Safari sie gibt, also Dynamic Type; gedeckelt bei einem Drittel mehr, weil das Layout noch
+      feste Höhen hat. Gemessen (T17, alle Telefone, beide Lagen, beide Sprachen, Schublade auf jeder Seite, Umschalter,
+      gesperrter Mac): kleinste Schrift 11 px (Basis: 8 px „Auto“, 10 px an neun Stellen), keine Versalien mit
+      Sperrung, kein eigenes Wort abgeschnitten.
+    - Farbe als Rollen-Tokens (Akzent, ok, Fehler, Warnung, Bühne, Trackpad, Flächen, Beschriftung in drei Stufen,
+      Glas), dazu Radien 47/31/22/12/Kapsel und Abstände 4/8/12/16/24. Akzent Orange (#ff9f0a) nur für „gewählt“ oder
+      „Hauptaktion“: gerastete Modifier, eingeschaltete Taste, Schieberfüllung, Fertig, Einrichten, gesperrter Mac
+      an der Schreibtaste. Nicht mehr Akzent: Zeigerring (hell mit dunklem Rand), App im Vordergrund (Fläche und Punkt
+      wie im Dock), vorderes Fenster (Haken), Display mit Zeiger (heller Rahmen), Drücken, mittlere Messwerte (Gelb).
+      Dunkel bleibt; ein helles Schema ist ein zweiter Satz derselben Rollen, nichts darunter nennt eine Farbe. Grau
+      nach den Systemfarben, das Trackpad ohne Punktraster.
+    - Verbindung als Zustandsmaschine (`Web/connection.js`, in Node getestet): nicht gekoppelt, verbinde, verbunden,
+      kein Zugriff (ohne Bedienungshilfen), Mac nicht erreichbar, Remotey läuft nicht, Kopplung ungültig, offline. Die
+      Ursache: nach einem gescheiterten Versuch fragt die Seite ihren eigenen Ursprung per HEAD; keine Antwort in 5 s
+      heißt nicht erreichbar, eine Antwort (502 hinter `tailscale serve`, aber auch das 404, mit dem der Agent HEAD
+      beantwortet) heißt, der Mac ist da und Remotey antwortet nicht. `navigator.onLine` falsch heißt offline.
+      Wiederholung nach 0,5, 1, 2, 4 … bis 30 s, sofort bei Tipp (Intervalle beginnen neu), bei Rückkehr in Sicht und
+      bei `online`. Ein Fehler bleibt während der Wiederholungen stehen, statt zwischen Fehler und „Verbinde…“ zu
+      flackern. Eine Verbindung, die schon lief, wird sofort ohne Nachfrage neu versucht. Ohne Antwort auf den Schlüssel
+      in 10 s gilt ein Versuch als gescheitert (ein Mac außer Reichweite lässt den Socket oft nur hängen). Ein
+      abgelehnter Schlüssel wird nicht wiederholt, bis man es verlangt.
+    - Anzeige: oben links Symbol und Wort (Punkt grün „Verbunden“, drehender Ring „Verbinde…“, rotes Warnzeichen mit
+      Zustand); bei einem Fehler über dem gedimmten Display ein Hinweis mit Symbol, Titel, einem Satz zur Ursache und
+      einem Knopf (Erneut versuchen, Erneut prüfen, So geht's, Hierher holen). Der Hinweis nimmt keine Berührung außer
+      auf dem Knopf. Ohne Schlüssel die drei Schritte über dem ganzen Telefon (`#welcome`, Schritte aus der Tabelle; ein
+      anderer Weg zu koppeln ergänzt dort Schritte). Maustasten blass, solange der Mac nicht verbunden ist.
+      Gemessen (T16): jeder Zustand mit Wort, Symbol, Titel und Knopf; Abstände der Versuche 500/1000/2000 ms (Basis:
+      1000 ms immer); Tipp versucht sofort; online versucht sofort; verlorene Verbindung ein Versuch, kein Hinweis;
+      abgelehnt: 0 Versuche in 1,5 s, „So geht's“ zeigt die Schritte, Zurück schließt sie.
+    - Live-Bild abgelehnt: `why: "taken"` sagt „auf einem anderen Gerät“ mit „Hierher holen“, sonst (auch ohne `why`)
+      fehlt die Bildschirmaufnahme. Das Trackpad steuert unter dem Hinweis weiter.
+    - Messwerte (fps, ms) sind eine Einstellung, aus. Ihre Taste steht auf der Einstellungsseite neben „Zurücksetzen“.
+      Die Seite ist dafür neu gelegt: Name und Wert über dem Schieber, die ganze Zeile nimmt den Finger. Kleinste
+      Fassung, weil die Schublade im Umbau verschwindet.
+    - Tippflächen: Zoomtasten 36 × 32 sichtbar, mit `::after` 44 × 46 und über dem Rand der Anzeige (`z-index`), die
+      Anzeige 52 × 44; Seitentasten bei 320 px 44 breit, Werkzeugtasten 48 bis 56 × 48. T17 prüft für Zoom und Dock einen
+      runden Finger von 44 pt (acht Punkte auf seinem Rand): überall getroffen. Die Tasten in der Schublade blieben, wie
+      sie sind (Umbau).
+    - Protokoll, Seitenhälfte: `ping` alle 5 s in Sicht, alles Ankommende zählt als Leben, 15 s Stille: Verbindung zu,
+      neu (T18: 1 Ping in 5,6 s). Dekoderfehler oder 2 s ohne Bild: Dekoder weg, `{"t":"idr"}`, bis zum Schlüsselbild
+      werden Bilder beantwortet und verworfen, damit das Sendefenster des Macs weiterläuft; Bilder ohne Schlüsselbild
+      länger als 2 s nach der Bitte zählen als weiterer Fehler; drei Fehler in 10 s, dann JPEG. Eine Konfiguration, die
+      der Browser nicht kann, geht sofort auf JPEG. Text in Stücken zu höchstens 1000 Graphemen und 8000 UTF-16-Einheiten
+      (der Mac nimmt 2000 Swift-Zeichen; die Hälfte lässt Raum, falls Segmenter und Swift eine Folge verschieden zählen),
+      T18: 2350 Zeichen in 3 Stücken, Flagge ganz. Symbole bleiben über Verbindungen (höchstens 256, die neuesten) und
+      stehen in `{"t":"apps","have":[…]}`. Wake Lock: gehalten bei Berührung, losgelassen nach 3 Minuten ohne.
+    - Unverändert (T1 bis T15): alle zwölf Hauptaktionen erreichbar, auf allen Telefonen in beiden Lagen. Display-Anteil
+      hochkant 69/73/80 → 70/74/81 %, quer 72/76/82 → 73/77/83 % (der Rahmen ist 1 statt 2 px). Live-Bild beim Tippen
+      206/86/164/84 → 208/88/166/86 px. Zeiger und Scrollen gleich (schnell 250 px bei 60 Hz 768 → 764). Schublade
+      200 → 196 ms sichtbar, 0 px über dem Dock.
+    - Verifier: das Bild des falschen Macs ist 256 statt 64 Pixel breit. Mit 64 rundete seine Höhe so weit neben das
+      Seitenverhältnis des Displays, dass T15 den Zeiger bei einem um 1 px breiteren Display einen halben Punkt daneben
+      sah; die Seite war richtig.
 
 ## Not verified
 
@@ -860,3 +928,11 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   `screensDidWakeNotification` als Auslöser ist aus der Dokumentation, nicht gemessen. Das erzwungene
   Schlüsselbild ist am Encoder getestet, nicht im Strom zu einem Telefon. Tailscale: gelesen ist der Quelltext von
   main, nicht der der installierten Version, und kein echter Handshake durch `tailscale serve` wurde mitgeschnitten.
+- Runde 18: nur in Chromium und Node, kein iPhone. Nicht geprüft: ob Safari `-apple-system-body` auf der Startseite
+  wirklich mit Dynamic Type skaliert und das Layout bei größter erlaubter Schrift hält; Container-Abfragen (Safari 16+);
+  ob iOS `online`, `navigator.onLine` und die HEAD-Anfrage bei ausgeschaltetem Tailscale so liefert wie angenommen; ob
+  `tailscale serve` bei gestopptem Agenten wirklich 502 sendet (aus der Aufgabe übernommen, nicht gemessen); die
+  Gegenstelle zu `ping`, `idr` und `have` (der Mac-Teil entstand parallel). Ein älterer Agent beantwortet `ping` nicht:
+  ohne laufenden Strom trennt die Seite dann alle 15 s und verbindet neu. Die Freigabe des Wake Locks und das
+  Schlüsselbild nach einem echten Dekoderfehler in WebKit sind nur in Tests gelaufen. Englische Texte von mir, nicht
+  von einem Muttersprachler gegengelesen.
