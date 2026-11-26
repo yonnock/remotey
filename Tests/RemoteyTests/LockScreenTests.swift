@@ -16,9 +16,14 @@ final class LockScreenTests: XCTestCase {
     private var wakes = 0
     private var changes: [Bool] = []
 
+    /// Runs after each key that goes down, with the number of keys down so far.
+    private var onKey: ((Int) -> Void)?
+
     private lazy var input = Input { [unowned self] event in
         events.append(event)
-        if event.type == .keyDown, event.getIntegerValueField(.keyboardEventKeycode) == kVK_Return { onReturn?() }
+        guard event.type == .keyDown else { return }
+        if event.getIntegerValueField(.keyboardEventKeycode) == kVK_Return { onReturn?() }
+        onKey?(pressed.count)
     }
     private lazy var lock: LockScreen = {
         let lock = LockScreen(session: { [unowned self] in sessionLocked }, field: { [unowned self] in
@@ -121,5 +126,31 @@ final class LockScreenTests: XCTestCase {
         XCTAssertFalse(lock.isLocked)
         lock.refresh()
         XCTAssertEqual(changes, [false], "told once")
+    }
+
+    func testThePasswordGoesInBlocksAndTheFieldIsAskedBeforeEachAndBeforeReturn() {
+        XCTAssertEqual(LockScreen.blocks(of: "abcdefghi", size: 4), ["abcd", "efgh", "i"])
+        XCTAssertEqual(LockScreen.blocks(of: "abcd", size: 4), ["abcd"])
+        XCTAssertEqual(LockScreen.blocks(of: "ä€🙂", size: 2), ["ä€", "🙂"], "whole characters")
+        _ = unlock("abcdefghi", staysLocked: true)
+        XCTAssertEqual(pressed.count, 10)
+        XCTAssertEqual(asked, 1 + 3 + 1, "once to find it, once per block, once before Return")
+    }
+
+    /// The field loses the keyboard after the first block: the rest and Return stay with the agent.
+    func testAFieldThatLosesTheKeyboardWhileThePasswordGoesInGetsNoMore() {
+        answers = [0, 0, nil]
+        XCTAssertEqual(unlock("abcdefgh", staysLocked: true), .field)
+        XCTAssertEqual(pressed.count, LockScreen.blockSize)
+        XCTAssertFalse(pressed.contains(kVK_Return))
+    }
+
+    /// Touch ID or a watch opens the Mac while the password goes in: the rest would land in the app in front.
+    func testNothingMoreIsTypedOnAMacThatUnlocksWhileThePasswordGoesIn() {
+        onKey = { [unowned self] count in if count == 2 { lock.note(false) } }
+        XCTAssertNil(unlock("abcdefgh", staysLocked: false))
+        XCTAssertEqual(pressed.count, LockScreen.blockSize, "the block under way, no more")
+        XCTAssertFalse(pressed.contains(kVK_Return))
+        XCTAssertEqual(changes, [false])
     }
 }

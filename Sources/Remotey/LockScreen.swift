@@ -69,7 +69,8 @@ final class LockScreen {
     /// Types `password` into the lock screen's field and presses Return. A Mac that unlocks says so through
     /// `changed`; `failed` is called if it stays locked. Nothing is typed unless the lock screen's password
     /// field has the keyboard, so a password never lands in an app: not on a Mac that is unlocked, and not on
-    /// one that something else (Touch ID, an Apple Watch) unlocks while this waits.
+    /// one that something else (Touch ID, an Apple Watch) unlocks while this waits or types. A field that
+    /// loses the keyboard on the way fails as `field`: the password went in only in part.
     func unlock(with password: String, typing input: Input, failed: @escaping (Failure) -> Void) {
         guard isLocked else { return }
         // One password at a time. The page holds a second one back; another phone's is not typed.
@@ -89,13 +90,32 @@ final class LockScreen {
             guard let characters else { return failed(.field) }
             // What an earlier try left in the field would go in front of the password.
             if characters > 0 { input.key("backspace", mods: [], count: characters) }
-            input.type(password)
-            input.key("return", mods: [], count: 1)
+            // Touch ID or a watch can open the Mac while this types: the rest, and Return, would land in the
+            // app in front. So the field is asked again before each block and before Return, once the keys
+            // before have had a moment to land.
+            for block in Self.blocks(of: password, size: Self.blockSize) + [nil] {
+                try? await Task.sleep(for: .milliseconds(Self.blockPause))
+                guard isLocked else { return }
+                guard field() != nil else { return failed(.field) }
+                if let block { input.type(block) } else { input.key("return", mods: [], count: 1) }
+            }
             // Nothing to ask for: this returns as soon as the Mac is open, or when the time is up.
             _ = await poll(patience.answer) { Bool?.none }
             guard isLocked else { return }
             // The notification may have been lost; the session knows by now.
             if session() { failed(.password) } else { set(false) }
+        }
+    }
+
+    /// How many characters go between two looks at the field: at most these reach an app that came to
+    /// the front meanwhile.
+    static let blockSize = 4
+    /// Time for the keys of a block to reach the field, so that the next look sees where they went.
+    static let blockPause = 25
+
+    static func blocks(of text: String, size: Int) -> [String] {
+        stride(from: 0, to: text.count, by: size).map { start in
+            String(text.dropFirst(start).prefix(size))
         }
     }
 
