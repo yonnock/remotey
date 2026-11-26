@@ -359,18 +359,17 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         pointerMoved()
     }
 
-    /// The link's bit rate changed: the encoder follows at once, the picture's size once the rate no longer suits it.
+    /// The link's bit rate changed: the encoder follows at once, the picture's size once the rate no longer
+    /// suits it. `apply` picks the size, as it does for every new view.
     private func fitToLink() {
         encoder?.bitsPerSecond = link.bitsPerSecond
         guard let geometry, let encoder else { return }
         let pixels = Double(encoder.width * encoder.height) / (geometry.size * geometry.size)
-        let size = LinkRate.size(now: geometry.size, pixels: pixels, bitsPerSecond: link.bitsPerSecond)
-        guard size != geometry.size else { return }
+        guard LinkRate.size(now: geometry.size, pixels: pixels, bitsPerSecond: link.bitsPerSecond) != geometry.size else { return }
         link.restarts()
         let revision = geometry.revision
         DispatchQueue.main.async {
-            guard revision == self.revision, size != self.size else { return }
-            self.size = size
+            guard revision == self.revision else { return }
             self.configure()
         }
     }
@@ -489,10 +488,15 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         guard !displays.isEmpty else { throw DisplayUnavailable() }
         let window = fitTo
         let regionWidth = Self.region(request, fitting: displays.map(\.bounds), window: window).width
-        let size = self.size
-        let outputWidth = min(regionWidth * displays.map(\.backingScale).max()!,
-                              request.width * request.pixelRatio, Self.maxOutputWidth) * size
-        let scale = outputWidth / regionWidth
+        let fullWidth = min(regionWidth * displays.map(\.backingScale).max()!,
+                            request.width * request.pixelRatio, Self.maxOutputWidth)
+        // The size for this view's pixels: a smaller view may be sent whole with the bit rate that was too
+        // little for a larger one. The frame queue never waits for this one, so asking it cannot lock.
+        let bitsPerSecond = queue.sync { link.bitsPerSecond }
+        let size = !request.h264 ? 1 : LinkRate.size(now: self.size, pixels: fullWidth * fullWidth * request.height / request.width,
+                                                     bitsPerSecond: bitsPerSecond)
+        self.size = size
+        let scale = fullWidth * size / regionWidth
 
         // Each display is captured whole at the density the region needs, but never above its own:
         // a 1x display beside a Retina one is enlarged while composing instead.

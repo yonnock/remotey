@@ -509,7 +509,9 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       (gemessen: „fastest answer 2165 ms“, 24 Bilder unterwegs).
     - Größe: unter 0,75 Bit je Pixel und Sekunde geht das Bild auf drei Viertel oder die Hälfte seiner Breite, und
       erst mit dem 1,5-Fachen wieder hinauf. Grund ist das Schlüsselbild und jeder Szenenwechsel: sie kosten nach
-      Pixeln, nicht nach Bitrate, auf 1 Mbit/s also Sekunden. Nur für H.264.
+      Pixeln, nicht nach Bitrate, auf 1 Mbit/s also Sekunden. Nur für H.264. Die Größe wird für jede neue Ansicht
+      neu gewählt, nicht nur bei neuer Bitrate (im Review gefunden): mit offener Tastatur ist das Bild klein und geht
+      bei derselben Bitrate ganz (gemessen bei 1 Mbit/s: 390 × 844 mit 0,75, 390 × 300 mit 1,0, zurück mit 0,75).
     - Schärfe in Ruhe: ein Bild in Bewegung bekommt die Bits eines Frames, und das letzte blieb so stehen, weil eine
       Aufnahme nichts liefert, solange sich nichts ändert. Jetzt wird ein Bild, dem 150 ms keines folgte, erneut
       kodiert, bis zwei Durchgänge in Folge unter 0,02 Bit je Pixel bleiben (höchstens 30). Gemessen mit einem Muster,
