@@ -1,27 +1,33 @@
-/* The design system first: colour roles, type scale, radii and spacing. Everything below uses these tokens, and
-   the layout that is still to come ("Glas über dem Mac") only has to use them too.
-   Colour carries one meaning each. The accent (orange, the old amber's place) means only "selected" or "main
-   action": an armed modifier, a key that is on, the button that does the thing. Connected is green and failure
-   red, and neither ever stands alone: a symbol and words say the same. Everything else is the system's greys. */
+/* "Glas über dem Mac": the live picture fills the phone, and everything else floats over it.
+   The design system first: colour roles, type, radii, spacing, motion. Everything below uses these tokens.
+   Colour carries one meaning each. The accent (orange) means only "selected" or "main action": the tinted segment
+   of a fitted view, an armed modifier, a switch that is on, the key that unlocks a locked Mac. Connected is green
+   and failure red, and neither stands alone: a symbol and words say the same. Everything else is the system's greys.
+   Glass is for controls over the picture only, never for content, and only on what stands still: sheets, menus and
+   cards move in and out, so they get a near-opaque material instead of a blur (see "Glass and its cost" below). */
 :root {
   color-scheme: dark;
-  /* Roles. A light scheme is a second set of these values; nothing below names a colour of its own. */
-  --c-accent: #ff9f0a; --c-on-accent: #1d1100; --c-accent-base: #8f5300;
+  --c-accent: #ff9f0a; --c-on-accent: #1d1100;
   --c-ok: #30d158; --c-bad: #ff453a; --c-warn: #ffd60a;
-  --c-bg: #000;                         /* the page around everything */
-  --c-stage: #000;                      /* behind the live view */
-  --c-pad: #1c1c1e;                     /* the trackpad without a picture, without a grid (systemGray6) */
-  --c-raised: #1c1c1e;                  /* sheets and cards on the page */
-  --c-fill: #2c2c2e; --c-fill-2: #3a3a3c; --c-fill-hi: #48484a; /* keys, from resting to their light top edge */
-  --c-sunk: #0e0e10;                    /* recessed: tracks, wells, the field */
-  --c-edge: #000;                       /* the base under a key cap, outlines */
-  --c-separator: rgb(84 84 88 / .6);
-  --c-label: #fff; --c-label-2: rgb(235 235 245 / .62); --c-label-3: rgb(235 235 245 / .34);
-  --c-glass: rgb(20 20 22 / .78);       /* only for controls over the picture, never for content */
-  --c-scrim: rgb(0 0 0 / .62);          /* over the display while a notice or card is up */
+  --c-bg: #000;                         /* the page where no picture is */
+  --c-stage: #000;                      /* behind the live view, in either scheme */
+  --c-pad: #1c1c1e;                     /* the trackpad without a picture (systemGray6) */
+  --c-material: rgb(30 30 33 / .985);    /* sheets, menus, cards: they move, so no blur under them */
+  --c-cell: #2c2c2e;                    /* a group or tile on a sheet */
+  --c-fill: rgb(120 120 128 / .32); --c-fill-2: rgb(120 120 128 / .44); /* round buttons on a sheet, tracks, pressed */
+  --c-separator: rgb(84 84 88 / .55);
+  --c-label: #fff; --c-label-2: rgb(235 235 245 / .64); --c-label-3: rgb(235 235 245 / .36);
+  --c-scrim: rgb(0 0 0 / .74);          /* over the picture while a notice or card is up */
+  --c-gap: rgb(0 0 0 / .32);            /* the band between groups of a menu */
+  /* Glass: a tint over a blur of the picture, a hairline of light at its edge, a soft shadow under it. */
+  --glass: rgb(38 38 42 / .66); --glass-solid: #2a2a2e; --glass-ink: #fff;
+  --glass-edge: inset 0 0 0 .5px rgb(255 255 255 / .16), 0 4px 16px rgb(0 0 0 / .28);
+  --glass-div: rgb(255 255 255 / .14); --glass-press: rgb(255 255 255 / .16);
+  --blur: blur(18px) saturate(1.7);
+  --shadow: 0 12px 40px rgb(0 0 0 / .45), 0 0 0 .5px rgb(255 255 255 / .08);
 
   /* Type, after iOS's text styles, in steps of 1/17 of the body size: with Dynamic Type the root font is the
-     user's body size, and every style grows with it, up to a third more so the fixed layout still holds. */
+     user's body size, and every style grows with it, up to a third more so the floating controls still hold. */
   --u: calc(clamp(17px, 1rem, 23px) / 17);
   --t-caption: calc(11 * var(--u));     /* Caption 2: the smallest size allowed */
   --t-caption-1: calc(12 * var(--u));
@@ -31,19 +37,55 @@
   --t-title-3: calc(20 * var(--u));
   --t-title-1: calc(28 * var(--u));
 
-  /* Concentric radii: sheet, card, tile, key; buttons are capsules. */
-  --r-sheet: 47px; --r-card: 31px; --r-tile: 22px; --r-key: 12px; --r-pill: 999px; --r-chip: 9px;
+  /* Concentric radii: a sheet 47 at the phone's corner, a card 16 inside it 31, a tile 9 inside that 22, a key 12;
+     buttons are capsules. A sheet's top corners stand free over the picture and are a little tighter. */
+  --r-sheet: 47px; --r-sheet-top: 38px; --r-card: 31px; --r-tile: 22px; --r-key: 12px; --r-pill: 999px;
   /* Spacing on a 4 pt grid. Tap targets are 44 × 44 pt or more. */
   --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --tap: 44px;
-
-  /* Things that arrive decelerate into place; things that leave accelerate away and take less time. */
-  --enter-ms: 280ms; --exit-ms: 190ms;
-  --enter: var(--enter-ms) cubic-bezier(.16, 1, .3, 1); --exit: var(--exit-ms) cubic-bezier(.45, 0, .9, .35);
-  --snap: .24s cubic-bezier(.3, 1.35, .5, 1); /* the switch thumb overshoots into its detent */
-  --rail: 100px; --gap: var(--s-2);
+  /* The floating controls: their heights, and how far they stand from the phone's edges. */
+  --top-h: 40px; --bottom-h: 50px; --col-w: 56px;
   --safe-top: env(safe-area-inset-top, 0px); --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-left: env(safe-area-inset-left, 0px);
+  --edge-top: max(var(--s-2), var(--safe-top)); --edge-bottom: max(var(--s-2), var(--safe-bottom));
+  --edge-left: max(var(--s-2), var(--safe-left)); --edge-right: max(var(--s-2), var(--safe-right));
+
+  /* Motion: what arrives decelerates into place and settles without overshoot; what leaves accelerates away and
+     takes less time. Nothing bounces. */
+  --enter-ms: 300ms; --exit-ms: 180ms;
+  --enter: var(--enter-ms) cubic-bezier(.2, .9, .25, 1); --exit: var(--exit-ms) cubic-bezier(.45, 0, .9, .4);
+  --quick: .16s cubic-bezier(.2, .9, .25, 1);
 }
+/* Light: the same roles. The stage behind the picture stays black; the glass turns to frosted white. */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --c-accent: #ff9500; --c-on-accent: #1d1100;
+    --c-ok: #28b14c; --c-bad: #e5342b; --c-warn: #c69200;
+    --c-bg: #f2f2f7; --c-pad: #e4e4ea;
+    --c-material: rgb(246 246 249 / .99); --c-cell: #fff;
+    --c-fill: rgb(120 120 128 / .14); --c-fill-2: rgb(120 120 128 / .24);
+    --c-separator: rgb(60 60 67 / .22);
+    --c-label: #000; --c-label-2: rgb(60 60 67 / .66); --c-label-3: rgb(60 60 67 / .38);
+    --c-scrim: rgb(242 242 247 / .9); --c-gap: rgb(0 0 0 / .06);
+    --glass: rgb(250 250 252 / .7); --glass-solid: #f6f6f8; --glass-ink: #101114;
+    --glass-edge: inset 0 0 0 .5px rgb(255 255 255 / .75), 0 0 0 .5px rgb(0 0 0 / .08), 0 4px 14px rgb(0 0 0 / .16);
+    --glass-div: rgb(0 0 0 / .1); --glass-press: rgb(0 0 0 / .08);
+    --shadow: 0 12px 40px rgb(0 0 0 / .18), 0 0 0 .5px rgb(0 0 0 / .06);
+  }
+}
+/* Increased contrast: opaque surfaces, clear edges, full-strength secondary words. */
+@media (prefers-contrast: more) {
+  :root {
+    --glass: var(--glass-solid); --blur: none; --c-material: var(--c-cell);
+    --glass-edge: inset 0 0 0 1px var(--c-label-3); --c-label-2: var(--c-label); --c-label-3: var(--c-label-2);
+    --c-separator: var(--c-label-3);
+  }
+  :root .menu, :root .sheet { box-shadow: 0 0 0 1px var(--c-label-3); }
+}
+/* Reduced transparency, or see-through surfaces switched off in the settings: solid surfaces, no blur at all. */
+@media (prefers-reduced-transparency: reduce) { :root { --glass: var(--glass-solid); --blur: none; } }
+body.solid { --glass: var(--glass-solid); --blur: none; }
+
 /* The root font is the body size: 17 px, or the user's Dynamic Type size where Safari gives it. */
 html { font-size: 17px; }
 @supports (font: -apple-system-body) { html { font: -apple-system-body; } }
@@ -52,416 +94,557 @@ html { font-size: 17px; }
 html, body { margin: 0; height: 100%; background: var(--c-bg); color: var(--c-label); overflow: hidden; overscroll-behavior: none;
   -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { font: 400 var(--t-subhead)/1.25 system-ui, -apple-system, sans-serif; }
-/* Two fingers may zoom the page anywhere but on the live view; a double tap never does. */
-body { position: fixed; inset: 0; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
-  touch-action: manipulation; }
-button { font: inherit; color: var(--c-label); border: 0; padding: 0; margin: 0; background: none; touch-action: manipulation; }
-svg { width: 20px; height: 20px; fill: currentColor; pointer-events: none; }
-.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+/* Two fingers may zoom the page anywhere but on the picture; a double tap never does. */
+body { position: fixed; inset: 0; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; background: none; touch-action: manipulation; cursor: pointer; }
+svg { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round;
+  stroke-linejoin: round; pointer-events: none; }
+svg .solid { fill: currentColor; stroke: none; }
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* Focus from a keyboard or switch control: a ring in the accent, never on a touch. */
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
 
-/* The page lives in the visible part of the screen: above the keyboard, at the visual viewport's offset.
-   Upright: the display takes everything above the thumb's dock. */
-#app { position: absolute; left: 0; right: 0; top: var(--top, 0px); height: var(--vh, 100dvh);
-  display: grid; grid-template: "console" 1fr "dock" auto / minmax(0, 1fr); gap: var(--gap);
-  padding: max(10px, var(--safe-top)) max(10px, var(--safe-right)) max(10px, var(--safe-bottom)) max(10px, var(--safe-left)); }
+/* The page lives in the visible part of the screen: above the keyboard, at the visual viewport's offset. */
+#app { position: absolute; left: 0; right: 0; top: var(--top, 0px); height: var(--vh, 100dvh); overflow: hidden; }
 
-/* Display and trackpad in one: the live view shows the Mac around the pointer, the pad on top steers it.
-   The bezel clips: the tray comes out of the display's lower edge and goes back into it. */
-#console { grid-area: console; position: relative; min-height: 0; min-width: 0; display: flex; overflow: hidden;
-  border-radius: 16px; background: var(--c-stage); border: 1px solid var(--c-fill); }
-#screen { flex: 1; min-height: 60px; min-width: 0; position: relative; overflow: hidden; border-radius: 15px; background: var(--c-pad); }
+/* ---- The picture element: the whole phone. ----------------------------------------------------------------- */
+#screen { position: absolute; inset: 0; overflow: hidden; background: var(--c-bg); }
+body.view #screen { background: var(--c-stage); }
 /* Holds picture and pointer, so a zoom preview scales both alike. */
 #picture { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
-/* cover: while the display changes size, the last frame of the old size is cropped, never stretched. */
+/* cover: while the element changes size, the last frame of the old size is cropped, never stretched. */
 #view { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--c-stage); }
-/* Shifted to the pointer's place, so its top left corner is the pointer. The Mac's pointer is not in the
-   picture: its image comes separately and is drawn here, inside the marker, a light ring with a dark edge that
-   shows on any picture. */
+/* Shifted to the pointer's place, so its top left corner is the pointer. The Mac's pointer is not in the picture:
+   its image comes separately and is drawn here, inside a light ring with a dark edge that shows on any picture. */
 #aim { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; }
 #marker { position: absolute; left: -15px; top: -15px; width: 30px; height: 30px; border-radius: 50%;
-  border: 2px solid rgb(255 255 255 / .85); box-shadow: 0 0 0 1px rgb(0 0 0 / .45), inset 0 0 0 1px rgb(0 0 0 / .45); }
+  border: 2px solid rgb(255 255 255 / .85); box-shadow: 0 0 0 1px rgb(0 0 0 / .4), inset 0 0 0 1px rgb(0 0 0 / .4); }
 #cursor { position: absolute; left: 0; top: 0; }
 #cursor:not([src]) { display: none; }
 #pad { position: absolute; inset: 0; touch-action: none; }
+/* Without the live view: one calm surface where the picture would be unobscured, like a Magic Trackpad, and a hint
+   until the first move. The pad over it takes the touches everywhere, also beside it. */
+#surface { position: absolute; top: calc(var(--in-top, 0px) + var(--s-2)); right: calc(var(--in-right, 0px) + var(--s-2));
+  bottom: calc(var(--in-bottom, 0px) + var(--s-2)); left: calc(var(--in-left, 0px) + var(--s-2));
+  border-radius: var(--r-card); background: var(--c-pad); display: grid; place-items: center; padding: var(--s-5);
+  box-shadow: inset 0 0 0 .5px var(--c-separator); }
+body.view #surface { display: none; }
+#hint { margin: 0; max-width: 300px; color: var(--c-label-3); font-size: var(--t-footnote); line-height: 1.4; text-align: center;
+  text-wrap: balance; transition: opacity .4s ease-out; }
+body.moved #hint { opacity: 0; }
+/* Where a click landed, without a picture to answer it: a ring that grows and fades. */
+#ring { position: absolute; left: 0; top: 0; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%;
+  border: 2px solid var(--c-label); opacity: 0; pointer-events: none; }
+#ring.on { animation: ring .5s cubic-bezier(.2, .9, .25, 1); }
+@keyframes ring { from { opacity: .9; transform: scale(.55); } to { opacity: 0; transform: scale(1); } }
 
-/* A notice over the display: a symbol, what it is, its likely cause and one button. The pad under it still
-   takes every touch but the button's. While the Mac is out of reach the display is dimmed. */
-#notice { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; padding: 56px var(--s-5) var(--s-5);
-  pointer-events: none; background: var(--c-scrim); animation: page-in .2s ease-out; }
-#notice .card { width: min(100%, 320px); display: grid; justify-items: center; gap: var(--s-2); text-align: center; }
-#notice .sym { width: 44px; height: 44px; margin-bottom: var(--s-1); fill: none; stroke: var(--c-label-2); stroke-width: 1.6;
-  stroke-linecap: round; stroke-linejoin: round; display: none; }
-#notice[data-kind=unreachable] [data-for=unreachable], #notice[data-kind=stopped] [data-for=stopped],
-#notice[data-kind=noAccess] [data-for=noAccess], #notice[data-kind=denied] [data-for=denied],
-#notice[data-kind=offline] [data-for=offline], #notice[data-kind=permission] [data-for=permission],
-#notice[data-kind=taken] [data-for=taken] { display: block; }
-#notice h2 { margin: 0; font-size: var(--t-body); font-weight: 600; line-height: 1.3; }
-#notice p { margin: 0; color: var(--c-label-2); font-size: var(--t-subhead); line-height: 1.4; text-wrap: balance; }
-/* A capsule: the one action of a notice or of the first start. */
-.pill { min-height: var(--tap); margin-top: var(--s-3); padding: 0 var(--s-5); border-radius: var(--r-pill); background: var(--c-fill);
-  font-size: var(--t-body); font-weight: 600; pointer-events: auto; }
-.pill.pressed, .pill:active { background: var(--c-fill-2); }
+/* ---- Glass over the picture. -------------------------------------------------------------------------------- */
+#hud { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.zone { position: absolute; display: flex; gap: var(--s-2); pointer-events: none; }
+.zone > * { pointer-events: auto; }
+#zoneTop { top: var(--edge-top); left: var(--edge-left); right: var(--edge-right); height: var(--top-h); align-items: center; justify-content: space-between; }
+#zoneBottom { bottom: var(--edge-bottom); left: var(--edge-left); right: var(--edge-right); flex-direction: column; }
+#zoneMouse, #zoneTools { display: none; }
+.glass { background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: var(--glass-edge);
+  color: var(--glass-ink); }
+.capsule { border-radius: var(--r-pill); }
+/* A touch target larger than what is drawn, where a control is drawn smaller than a finger. */
+.hit { position: relative; }
+.hit::after, .readout::after { content: ''; position: absolute; inset: -6px -1px; }
+/* The zoom keys reach a little over the readout's edge, so a finger of 44 pt finds them. */
+#zoom .step::after { content: ''; position: absolute; inset: -6px -4px; }
 
-/* The offer to enrol for Face ID: a card on the dimmed display, over whatever it shows. On a low display
-   (sideways) the sign stands left of the words instead of above them. */
-#enrol { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; padding: var(--s-3); background: var(--c-scrim);
-  animation: page-in .2s ease-out; }
-#enrol .card { width: min(100%, 304px); max-height: 100%; overflow: hidden auto; display: grid; justify-items: center; gap: 6px;
-  padding: 18px var(--s-4) var(--s-4); border-radius: var(--r-tile); background: var(--c-raised); text-align: center;
-  box-shadow: 0 12px 32px rgb(0 0 0 / .5); }
-#enrol svg { width: 44px; height: 44px; margin-bottom: var(--s-1); fill: none; stroke: var(--c-accent); stroke-width: 1.6;
-  stroke-linecap: round; stroke-linejoin: round; }
-#enrol .tick { stroke: var(--c-ok); }
-#enrol:not([data-state=done]) .tick, #enrol[data-state=done] .face, #enrol[data-state=done] .choice { display: none; }
-#enrol h2 { margin: 0; font-size: var(--t-body); font-weight: 600; line-height: 1.25; }
-#enrol p { margin: 0; color: var(--c-label-2); font-size: var(--t-footnote); line-height: 1.4; text-wrap: balance; }
-#enrol[data-state=failed] p { color: var(--c-bad); }
-#enrol .choice { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2); margin-top: 10px; padding-bottom: 3px; }
-#enrol .cap { height: var(--tap); font-size: var(--t-body); font-weight: 600; }
-#enrol[data-state=busy] .cap { opacity: .5; pointer-events: none; }
-@media (max-height: 480px) {
-  #enrol .card { width: min(100%, 420px); grid-template-columns: auto minmax(0, 1fr); justify-items: start; column-gap: 14px;
-    padding: 14px; text-align: left; }
-  #enrol svg { grid-row: span 2; align-self: center; margin: 0; }
-  #enrol .choice { grid-column: 1 / -1; margin-top: var(--s-2); }
-}
-
-/* Printed on the display's glass: dark chips that stay legible on any picture. Touches pass through to the
-   pad everywhere but on the zoom keys. */
-#hud { position: absolute; left: 0; right: 0; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px;
-  padding: var(--s-2); pointer-events: none; }
-#hud > * { background: var(--c-glass); border-radius: var(--r-chip); }
-/* The connection in words, with a symbol: a green dot when connected, a turning ring while connecting, a red
-   warning sign when not. */
-#status { flex: none; min-width: 0; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 9px;
-  font-size: var(--t-footnote); font-weight: 600; white-space: nowrap; }
-#status svg { flex: none; width: 12px; height: 12px; display: none; }
-#status.ok .ok { display: block; fill: var(--c-ok); }
-#status.wait .wait { display: block; fill: none; stroke: var(--c-label-2); stroke-width: 1.6; stroke-linecap: round; animation: turn 1s linear infinite; }
-#status.bad .bad { display: block; fill: none; stroke: var(--c-bad); stroke-width: 1.4; stroke-linecap: round; }
-#status.bad { color: var(--c-label); }
+/* The Mac: a symbol for its state, its name, the state in words where it is not plain "connected". */
+#macBtn { flex: 0 1 auto; min-width: 0; height: var(--top-h); display: flex; align-items: center; gap: 7px; padding: 0 11px 0 13px;
+  font-size: var(--t-subhead); font-weight: 600; position: relative; }
+#macBtn::after { content: ''; position: absolute; inset: -2px -2px; }
+#macBtn .state { flex: none; width: 14px; height: 14px; display: grid; place-items: center; }
+#macBtn .state svg { display: none; grid-area: 1 / 1; }
+#macBtn .ok { width: 10px; height: 10px; fill: var(--c-ok); stroke: none; }
+#macBtn .wait { width: 13px; height: 13px; stroke: var(--glass-ink); stroke-width: 1.6; animation: turn 1s linear infinite; opacity: .7; }
+#macBtn .bad { width: 16px; height: 16px; color: var(--c-bad); stroke-width: 2; }
+#macBtn .shut, #macBtn .held { width: 15px; height: 15px; stroke-width: 2; }
+#macBtn[data-state=ok] .ok, #macBtn[data-state=wait] .wait, #macBtn[data-state=bad] .bad,
+#macBtn[data-state=shut] .shut, #macBtn[data-state=held] .held { display: block; }
+#macBtn .words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#macState:not(:empty)::before { content: ' · '; }
+#macBtn.meter #macName { font-variant-numeric: tabular-nums; }
+#macBtn .more { width: 13px; height: 13px; stroke-width: 2.4; opacity: .55; }
 @keyframes turn { to { transform: rotate(1turn); } }
-/* Readout for the live view, when the setting asks for it: updates per second and the delay of a pointer move.
-   The number is green when good, yellow when middling, red when poor; the numbers say the same. */
-#meter { flex: none; height: 30px; display: flex; align-items: center; gap: var(--s-2); padding: 0 9px; color: var(--c-label-2);
-  font-size: var(--t-caption); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
-#meter b { font-size: var(--t-footnote); font-weight: 600; color: var(--c-ok); }
-#meter.mid b { color: var(--c-warn); }
-#meter.bad b { color: var(--c-bad); }
-#meter.idle b { color: var(--c-label-2); }
-/* Shown while the view shows the text being typed instead of the pointer. Moving the pointer ends it. */
-#follow { flex: none; height: 30px; display: flex; align-items: center; gap: var(--s-1); padding: 0 10px 0 7px;
-  font-size: var(--t-footnote); font-weight: 600; }
-#follow svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-/* Zoom: two keys around a recessed readout, at the top corner away from the thumb. The readout is a key too:
-   it fits the view to the window in front, and a symbol over the zoom says that it does. */
-#zoom { margin-left: auto; display: flex; align-items: center; gap: 3px; padding: 3px; pointer-events: auto; border-radius: 11px; }
-#zoom .key { width: 36px; min-width: 36px; height: 32px; padding: 0; font-size: var(--t-title-3); font-weight: 400; border-radius: var(--r-chip); }
-#zoom .key { z-index: 1; } /* their wider touch targets lie over the readout's edge, not under it */
-#zoom .key::after { inset: -7px -4px; } /* 44 × 46 to a finger */
-.readout { position: relative; width: 52px; height: 32px; border-radius: 7px; background: var(--c-sunk);
-  font-size: var(--t-footnote); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; color: var(--c-label);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
-.readout svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; display: none; }
-.readout[data-lamp=window] svg, .readout[data-lamp=phone] svg { display: block; }
-.readout[data-lamp=window] .phone, .readout[data-lamp=phone] .window { display: none; }
+
+/* The view capsule: − and + around the readout. The readout's segment is tinted while the view is fitted. */
+#zoom { flex: none; height: var(--top-h); display: flex; align-items: center; padding: 3px; }
+#zoom .step { position: relative; z-index: 1; width: 38px; height: 34px; border-radius: var(--r-pill); display: grid; place-items: center; }
+#zoom .step svg { width: 18px; height: 18px; stroke-width: 2; }
+.readout { position: relative; height: 34px; min-width: 66px; padding: 0 9px 0 10px; border-radius: var(--r-pill); display: flex;
+  align-items: center; justify-content: center; gap: 4px; font-size: var(--t-subhead); font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap; transition: background-color var(--quick), color var(--quick); }
+.readout #fitLamp { width: 15px; height: 15px; stroke-width: 2; display: none; }
+.readout #fitLamp use { display: none; }
+.readout[data-lamp=window] #fitLamp, .readout[data-lamp=phone] #fitLamp, .readout[data-lamp=text] #fitLamp { display: block; }
+.readout[data-lamp=window] #fitLamp .window, .readout[data-lamp=phone] #fitLamp .phone, .readout[data-lamp=text] #fitLamp .text { display: inline; }
+.readout .more { width: 11px; height: 11px; stroke-width: 2.6; opacity: .55; margin-right: -2px; }
 .readout.on { background: var(--c-accent); color: var(--c-on-accent); }
-.readout::after { content: ''; position: absolute; inset: -6px -1px; }
-.readout.pressed { background: var(--c-fill); }
-body:not(.view) #zoom, body:not(.view) #meter, body:not(.meter) #meter { display: none; }
+.readout.on .more { opacity: .7; }
+#liveBtn { height: var(--top-h); display: flex; align-items: center; gap: 7px; padding: 0 15px 0 13px; font-size: var(--t-subhead); font-weight: 600; }
+#liveBtn svg { width: 19px; height: 19px; }
+body.view #liveBtn, body:not(.view) #zoom { display: none; }
+/* Out of reach of the Mac there is no view to set: the Mac's button says what is wrong, and nothing beside it. */
+body:not(.up) #zoom, body:not(.up) #liveBtn { display: none; }
+#zoom .step.pressed, .readout.pressed:not(.on), #macBtn.pressed, #liveBtn.pressed { background: var(--glass-press); }
+#macBtn.pressed, #liveBtn.pressed { background: color-mix(in srgb, var(--glass), var(--glass-ink) 12%); }
 
-/* Flat keys: on the glass and in the dock. Pressed, they go dark and lose their top light. */
-.key { position: relative; flex: none; height: 36px; min-width: var(--tap); padding: 0 var(--s-3); border-radius: var(--r-key); background: var(--c-fill);
-  display: grid; place-items: center; box-shadow: inset 0 1px 0 var(--c-fill-hi); font-size: var(--t-subhead); font-weight: 600; }
-.key::after { content: ''; position: absolute; inset: -7px -4px; } /* a touch target larger than the key */
-.key.pressed, .key:active { background: var(--c-sunk); box-shadow: none; }
-.key.on { color: var(--c-accent); }
-.key svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
-  stroke-linecap: round; stroke-linejoin: round; }
-
-/* The dock under the thumb: mouse keys on top, then the keys that open things: keyboard, apps, tray. */
-#dock { grid-area: dock; min-width: 0; display: flex; flex-direction: column; gap: var(--gap); }
-.mouse { display: flex; gap: 1px; border-radius: 14px; overflow: hidden; background: var(--c-separator); }
-.mouse button { flex: 1; min-width: 0; height: 54px; background: var(--c-fill); color: var(--c-label);
-  font-size: var(--t-body); font-weight: 600; white-space: nowrap; }
-.mouse [data-hold] { flex: 1.3; }
-/* The side buttons: back and forward, a narrow pair where a mouse has them, beside the left key. */
-.side { flex: none; display: flex; gap: 1px; }
-.side button { flex: none; width: 48px; display: grid; place-items: center; }
-.side svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-.mouse button.pressed, .mouse button:active { background: var(--c-fill-2); }
-/* Out of reach of the Mac, the keys that act on it say so by fading. */
-body:not([data-link=connected]):not([data-link=noAccess]) .mouse { opacity: .45; }
-.tools { display: flex; gap: var(--gap); }
-.tools .key { width: 56px; height: 48px; padding: 0; border-radius: var(--r-key); }
-.tools .key svg { width: 22px; height: 22px; }
-/* The live view key: a display with a picture in it while on, struck through while off. */
-#viewBtn .on, #viewBtn.on .off { display: none; }
-#viewBtn.on .on { display: inline; }
-/* The type key looks like the field it opens. Its words come long and short, and the short ones stand in
-   where the long ones would be cut. */
-.slot { flex: 1; min-width: 0; height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 var(--s-3); border-radius: var(--r-key);
-  background: var(--c-sunk); color: var(--c-label-2); font-size: var(--t-body); box-shadow: inset 0 0 0 1px var(--c-fill);
-  container-type: inline-size; }
-.slot span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The mouse keys: one capsule, segments divided by hairlines. */
+#mouse { height: var(--bottom-h); display: flex; overflow: hidden; font-size: var(--t-body); font-weight: 600; }
+#mouse > * + * { border-left: .5px solid var(--glass-div); }
+#mouse .click { flex: 1; min-width: 0; white-space: nowrap; }
+#mouse [data-hold] { flex: 1.3; }
+.side { flex: none; display: flex; }
+.side button { width: 50px; display: grid; place-items: center; }
+.side button + button { border-left: .5px solid var(--glass-div); }
+.side svg { width: 21px; height: 21px; stroke-width: 2.1; }
+.click .narrow { display: none; }
+#mouse button.pressed, .col .click.pressed, .col .side button.pressed { background: var(--glass-press); }
+/* The bar: the key that writes on the Mac, as wide as it can be, and two round keys. */
+#bar { height: var(--bottom-h); display: flex; gap: var(--s-2); }
+.slot { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0 18px; font-size: var(--t-body);
+  container-type: inline-size; transition: background-color var(--quick), color var(--quick); }
+.slot span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .62; }
 .slot .short { display: none; }
-@container (max-width: 210px) { .slot .long { display: none; } .slot .short { display: inline; } }
-.slot svg { flex: none; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.slot.pressed, .slot:active { color: var(--c-label); box-shadow: inset 0 0 0 1px var(--c-fill-hi); }
-body:not(.locked) .slot .shut, body.locked .slot .open { display: none; }
-/* A locked Mac: unlocking is what the key is for now, so it is the main action. */
-body.locked .slot { color: var(--c-label); box-shadow: inset 0 0 0 1.5px var(--c-accent); }
+@container (max-width: 214px) { .slot .long { display: none; } .slot .short { display: inline; } }
+.slot svg { width: 22px; height: 22px; opacity: .62; }
+.slot .shut, .slot .face { display: none; }
+.slot.pressed { background: color-mix(in srgb, var(--glass), var(--glass-ink) 12%); }
+.round { flex: none; width: var(--bottom-h); height: var(--bottom-h); border-radius: 50%; display: grid; place-items: center; position: relative; }
+.round svg { width: 22px; height: 22px; }
+.round.glass.pressed { background: color-mix(in srgb, var(--glass), var(--glass-ink) 12%); }
+.round.glass.on { background: var(--c-label); color: var(--c-bg); }
+/* A locked Mac: unlocking is what the bar is for now, so its key is the main action, in the accent. */
+body.locked .slot { background: var(--c-accent); color: var(--c-on-accent); font-weight: 600; box-shadow: 0 4px 16px rgb(0 0 0 / .25); }
+body.locked .slot span, body.locked .slot svg { opacity: 1; }
+body.locked .slot .open { display: none; }
+body.locked:not(.face) .slot .shut, body.locked.face .slot .face { display: block; }
+body.locked .slot.pressed { background: color-mix(in srgb, var(--c-accent), #000 14%); }
+/* Out of reach of the Mac, the keys that act on it say so by fading. */
+body:not([data-link=connected]):not([data-link=noAccess]) :is(#mouse, #bar, .col .click, .col .side, .col .round, .col .slot) { opacity: .45; }
 
-/* Sheets, the tray and the switcher: each comes up out of the display's lower edge and covers its lower part.
-   The display keeps its size, so the stream goes on. Closed, a sheet waits below the edge, clipped by the
-   bezel, and hides only once it is out of sight; it takes no touches from the moment it starts to leave (inert). */
-.sheet { position: absolute; left: var(--s-2); right: var(--s-2); bottom: var(--s-2); z-index: 3; padding: 0 10px 10px;
-  display: flex; flex-direction: column; gap: 10px; border-radius: 14px; background: var(--c-raised);
-  box-shadow: inset 0 1px 0 var(--c-fill), 0 -6px 20px rgb(0 0 0 / .5);
-  max-height: calc(100% - 16px); overflow: hidden auto; overscroll-behavior: contain;
-  transform: translate3d(0, calc(100% + 12px), 0); visibility: hidden; will-change: transform;
+/* ---- Sideways: the controls stand in the side margins, which are empty anyway on a phone with a notch. -------- */
+body.wide #zoneTop, body.wide #zoneBottom { display: none; }
+body.wide #zoneMouse, body.wide #zoneTools { display: flex; flex-direction: column; width: var(--col-w); top: var(--edge-top); bottom: var(--edge-bottom); }
+/* Inside the safe area where it is wide enough, else 8 from the edge. */
+body.wide #zoneMouse { left: max(var(--s-2), calc(var(--safe-left) - var(--col-w) - 4px)); }
+body.wide #zoneTools { right: max(var(--s-2), calc(var(--safe-right) - var(--col-w) - 4px)); }
+body.wide.swap #zoneMouse { left: auto; right: max(var(--s-2), calc(var(--safe-right) - var(--col-w) - 4px)); }
+body.wide.swap #zoneTools { right: auto; left: max(var(--s-2), calc(var(--safe-left) - var(--col-w) - 4px)); }
+.col #macBtn { width: var(--col-w); height: var(--tap); padding: 0; justify-content: center; flex: none; }
+.col #macBtn .words, .col #macBtn .more { display: none; }
+.col #macBtn .state { width: 18px; height: 18px; }
+.col #macBtn .ok { width: 12px; height: 12px; }
+.col #liveBtn { width: var(--col-w); height: var(--tap); padding: 0; justify-content: center; flex: none; }
+.col #liveBtn .long { display: none; }
+.col #zoom { flex-direction: column-reverse; width: var(--col-w); height: auto; padding: 3px; flex: none; }
+.col #zoom .step { width: 50px; height: 38px; }
+.col #zoom .step::after { inset: -4px; }
+.col .readout { flex-direction: column; min-width: 0; width: 50px; height: 52px; padding: 0; gap: 1px; font-size: var(--t-footnote); }
+.col .readout .more { display: none; }
+.col .side { flex-direction: column; border-radius: var(--r-pill); overflow: hidden; flex: none; }
+.col .side button { width: var(--col-w); height: var(--tap); }
+.col .side button + button { border-left: 0; border-top: .5px solid var(--glass-div); }
+.col .click { flex: 1; min-height: 56px; width: var(--col-w); border-radius: var(--r-pill); font-size: var(--t-footnote); font-weight: 600;
+  line-height: 1.15; padding: 0 4px; white-space: normal; hyphens: manual; }
+.col [data-hold] { flex: 1.35; }
+.col .click .long { display: none; }
+.col .click .narrow { display: inline; }
+.col .round, .col .slot { width: var(--col-w); height: var(--tap); border-radius: var(--r-pill); flex: none; }
+.col .slot { padding: 0; justify-content: center; }
+.col .slot span { display: none; }
+.col .spacer { flex: 1; min-height: 0; }
+/* Out of the capsule, each mouse key is a piece of glass of its own. */
+.col .side, .col .click { background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  box-shadow: var(--glass-edge); color: var(--glass-ink); }
+
+/* ---- Menus: next to the button that opened them, over the picture. ------------------------------------------ */
+.menu { position: absolute; z-index: 7; width: 260px; max-width: calc(100% - 16px); max-height: calc(100% - 16px); overflow: hidden auto;
+  padding: 6px 0; border-radius: var(--r-tile); background: var(--c-material); box-shadow: var(--shadow); color: var(--c-label);
+  transform-origin: var(--from, top left); animation: menu-in .24s cubic-bezier(.2, .9, .25, 1); }
+.menu.leaving { animation: menu-out .14s cubic-bezier(.45, 0, .9, .4) forwards; pointer-events: none; }
+@keyframes menu-in { from { opacity: 0; transform: scale(.9); } }
+@keyframes menu-out { to { opacity: 0; transform: scale(.96); } }
+.menu > button, .menu .displays > button { width: 100%; min-height: var(--tap); display: flex; align-items: center; gap: 10px; padding: 0 16px 0 12px;
+  font-size: var(--t-body); text-align: start; }
+.menu > button > span:first-of-type { flex: 1; min-width: 0; }
+.menu > button.pressed { background: var(--c-fill); }
+.menu svg { width: 20px; height: 20px; color: var(--c-label-2); }
+.menu .tick { width: 18px; height: 18px; stroke-width: 2.2; color: var(--c-label); visibility: hidden; }
+.menu [aria-checked=true] .tick { visibility: visible; }
+.menu hr { margin: 6px 0; border: 0; height: 6px; background: var(--c-gap); }
+.menu .menuhead { display: grid; gap: 2px; padding: 8px 16px 10px; }
+.menu .menuhead strong { font-size: var(--t-subhead); font-weight: 600; overflow-wrap: anywhere; }
+#menuState { color: var(--c-label-2); font-size: var(--t-footnote); }
+#menuState[data-tone=ok]::before, #menuState[data-tone=bad]::before { content: ''; display: inline-block; width: 7px; height: 7px; margin: 0 6px 1px 0;
+  border-radius: 50%; background: var(--c-ok); }
+#menuState[data-tone=bad]::before { background: var(--c-bad); }
+#menuMeter { color: var(--c-label-3); font-size: var(--t-footnote); font-variant-numeric: tabular-nums; }
+#menuMeter:empty { display: none; }
+.menu .lockword { flex: 1; }
+.menu [data-act=lock] .shut, .menu [data-act=lock].on .open { display: none; }
+.menu [data-act=lock].on .shut { display: block; }
+.menu .label { display: block; padding: 4px 16px 6px; color: var(--c-label-2); font-size: var(--t-footnote); }
+/* Sideways the phone is short: the displays stand beside the view's items instead of under them. */
+body.wide #viewMenu:has(.displays:not([hidden])) { width: min(500px, calc(100% - var(--col-w) - 24px)); display: grid; grid-template-columns: 250px minmax(0, 1fr); align-items: start; }
+body.wide #viewMenu:has(.displays:not([hidden])) > :not(.displays) { grid-column: 1; }
+body.wide #viewMenu .displays { grid-column: 2; grid-row: 1 / span 6; padding-top: 6px; border-left: .5px solid var(--c-separator); align-self: stretch; }
+body.wide #viewMenu .displays hr { display: none; }
+/* The displays as they are arranged, the pointer's one with a light frame. */
+#displays { --map-h: 104px; position: relative; margin: 0 16px 10px; width: min(calc(100% - 32px), calc(var(--ratio, 2) * var(--map-h)));
+  aspect-ratio: var(--ratio, 2); }
+.display { position: absolute; padding: 2px; }
+.display > span { width: 100%; height: 100%; display: grid; place-items: center; padding: 0 var(--s-1); overflow: hidden;
+  border-radius: 7px; background: var(--c-fill); color: var(--c-label-2); font-size: var(--t-caption); font-weight: 600;
+  line-height: 1.15; text-align: center; }
+.display > span > span { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.display.here > span { color: var(--c-label); box-shadow: inset 0 0 0 1.5px var(--c-label); }
+.display.pressed > span, .display:active > span { background: var(--c-fill-2); }
+.display:disabled > span { opacity: .5; }
+
+/* ---- Switches, as on iOS, in the accent when on. ------------------------------------------------------------ */
+.switch { flex: none; position: relative; width: 51px; height: 31px; border-radius: var(--r-pill); background: var(--c-fill-2);
+  transition: background-color .2s ease-out; }
+.switch::after { content: ''; position: absolute; left: 2px; top: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / .2), 0 0 0 .5px rgb(0 0 0 / .04); transition: transform .22s cubic-bezier(.2, .9, .25, 1); }
+[aria-checked=true] > .switch { background: var(--c-accent); }
+[aria-checked=true] > .switch::after { transform: translateX(20px); }
+
+/* ---- Sheets: from the picture's lower edge, over everything below the top controls. ------------------------- */
+.sheet { position: absolute; z-index: 6; left: var(--edge-left); right: var(--edge-right); bottom: var(--edge-bottom);
+  max-height: calc(100% - var(--in-top, 0px) - var(--edge-bottom) - var(--s-2)); display: flex; flex-direction: column;
+  padding: 0 var(--s-4) var(--s-4); border-radius: var(--r-sheet-top) var(--r-sheet-top) var(--r-sheet) var(--r-sheet);
+  background: var(--c-material); box-shadow: var(--shadow); color: var(--c-label); overflow: hidden; overscroll-behavior: contain;
+  transform: translate3d(0, calc(100% + 24px), 0); visibility: hidden; will-change: transform;
   transition: transform var(--exit), visibility 0s linear var(--exit-ms); }
-body.drawer #drawer, body.apps #switcher { transform: translate3d(0, 0, 0); visibility: visible; transition: transform var(--enter); }
+body.apps #switcher, body.drawer #drawer, body.prefs #prefs { transform: translate3d(0, 0, 0); visibility: visible; transition: transform var(--enter); }
 /* Following a finger that pulls it down; let go, it drops or springs back. */
-body.drawer #drawer.held, body.apps #switcher.held { transform: translate3d(0, var(--pull, 0px), 0); transition: none; }
-/* The grip: a slot to pull a sheet down by. The sheet's whole top edge takes the swipe. */
-.grip { flex: none; height: 14px; margin-bottom: -6px; display: grid; place-items: center; }
+body.apps #switcher.held, body.drawer #drawer.held, body.prefs #prefs.held { transform: translate3d(0, var(--pull, 0px), 0); transition: none; }
+body.wide .sheet { left: 50%; right: auto; width: min(440px, calc(100% - 2 * var(--col-w) - 32px)); margin-left: calc(min(440px, calc(100% - 2 * var(--col-w) - 32px)) / -2);
+  top: auto; max-height: calc(100% - var(--edge-top) - var(--edge-bottom)); }
+.grip { flex: none; height: 14px; margin-bottom: -8px; display: grid; place-items: center; }
 .grip::before { content: ''; width: 36px; height: 5px; border-radius: 3px; background: var(--c-fill-2); }
+.head { flex: none; position: relative; min-height: 60px; display: flex; align-items: center; gap: var(--s-2); }
+.round.plain { width: var(--tap); height: var(--tap); background: var(--c-fill); color: var(--c-label); }
+.round.plain svg { width: 18px; height: 18px; stroke-width: 2.2; }
+.round.plain.pressed { background: var(--c-fill-2); }
+/* The title stands in the middle of the sheet, whatever stands beside it. */
+.head .title { position: absolute; left: 56px; right: 56px; top: 0; bottom: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; pointer-events: none; text-align: center; }
+.head .title .icon { margin-bottom: 2px; }
+.heading, #appsTitle { max-width: 100%; font-size: var(--t-body); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#appsNote { color: var(--c-label-2); font-size: var(--t-footnote); }
+#appsNote:empty { display: none; }
+.head .title:has(.icon:not([hidden])) { flex-direction: row; gap: var(--s-2); }
+.head .title:has(.icon:not([hidden])) #appsNote::before { content: '· '; }
+.well { flex: 1; min-height: 0; overflow: hidden auto; overscroll-behavior: contain; }
 
 /* Segmented control: a recessed track, a raised thumb that travels to the chosen segment. */
-.switch { position: relative; display: flex; border-radius: var(--r-key); background: var(--c-sunk); touch-action: none; }
-.switch > :not(i) { flex: 1; min-width: 0; position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
-  color: var(--c-label-2); font-size: var(--t-footnote); font-weight: 600; white-space: nowrap; transition: color .15s; }
-.switch > .on { color: var(--c-label); }
-.switch > i { position: absolute; top: 3px; bottom: 3px; left: calc(var(--i, 0) * 100% / var(--n) + 3px);
-  width: calc(100% / var(--n) - 6px); border-radius: 9px; background: var(--c-fill-2);
-  box-shadow: 0 1px 2px var(--c-edge); transition: left var(--snap); }
-#pages { flex: none; --n: 3; --i: var(--page, 0); height: 40px; }
+.segments { position: relative; flex: 1; max-width: 260px; height: 36px; margin: 0 auto; display: flex; padding: 2px; border-radius: var(--r-pill);
+  background: var(--c-fill); touch-action: none; }
+.head .segments { margin-right: calc(var(--tap) + var(--s-2)); }
+.segments > button { flex: 1; min-width: 0; position: relative; z-index: 1; border-radius: var(--r-pill); font-size: var(--t-subhead);
+  font-weight: 500; color: var(--c-label-2); white-space: nowrap; transition: color .15s; }
+.segments > button::after { content: ''; position: absolute; inset: -4px 0; }
+.segments > .on { color: var(--c-label); font-weight: 600; }
+.segments > i { position: absolute; top: 2px; bottom: 2px; left: calc(2px + var(--page, 0) * (100% - 4px) / 2); width: calc((100% - 4px) / 2);
+  border-radius: var(--r-pill); background: var(--c-cell); box-shadow: 0 2px 8px rgb(0 0 0 / .18);
+  transition: left .26s cubic-bezier(.2, .9, .25, 1); }
+@media (prefers-color-scheme: dark) { .segments > i { background: #636366; } }
 
-/* Deck: three pages of keys, one shown at a time, all of the same height so the tray does not jump. */
-#deck { flex: none; min-width: 0; --page-h: 122px; }
-.page { height: var(--page-h); padding-bottom: 3px; animation: page-in .16s ease-out; }
+/* ---- Controls: media and keys, both pages of one height so the sheet does not jump. ------------------------- */
+#deck { flex: none; --page-h: 216px; }
+.page { height: var(--page-h); animation: page-in .16s ease-out; }
 @keyframes page-in { from { opacity: 0; } }
-/* Key caps: a raised top standing on a dark base that shows below it. Pressed, the top sinks onto the base. */
-.cap { position: relative; min-width: 0; border-radius: var(--r-key); background: var(--c-fill); display: grid; place-items: center;
-  box-shadow: inset 0 1px 0 var(--c-fill-hi), 0 3px 0 var(--c-edge); transition: transform .05s, box-shadow .05s, background-color .05s; }
-.cap.pressed, .cap:active { transform: translateY(2px); background: var(--c-fill-2); box-shadow: inset 0 1px 0 var(--c-fill-hi), 0 1px 0 var(--c-edge); }
-/* An armed modifier, or a setting that is on, stays latched down in the accent until released. */
-.cap.on { color: var(--c-accent); background: var(--c-sunk); transform: translateY(2px);
-  box-shadow: inset 0 0 0 1.5px var(--c-accent), 0 1px 0 var(--c-edge); }
-.cap.accent { background: var(--c-accent); color: var(--c-on-accent); box-shadow: inset 0 1px 0 rgb(255 255 255 / .3), 0 3px 0 var(--c-accent-base); }
-.cap.accent.pressed, .cap.accent:active { box-shadow: 0 1px 0 var(--c-accent-base); }
+.media { display: flex; flex-direction: column; gap: var(--s-2); }
+.transport { flex: 1.15; min-height: 0; display: flex; align-items: center; justify-content: space-around; padding: 0 var(--s-3);
+  border-radius: var(--r-card); background: var(--c-cell); }
+.transport button { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; }
+.transport svg { width: 28px; height: 28px; }
+.transport .play { width: 76px; height: 76px; background: var(--c-fill); }
+.transport .play svg { width: 30px; height: 30px; }
+.transport button.pressed { background: var(--c-fill-2); }
+.tiles { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-2); }
+.tile { min-width: 0; min-height: var(--tap); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  border-radius: var(--r-tile); background: var(--c-cell); font-size: var(--t-footnote); font-weight: 500; }
+.tile svg { width: 24px; height: 24px; }
+.tile span { max-width: 100%; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.pressed, .rocker button.pressed { background: var(--c-fill-2); }
+.rocker { flex-direction: row; gap: 0; overflow: hidden; }
+.rocker button { flex: 1; height: 100%; display: grid; place-items: center; }
+.rocker button + button { border-left: .5px solid var(--c-separator); }
+.tile[data-act=lock] .shut, .tile[data-act=lock].on .open { display: none; }
+.tile[data-act=lock].on .shut { display: block; }
+.tile[data-act=lock].on { background: var(--c-accent); color: var(--c-on-accent); }
+/* Keys, 56 × 48 where the phone is wide enough: named in words lowercase as on Apple's keyboards, modifiers with
+   their names, the arrows as an inverted T, and the app's zoom as a row of its own. */
+.keys { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(4, 48px); gap: var(--s-2);
+  grid-template-areas: "esc tab space back ret" "cmd alt . up ." "ctrl shift left down right" "zoom zoom zoom zoom zoom"; }
+.cap { min-width: 0; border-radius: var(--r-key); background: var(--c-cell); display: grid; place-items: center; font-size: var(--t-title-3);
+  line-height: 1; transition: background-color .08s; }
+.cap.pressed { background: var(--c-fill-2); }
+.cap.word { font-size: var(--t-body); }
+.cap.mod { display: flex; flex-direction: column; justify-content: center; gap: 3px; font-size: var(--t-body); }
+.cap.mod small { font-size: var(--t-caption); color: var(--c-label-2); letter-spacing: -.03em; }
+/* An armed modifier stays in the accent until the next key or click takes it along. */
+.cap.on { background: var(--c-accent); color: var(--c-on-accent); }
+.cap.on small { color: inherit; opacity: .75; }
+.keys [data-key=escape] { grid-area: esc; } .keys [data-key=tab] { grid-area: tab; } .keys [data-key=space] { grid-area: space; }
+.keys [data-key=backspace] { grid-area: back; } .keys [data-key=return] { grid-area: ret; }
+.keys [data-mod=cmd] { grid-area: cmd; } .keys [data-mod=alt] { grid-area: alt; } .keys [data-mod=ctrl] { grid-area: ctrl; }
+.keys [data-mod=shift] { grid-area: shift; } .keys [data-key=up] { grid-area: up; } .keys [data-key=left] { grid-area: left; }
+.keys [data-key=down] { grid-area: down; } .keys [data-key=right] { grid-area: right; }
+.appzoom { grid-area: zoom; display: flex; border-radius: var(--r-pill); background: var(--c-cell); overflow: hidden; }
+.appzoom .cap { flex: 1; display: flex; align-items: center; justify-content: center; border-radius: 0; background: none;
+  font-size: var(--t-body); font-weight: 500; }
+.appzoom .cap:nth-child(2) { flex: 1.5; display: flex; gap: 6px; color: var(--c-label-2); font-size: var(--t-subhead); }
+.appzoom .cap:nth-child(2) small { font-size: var(--t-subhead); }
+.appzoom .cap + .cap { border-left: .5px solid var(--c-separator); }
+.appzoom .cap.pressed { background: var(--c-fill-2); }
+.appzoom .sign { margin-left: 2px; font-size: .8em; }
 
-.media { display: flex; gap: var(--s-2); }
-.transport { flex: 1; min-width: 0; height: calc(100% - 3px); display: flex; align-items: center; border-radius: 60px; background: var(--c-fill);
-  box-shadow: inset 0 1px 0 var(--c-fill-hi), 0 3px 0 var(--c-edge); }
-.transport button { flex: 1; height: 100%; display: grid; place-items: center; }
-.transport .play { flex: none; width: 82px; height: 82px; border-radius: 50%; background: var(--c-sunk); }
-.transport svg { width: 22px; height: 22px; }
-.transport button.pressed, .transport button:active, .rocker button.pressed, .rocker button:active { color: var(--c-label-2); }
-.transport .play.pressed, .transport .play:active { background: var(--c-fill-2); color: var(--c-label); }
-/* Two keys in the width of one: each cap stands on its own base, so the gap holds the upper one's. */
-.stack { flex: none; width: 58px; height: calc(100% - 3px); display: flex; flex-direction: column; gap: 10px; }
-.stack .cap { flex: 1; }
-.stack .line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-body:not(.locked) .stack .shut, body.locked .stack .open { display: none; }
-.rocker { flex: none; width: 62px; height: calc(100% - 3px); display: flex; flex-direction: column; border-radius: 14px; background: var(--c-fill);
-  box-shadow: inset 0 1px 0 var(--c-fill-hi), 0 3px 0 var(--c-edge); overflow: hidden; }
-.rocker button { flex: 1; font-size: 24px; font-weight: 400; }
-.rocker button + button { border-top: 1px solid var(--c-separator); }
+/* ---- Apps: a grid like the Dock, the app in front with a surface and a dot. ---------------------------------- */
+#apps { padding: 2px 0 var(--s-1); animation: page-in .16s ease-out; }
+#apps.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(68px, 1fr)); gap: var(--s-1) 2px; }
+.app { min-width: 0; min-height: 88px; display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 9px 2px 8px;
+  border-radius: var(--r-tile); }
+.app.pressed, .app:active { background: var(--c-fill); }
+.icon { position: relative; flex: none; width: 52px; height: 52px; display: grid; place-items: center; }
+.icon img { width: 100%; height: 100%; }
+.icon img:not([src]) { display: none; }
+.icon img[src] + .letter { display: none; }
+.letter { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 12px; background: var(--c-fill-2);
+  color: var(--c-label); font-size: var(--t-title-3); font-weight: 600; }
+.name { max-width: 100%; padding: 0 2px; color: var(--c-label-2); font-size: var(--t-caption-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app.front { background: var(--c-fill); }
+.app.front .name { color: var(--c-label); font-weight: 600; }
+.app.front .icon::after { content: ''; position: absolute; left: 50%; bottom: -5px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%;
+  background: var(--c-label-2); }
+.app.away .icon img, .app.away .letter { opacity: .45; }
+/* Several windows: the count says that a tap opens the choice instead of switching at once. */
+.count { position: absolute; right: -6px; top: -6px; min-width: 22px; height: 22px; padding: 0 6px; display: grid; place-items: center; border-radius: 11px;
+  background: var(--c-label); color: var(--c-bg); box-shadow: 0 1px 4px rgb(0 0 0 / .3); font-size: var(--t-caption-1); font-weight: 700;
+  font-variant-numeric: tabular-nums; }
+.app.ghost::before { content: ''; width: 46px; height: 46px; margin-top: 3px; border-radius: 12px; background: var(--c-fill); }
+.app.ghost::after { content: ''; width: 40px; height: 8px; margin-top: 4px; border-radius: 4px; background: var(--c-fill); }
+.head .icon { width: 28px; height: 28px; }
+.head .letter { width: 26px; height: 26px; border-radius: 7px; font-size: var(--t-caption-1); }
+/* The windows of one app: titles as rows of a group, two lines, a tick at the one in front. */
+#apps.windows { display: flex; flex-direction: column; }
+.window { flex: none; position: relative; min-height: 54px; display: grid; grid-template-columns: minmax(0, 1fr) 22px; align-items: center;
+  column-gap: var(--s-3); padding: 10px var(--s-4); background: var(--c-cell); text-align: start; }
+.window:first-child { border-radius: var(--r-tile) var(--r-tile) 0 0; }
+.window:nth-last-child(1 of .window) { border-radius: 0 0 var(--r-tile) var(--r-tile); }
+.window:first-child:nth-last-child(1 of .window) { border-radius: var(--r-tile); }
+.window + .window::before { content: ''; position: absolute; left: var(--s-4); right: 0; top: 0; height: .5px; background: var(--c-separator); }
+.window.pressed, .window:active { background: var(--c-fill-2); }
+.window .title { grid-column: 1; font-size: var(--t-body); line-height: 1.3; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.window .state { grid-column: 1; color: var(--c-label-2); font-size: var(--t-footnote); }
+.window.front::after { content: ''; grid-column: 2; grid-row: 1 / span 2; justify-self: center; width: 6px; height: 12px; margin-top: -3px;
+  border: solid var(--c-label); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.foot { margin: var(--s-3) var(--s-4) 0; color: var(--c-label-2); font-size: var(--t-footnote); line-height: 1.4; }
+#apps.notice { min-height: 120px; display: grid; place-items: center; padding: 20px; color: var(--c-label-2); font-size: var(--t-subhead);
+  line-height: 1.5; text-align: center; }
+#apps.notice p { margin: 0; }
 
-.keys { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); grid-template-rows: 1fr 1fr; gap: 10px 6px; }
-.keys .cap { font-size: 18px; }
-/* Keys named in words are lowercase, as on Apple's keyboards: esc, tab. */
-.cap.word { font-size: var(--t-footnote); font-weight: 500; }
-/* Keys that bring their own Command: two signs side by side. */
-.keys .pair { font-size: var(--t-subhead); letter-spacing: -.02em; }
-
-/* Settings: each a name with its value over a slider. The finger sets the value where it touches the row and
-   while it slides; the knob snaps from detent to detent, the filled part of the track shows the value, the
-   longer tick the default. Beside them the keys for the readout on the display and for the defaults. */
-.settings { display: grid; grid-template: repeat(3, minmax(0, 1fr)) / minmax(0, 1fr) auto; gap: 0 var(--s-3); }
-.setting { grid-column: 1; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); touch-action: none; }
-.setting .name { display: flex; justify-content: space-between; gap: var(--s-2); padding: 0 2px; font-size: var(--t-footnote); line-height: 1.2;
-  color: var(--c-label-2); white-space: nowrap; }
+/* ---- Settings: grouped lists, as in the phone's own settings. ----------------------------------------------- */
+#prefs { height: min(560px, calc(100% - var(--in-top, 0px) - var(--edge-bottom) - var(--s-2))); }
+body.wide #prefs { height: calc(100% - var(--edge-top) - var(--edge-bottom)); }
+#prefs .well { margin: 0 calc(-1 * var(--s-4)); padding: 0 var(--s-4) var(--s-2); }
+#prefs h3 { margin: var(--s-4) var(--s-4) 6px; color: var(--c-label-2); font-size: var(--t-footnote); font-weight: 400; }
+#prefs h3:first-child { margin-top: var(--s-1); }
+.group { border-radius: var(--r-tile); background: var(--c-cell); overflow: hidden; }
+.group > * { position: relative; }
+.group > * + *::before { content: ''; position: absolute; left: var(--s-4); right: 0; top: 0; height: .5px; background: var(--c-separator); }
+.row { width: 100%; min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: var(--s-3);
+  padding: 0 var(--s-4); font-size: var(--t-body); text-align: start; }
+.row > span:first-child { flex: 1; min-width: 0; }
+.row.pressed { background: var(--c-fill); }
+.row svg { width: 16px; height: 16px; stroke-width: 2.2; color: var(--c-label-3); }
+.row .action { color: var(--c-label); }
+.note { margin: 6px var(--s-4) 0; color: var(--c-label-2); font-size: var(--t-footnote); line-height: 1.4; }
+.note:empty { display: none; }
+/* A slider: name and value above, the track below. The finger sets the value where it touches the row and while
+   it slides; the knob snaps from detent to detent, the filled part shows the value, the longer tick the default. */
+.setting { min-height: 0; display: grid; gap: 2px; padding: 11px var(--s-4) 6px; touch-action: none; }
+.setting .name { display: flex; justify-content: space-between; gap: var(--s-2); font-size: var(--t-body); white-space: nowrap; }
 .setting .name span { overflow: hidden; text-overflow: ellipsis; }
-.setting output { color: var(--c-label); font-weight: 600; font-variant-numeric: tabular-nums; }
-.slider { --inset: 11px; position: relative; min-height: 0; touch-action: none; cursor: pointer; border-radius: var(--r-chip); }
+.setting output { color: var(--c-label-2); font-variant-numeric: tabular-nums; }
+.slider { --inset: 14px; position: relative; height: 36px; margin: 0 -4px; touch-action: none; cursor: pointer; border-radius: 10px; }
 .slider::before, .slider::after { content: ''; position: absolute; left: var(--inset); top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; }
 .slider::before { right: var(--inset); background: var(--c-fill-2); }
 .slider::after { width: calc(var(--at, 0) * (100% - 2 * var(--inset))); background: var(--c-accent); transition: width .08s ease-out; }
 .slider i, .slider b { left: calc(var(--inset) + var(--at, 0) * (100% - 2 * var(--inset))); }
-.slider i { position: absolute; top: calc(50% + 6px); width: 1px; height: 3px; background: var(--c-label-3); }
+.slider i { position: absolute; top: calc(50% + 7px); width: 1px; height: 3px; background: var(--c-label-3); }
 .slider i.std { height: 6px; background: var(--c-label-2); }
-.slider b { position: absolute; z-index: 1; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
-  background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / .5); transition: left .08s ease-out; }
-.slider.pressed b { transform: scale(1.12); }
-.settings .actions { grid-column: 2; grid-row: 1 / -1; display: flex; flex-direction: column; gap: 10px; padding-bottom: 3px; }
-.settings .actions .cap { flex: 1; padding: 0 var(--s-3); font-size: var(--t-footnote); font-weight: 600; white-space: nowrap; }
+.slider b { position: absolute; z-index: 1; top: 50%; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%; background: #fff;
+  box-shadow: 0 2px 7px rgb(0 0 0 / .22), 0 0 0 .5px rgb(0 0 0 / .06); transition: left .08s ease-out, transform .12s ease-out; }
+.slider.pressed b { transform: scale(1.1); }
 
-/* The switcher: what the Mac has open, on a recessed panel like the row Command-Tab shows. What the Mac reports
-   (icons, names, titles) stands on dark glass. The display's top row stays free above it: state, zoom, and room
-   for the tap that puts the sheet away. */
-#switcher { gap: 6px; max-height: calc(100% - 56px); overflow: hidden; }
-.head { flex: none; min-height: 36px; display: flex; align-items: center; gap: var(--s-2); padding: 0 2px; }
-.head .key { width: var(--tap); min-width: var(--tap); padding: 0; }
-/* "An iPhone anpassen" is a setting for what the apps below come forward as: a latch at the head's far end. It
-   makes way for the note while the windows of one app are listed. */
-.head [data-act=shape] { width: auto; padding: 0 var(--s-3); font-size: var(--t-footnote); white-space: nowrap; }
-.head [data-act=shape].on { background: var(--c-accent); color: var(--c-on-accent); box-shadow: none; }
-.head:has([data-act=apps-back]:not([hidden])) [data-act=shape] { display: none; }
-.head .icon { width: 26px; height: 26px; }
-.head .letter { width: 24px; height: 24px; border-radius: 6px; font-size: var(--t-caption-1); }
-#appsTitle { flex: 1; min-width: 0; font-size: var(--t-subhead); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#appsTitle.heading { color: var(--c-label-2); }
-#appsNote { flex: none; color: var(--c-label-2); font-size: var(--t-footnote); }
-/* The panel scrolls when the Mac has more open than fits; then the head is where the sheet is pulled down by. */
-.well { flex: 1; min-height: 0; overflow: hidden auto; overscroll-behavior: contain; border-radius: var(--r-key); background: var(--c-sunk); }
-#apps { padding: 6px; animation: page-in .16s ease-out; }
-/* Icons in rows, the most recently used first: three, four or five in a row, as the phone's width allows, each
-   a touch target of 72 by 76 points or more with room for most names. */
-#apps.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 2px; }
-.app { min-width: 0; min-height: 76px; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: var(--s-2) 2px 7px;
-  border-radius: 10px; }
-.app.pressed, .app:active, .window.pressed, .window:active { background: var(--c-fill-2); }
-.icon { position: relative; flex: none; width: 44px; height: 44px; display: grid; place-items: center; }
-.icon img { width: 100%; height: 100%; }
-/* Until an icon is here, the app's first letter stands in for it. */
-.icon img:not([src]) { display: none; }
-.icon img[src] + .letter { display: none; }
-.letter { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 9px; background: var(--c-fill);
-  color: var(--c-label-2); font-size: var(--t-body); font-weight: 600; }
-.name { max-width: 100%; padding: 0 2px; color: var(--c-label-2); font-size: var(--t-caption); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* The app in front on the Mac, as in the Dock: a surface behind it, a dot under its icon and its name bright. */
-.app.front { background: var(--c-fill); }
-.app.front .name { color: var(--c-label); }
-.app.front .icon::after { content: ''; position: absolute; left: 50%; bottom: -5px; width: 4px; height: 4px; margin-left: -2px;
-  border-radius: 50%; background: var(--c-label); }
-/* A hidden app is dimmed, as in the Dock. */
-.app.away .icon img, .app.away .letter { opacity: .45; }
-/* Several windows: the count says that a tap opens the choice instead of switching at once. */
-.count { position: absolute; right: -7px; top: -5px; min-width: 19px; height: 19px; padding: 0 5px; display: grid; place-items: center;
-  border-radius: 10px; background: var(--c-fill-2); box-shadow: 0 1px 3px var(--c-edge);
-  color: var(--c-label); font-size: var(--t-caption); font-weight: 600; font-variant-numeric: tabular-nums; }
-.app.ghost::before { content: ''; width: 38px; height: 38px; margin-top: 3px; border-radius: 9px; background: var(--c-fill); }
-.app.ghost::after { content: ''; width: 34px; height: 7px; margin-top: 6px; border-radius: 4px; background: var(--c-fill); }
-/* The windows of one app: its titles as rows, a tick at the one in front on the Mac. Two lines, since titles
-   that differ at their end are the common case. */
-#apps.windows { display: flex; flex-direction: column; }
-.window { flex: none; min-height: 50px; display: flex; align-items: center; gap: 10px; padding: var(--s-2) 10px var(--s-2) var(--s-2);
-  border-radius: 10px; text-align: start; }
-.window + .window { box-shadow: 0 -1px 0 var(--c-separator); }
-.window::before { content: ''; flex: none; width: 5px; height: 10px; margin: 0 3px 3px; transform: rotate(45deg); }
-.window.front::before { border: solid var(--c-label); border-width: 0 2px 2px 0; }
-.window .title { flex: 1; min-width: 0; font-size: var(--t-subhead); line-height: 1.3; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
-.window .state { flex: none; color: var(--c-label-2); font-size: var(--t-footnote); }
-#apps.notice { min-height: 96px; display: grid; place-items: center; padding: 20px; color: var(--c-label-2); font-size: var(--t-subhead);
-  line-height: 1.5; text-align: center; }
-#apps.notice p { margin: 0; }
-
-/* The display picker: the Mac's displays as they are arranged, each a small screen of dark glass. The one
-   that holds the pointer has a light frame. The map is as wide as the sheet or as tall as two keys, whichever limits. */
-#displays { --map-h: 104px; flex: none; position: relative; align-self: center; width: min(100%, calc(var(--ratio, 2) * var(--map-h)));
-  aspect-ratio: var(--ratio, 2); }
-.display { position: absolute; padding: 2px; }
-.display > span { width: 100%; height: 100%; display: grid; place-items: center; padding: 0 var(--s-1); overflow: hidden;
-  border-radius: 6px; background: var(--c-sunk); box-shadow: inset 0 0 0 1px var(--c-fill); color: var(--c-label-2);
-  font-size: var(--t-caption); font-weight: 600; line-height: 1.15; text-align: center; }
-/* A long name ends in an ellipsis after two lines; the map says which display it is. */
-.display > span > span { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  line-clamp: 2; overflow: hidden; }
-.display.here > span { color: var(--c-label); box-shadow: inset 0 0 0 1.5px var(--c-label); }
-.display.pressed > span, .display:active > span { background: var(--c-fill); }
-.display:disabled > span { opacity: .5; }
-
-/* Typing: the field and the keys the iOS keyboard lacks, right above it. Out of sight the field stays
-   rendered, so iOS can still focus it. */
-#typebar { grid-area: dock; min-width: 0; display: grid; grid-template: "acc acc" auto "slot done" 44px / minmax(0, 1fr) auto; gap: var(--s-2); }
-body:not(.typing) #typebar { position: absolute; left: 0; right: 0; bottom: 0; opacity: 0; pointer-events: none; }
-body.typing #dock { display: none; }
-body.typing .sheet { display: none; }
-#accessory { grid-area: acc; display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); grid-auto-rows: 40px; gap: 5px; padding-bottom: 3px; }
-#accessory .cap { font-size: 16px; border-radius: 9px; }
-#accessory .cap.word { font-size: var(--t-footnote); }
-@media (max-width: 359px) { #accessory { grid-template-columns: repeat(5, minmax(0, 1fr)); grid-auto-rows: 36px; } }
-#slot { grid-area: slot; min-width: 0; }
-#field { width: 100%; height: 44px; padding: 0 14px; border-radius: var(--r-key); border: 1px solid var(--c-fill);
-  background: var(--c-sunk); color: var(--c-label); font-size: 16px; outline: none;
-  caret-color: var(--c-accent); -webkit-user-select: text; user-select: text; }
-#field::placeholder { color: var(--c-label-3); }
-#field:focus { border-color: var(--c-accent); }
+/* ---- Typing: the special keys in one capsule of three groups, then the field, right above the keyboard. ------ */
+#typebar { position: absolute; z-index: 5; left: var(--edge-left); right: var(--edge-right); bottom: var(--s-2); display: grid;
+  grid-template: "acc acc" 44px "slot done" 44px / minmax(0, 1fr) 44px; gap: var(--s-2); }
+body:not(.keyboard) #typebar { bottom: var(--edge-bottom); }
+body:not(.typing) #typebar { opacity: 0; pointer-events: none; }
+/* Out of sight, the typing bar costs no blur. */
+body:not(.typing) #typebar .glass { -webkit-backdrop-filter: none; backdrop-filter: none; }
+body.typing #zoneBottom, body.typing .col { display: none; }
+body.typing.cramped #zoneTop { display: none; }
+#accessory { grid-area: acc; display: flex; padding: 0 4px; font-size: var(--t-body); }
+#accessory .set { flex: 4; display: flex; background: none; border-radius: 0; overflow: visible; }
+#accessory .set:first-child { flex: 2.3; }
+#accessory .set + .set { border-left: .5px solid var(--glass-div); }
+#accessory button { flex: 1; min-width: 0; position: relative; display: grid; place-items: center; }
+#accessory button::before { content: ''; position: absolute; inset: 5px 1px; border-radius: var(--r-pill); transition: background-color .08s; }
+#accessory button.pressed::before { background: var(--glass-press); }
+#accessory button.on { color: var(--c-on-accent); }
+#accessory button.on::before { background: var(--c-accent); inset: 5px calc(50% - 17px); }
+#accessory button { isolation: isolate; }
+#accessory button::before { z-index: -1; }
+#accessory .word { font-size: var(--t-subhead); }
+@media (max-width: 359px) {
+  #typebar { grid-template: "acc acc" 88px "slot done" 44px / minmax(0, 1fr) 44px; }
+  #accessory { flex-wrap: wrap; border-radius: 22px; }
+  #accessory .set:first-child { flex: 2 0 40%; }
+  #accessory .set:nth-child(2) { flex: 4 0 55%; }
+  #accessory .set:nth-child(3) { flex: 1 0 100%; border-left: 0; border-top: .5px solid var(--glass-div); }
+}
+#slot { grid-area: slot; min-width: 0; display: flex; }
+#field { flex: 1; min-width: 0; height: 44px; padding: 0 18px; border: 0; border-radius: var(--r-pill); background: none; color: var(--glass-ink);
+  font: inherit; font-size: 16px; outline: none; caret-color: var(--c-accent); -webkit-user-select: text; user-select: text; }
+#field::placeholder { color: var(--glass-ink); opacity: .5; }
+#slot:focus-within { box-shadow: var(--glass-edge), inset 0 0 0 1.5px var(--c-accent); }
 /* The Mac stayed locked: the field says why in its placeholder, until the next try. */
-#field.failed, #field.failed:focus { border-color: var(--c-bad); }
-#field.failed::placeholder { color: var(--c-bad); }
-#done { grid-area: done; width: 92px; height: 41px; font-size: var(--t-body); font-weight: 600; }
+#slot:has(#field.failed) { box-shadow: var(--glass-edge), inset 0 0 0 1.5px var(--c-bad); }
+#field.failed::placeholder { color: var(--c-bad); opacity: 1; }
+#done { grid-area: done; width: 44px; height: 44px; }
+.round.accent { background: var(--c-accent); color: var(--c-on-accent); box-shadow: 0 4px 14px rgb(0 0 0 / .25); }
+.round.accent svg { stroke-width: 2.4; }
+.round.accent.pressed { background: color-mix(in srgb, var(--c-accent), #000 14%); }
+/* Sideways and wide enough: one row above the keyboard, the field first. */
+@media (min-width: 640px) {
+  body.wide #typebar { grid-template: "slot acc done" 44px / minmax(140px, 1fr) minmax(0, 460px) 44px; left: max(var(--s-2), var(--safe-left)); right: max(var(--s-2), var(--safe-right)); }
+}
 
-/* The first start, without a key: three steps of what to do at the Mac. It takes the whole phone, since nothing
-   else does anything before the phone is paired. */
+/* ---- The gesture tour: a card above the mouse keys. --------------------------------------------------------- */
+#tour { position: absolute; z-index: 5; left: calc(var(--in-left, 0px) + var(--s-3)); right: calc(var(--in-right, 0px) + var(--s-3));
+  bottom: calc(var(--in-bottom, 0px) + var(--s-3)); display: grid; gap: 3px; padding: 14px 18px 10px; border-radius: var(--r-card);
+  background: var(--c-material); box-shadow: var(--shadow); pointer-events: none; animation: rise .3s cubic-bezier(.2, .9, .25, 1); }
+body.wide #tour { left: 50%; right: auto; width: min(380px, calc(100% - 2 * var(--in-left, 0px) - 24px)); transform: translateX(-50%); animation: none; }
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+#tourCount { color: var(--c-label-2); font-size: var(--t-footnote); }
+#tourTitle { font-size: var(--t-title-3); font-weight: 600; line-height: 1.25; }
+#tourText { color: var(--c-label-2); font-size: var(--t-subhead); line-height: 1.35; }
+#tour .foot { margin: 6px 0 0; display: flex; align-items: center; justify-content: space-between; }
+#tourDots { display: flex; gap: 6px; }
+#tourDots i { width: 7px; height: 7px; border-radius: 50%; background: var(--c-fill-2); transition: background-color .2s; }
+#tourDots i.done { background: var(--c-ok); }
+#tourDots i.now { background: var(--c-label); }
+.link { min-height: var(--tap); padding: 0 2px 0 var(--s-3); color: var(--c-label-2); font-size: var(--t-subhead); pointer-events: auto; }
+.link.pressed { color: var(--c-label); }
+#tour[data-done] #tourTitle { color: var(--c-ok); }
+#tour[data-done] .link { visibility: hidden; }
+
+/* ---- Notices and cards over the picture. -------------------------------------------------------------------- */
+#notice { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center;
+  padding: calc(var(--in-top, 0px) + var(--s-4)) calc(var(--in-right, 0px) + var(--s-5)) calc(var(--in-bottom, 0px) + var(--s-4)) calc(var(--in-left, 0px) + var(--s-5));
+  pointer-events: none; background: var(--c-scrim); animation: page-in .2s ease-out; }
+#notice .card { width: min(100%, 320px); display: grid; justify-items: center; gap: var(--s-2); text-align: center; }
+#notice .sym { width: 48px; height: 48px; margin-bottom: var(--s-1); stroke: var(--c-label-2); stroke-width: 1.5; display: none; }
+#notice[data-kind=unreachable] [data-for=unreachable], #notice[data-kind=stopped] [data-for=stopped],
+#notice[data-kind=noAccess] [data-for=noAccess], #notice[data-kind=denied] [data-for=denied], #notice[data-kind=revoked] [data-for=revoked],
+#notice[data-kind=offline] [data-for=offline], #notice[data-kind=permission] [data-for=permission], #notice[data-kind=paused] [data-for=paused],
+#notice[data-kind=taken] [data-for=taken] { display: block; }
+#notice h2 { margin: 0; font-size: var(--t-title-3); font-weight: 600; line-height: 1.25; }
+#notice p { margin: 0; color: var(--c-label-2); font-size: var(--t-subhead); line-height: 1.4; text-wrap: balance; }
+/* A capsule: the one action of a notice, a card or the first start. */
+.pill { min-height: var(--tap); margin-top: var(--s-3); padding: 0 var(--s-5); border-radius: var(--r-pill); background: var(--c-fill);
+  font-size: var(--t-body); font-weight: 600; pointer-events: auto; }
+.pill.pressed { background: var(--c-fill-2); }
+.pill.accent { background: var(--c-accent); color: var(--c-on-accent); }
+.pill.accent.pressed { background: color-mix(in srgb, var(--c-accent), #000 14%); }
+@media (max-height: 480px) { #notice .sym { display: none !important; } #notice .pill { margin-top: var(--s-1); } }
+/* The offer to enrol for Face ID: a card on the dimmed picture. On a low display the sign stands left of the words. */
+#enrol { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; padding: var(--s-4); background: var(--c-scrim);
+  animation: page-in .2s ease-out; }
+#enrol .card { width: min(100%, 320px); max-height: 100%; overflow: hidden auto; display: grid; justify-items: center; gap: 6px;
+  padding: var(--s-5) var(--s-4) var(--s-4); border-radius: var(--r-card); background: var(--c-material); text-align: center; box-shadow: var(--shadow); }
+#enrol svg { width: 48px; height: 48px; margin-bottom: var(--s-1); color: var(--c-accent); stroke-width: 1.5; }
+#enrol .tick { color: var(--c-ok); }
+#enrol:not([data-state=done]) .tick, #enrol[data-state=done] .face, #enrol[data-state=done] .choice { display: none; }
+#enrol h2 { margin: 0; font-size: var(--t-body); font-weight: 600; line-height: 1.25; }
+#enrol p { margin: 0; color: var(--c-label-2); font-size: var(--t-footnote); line-height: 1.4; text-wrap: balance; }
+#enrol[data-state=failed] p { color: var(--c-bad); }
+#enrol .choice { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2); margin-top: var(--s-2); }
+#enrol .pill { margin: 0; padding: 0 var(--s-2); }
+#enrol[data-state=busy] .pill { opacity: .5; pointer-events: none; }
+@media (max-height: 480px) {
+  #enrol .card { width: min(100%, 440px); grid-template-columns: auto minmax(0, 1fr); justify-items: start; column-gap: 14px; padding: var(--s-4); text-align: left; }
+  #enrol svg { grid-row: span 2; align-self: center; margin: 0; }
+  #enrol .choice { grid-column: 1 / -1; }
+}
+
+/* ---- The first start: three steps at the Mac, or the six digits it shows. ----------------------------------- */
 #welcome { position: absolute; inset: 0; z-index: 10; overflow: hidden auto; display: grid; place-items: center; background: var(--c-bg);
   padding: max(var(--s-5), var(--safe-top)) max(var(--s-5), var(--safe-right)) max(var(--s-5), var(--safe-bottom)) max(var(--s-5), var(--safe-left)); }
 #welcome .card { width: min(100%, 360px); display: grid; justify-items: center; gap: var(--s-3); text-align: center; }
-#welcome .devices { width: 64px; height: 64px; fill: none; stroke: var(--c-accent); stroke-width: 2.4; stroke-linejoin: round; stroke-linecap: round; }
+#welcome .devices { width: 64px; height: 64px; color: var(--c-accent); stroke-width: 2.2; }
 #welcome h1 { margin: 0; font-size: var(--t-title-1); font-weight: 700; line-height: 1.2; text-wrap: balance; }
 #welcome p { margin: 0; color: var(--c-label-2); font-size: var(--t-subhead); line-height: 1.4; text-wrap: balance; }
 #welcome ol { margin: var(--s-3) 0 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: var(--s-4); text-align: left; justify-self: stretch; }
 #welcome li { counter-increment: step; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: var(--s-3);
   font-size: var(--t-body); line-height: 1.3; }
 #welcome li::before { content: counter(step); width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%;
-  background: var(--c-accent); color: var(--c-on-accent); font-size: var(--t-subhead); font-weight: 600; }
-#welcome .note { margin-top: var(--s-3); font-size: var(--t-footnote); color: var(--c-label-3); }
-body[data-link=unpaired] #dock, body[data-link=unpaired] #hud { visibility: hidden; }
+  background: var(--c-fill); color: var(--c-label); font-size: var(--t-subhead); font-weight: 600; }
+#welcome .or { margin-top: var(--s-4); color: var(--c-label-2); font-size: var(--t-footnote); line-height: 1.4; text-wrap: balance; }
+/* Six cells drawn behind one field: the field takes typing, paste and the code iOS offers; the cells show it. */
+.code { position: relative; width: min(100%, 312px); height: 56px; }
+.cells { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--s-2); pointer-events: none; }
+.cells span { display: grid; place-items: center; border-radius: var(--r-key); background: var(--c-fill); font-size: var(--t-title-1);
+  font-weight: 600; font-variant-numeric: tabular-nums; }
+.code:focus-within .cells span.now { box-shadow: inset 0 0 0 2px var(--c-accent); }
+.code.failed .cells span { box-shadow: inset 0 0 0 1.5px var(--c-bad); }
+#code { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .011; border: 0; background: none; color: transparent;
+  caret-color: transparent; font-size: 16px; letter-spacing: 40px; -webkit-user-select: text; user-select: text; }
+#pairSays { min-height: 1.4em; font-size: var(--t-footnote); }
+#pairSays.bad { color: var(--c-bad); }
+#pairSays.ok { color: var(--c-ok); }
+#welcome .note { font-size: var(--t-footnote); color: var(--c-label-3); }
+body[data-link=unpaired] #hud { visibility: hidden; }
 
-/* A phone on its side: the display takes the width, the dock stands as a rail beside it, under the right
-   thumb, and a sheet opens at the display's right, next to the rail. */
-body.wide #app { grid-template: "console dock" 1fr / minmax(0, 1fr) var(--rail);
-  padding-top: max(var(--s-2), var(--safe-top)); padding-bottom: max(var(--s-2), var(--safe-bottom)); }
-body.wide .mouse { flex: 1; flex-direction: column; }
-body.wide .mouse button { height: auto; min-height: var(--tap); }
-body.wide .mouse [data-click=right] { font-size: var(--t-subhead); }
-body.wide .side button { flex: 1; width: auto; height: var(--tap); }
-body.wide .tools { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2); }
-body.wide .tools .key, body.wide .slot { width: auto; height: var(--tap); }
-body.wide .tools .key { font-size: var(--t-footnote); }
-body.wide .slot { justify-content: center; padding: 0; }
-body.wide .slot span { display: none !important; }
-body.wide .sheet { left: auto; width: min(380px, calc(100% - 16px)); }
-/* On its side the display is short: five icons in a row keep a dozen apps in sight without scrolling, and a
-   lower map of the displays leaves them a row on the smallest phone. */
-body.wide #apps.grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-body.wide #displays { --map-h: 72px; }
-/* Typing on its side: one row above the keyboard when it fits, the display above it. */
-body.wide.typing #app { grid-template: "console" 1fr "dock" auto / minmax(0, 1fr); }
-@media (min-width: 640px) {
-  body.wide #typebar { grid-template: "slot acc done" 40px / minmax(120px, 1fr) auto auto; }
-  body.wide #accessory { grid-template-columns: repeat(10, 40px); grid-auto-rows: 37px; padding: 0; }
-  body.wide #field { height: 40px; }
-  body.wide #done { height: 37px; }
-}
-/* A narrow phone: the media keys give the transport room, so the play key does not crowd its neighbours, and
-   the keys beside the type key give it room for its words. The chips on the display keep their symbols. */
+/* ---- Glass and its cost. Blur over a picture that changes 60 times a second is redone every frame, and nobody has
+   measured it on an iPhone. So the blurred area is kept small (the capsules), nothing that moves over the picture is
+   blurred (sheets, menus, cards, the tour have a material instead), and "Durchsichtige Flächen" in the settings
+   turns the blur off altogether. */
+
+/* A narrow phone (320 pt): the mouse keys' words a step smaller, the keys a little closer. Last, so it wins over
+   the rules it adjusts. */
 @media (max-width: 359px) {
-  .tools .key { width: 48px; }
-  .slot { gap: var(--s-2); padding: 0 10px; }
-  .stack { width: 48px; }
-  .rocker { width: 52px; }
-  .transport .play { width: 66px; height: 66px; }
+  #mouse { font-size: var(--t-subhead); }
   .side button { width: var(--tap); }
-  .mouse button { font-size: var(--t-subhead); }
-  #follow > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  #pages > :not(i) { font-size: var(--t-caption); }
+  .keys { gap: 6px; }
+  .sheet { padding: 0 var(--s-3) var(--s-3); }
+  /* The Mac's name keeps its room: the zoom keys a little narrower, the readout without its chevron. */
+  #zoom .step { width: 34px; }
+  #zoom .step::after { inset: -6px; }
+  .readout { min-width: 62px; padding: 0 8px; }
+  .readout .more { display: none; }
+  #macBtn { gap: 6px; padding: 0 10px 0 12px; }
 }
-/* A short display on its side: the tray's pages give up some height so it still fits under the zoom keys. */
-@media (max-height: 360px) { #deck { --page-h: 108px; } .transport .play { width: 72px; height: 72px; } }
-
-/* The keyboard covers the home indicator, so its inset is not needed above it. */
-body.keyboard #app { padding-bottom: var(--s-2); }
 
 @media (prefers-reduced-motion: reduce) {
-  .cap, .switch > i, .slider b, .slider::after, .sheet, body.drawer #drawer, body.apps #switcher { transition: none; }
-  .page, #apps, #notice, #enrol { animation: none; }
-  #status.wait .wait { animation: none; }
+  .sheet, body.apps #switcher, body.drawer #drawer, body.prefs #prefs, .switch, .switch::after, .segments > i, .slider b, .slider::after,
+  .readout, .slot { transition: none; }
+  .page, #apps, #notice, #enrol, .menu, .menu.leaving, #tour { animation: none; }
+  #ring.on { animation: ring-still .5s linear; }
+  #macBtn .wait { animation: none; }
 }
+@keyframes ring-still { from { opacity: .9; } to { opacity: 0; } }
