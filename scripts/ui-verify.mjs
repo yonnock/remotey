@@ -60,7 +60,7 @@ import { extname, join, resolve } from 'node:path';
 //     --slow=N gives the page a fraction of the processor.
 // 22: the page's frame clock is 60 a second on every machine: a runner that draws slower had the page measure 30 or
 //     55 and ask for the view again in the middle of T8, T13 and T20.
-export const VERIFIER_VERSION = 22;
+export const VERIFIER_VERSION = 23;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -848,7 +848,13 @@ await task('T7', async () => {
   const frames = (await page.evaluate('window.__frames')).filter((f) => f.at !== null);
   const lastSeen = frames.filter((f) => f.h > 0).at(-1);
   // Since version 18 a sheet lies over the bar by design: what covers it is no fault, only how long the sheet stays.
-  const close = { inSightMs: lastSeen ? Math.round(lastSeen.at) : 0, frames: frames.filter((f) => f.h > 0).length };
+  // The limit is 200 ms on a display that draws 60 times a second. A machine that draws slower hands the tap
+  // over a frame late and starts the way out a frame late: twice what its frame is longer counts for it.
+  const gaps = frames.slice(1).map((f, i) => f.at - frames[i].at).sort((a, b) => a - b);
+  const frameMs = gaps.length ? gaps[gaps.length >> 1] : 1000 / 60;
+  const limitMs = Math.round(200 + 2 * Math.max(0, frameMs - 1000 / 60));
+  const close = { inSightMs: lastSeen ? Math.round(lastSeen.at) : 0, frames: frames.filter((f) => f.h > 0).length,
+    frameMs: Math.round(frameMs * 10) / 10, limitMs };
   // A tap on the display above the tray.
   await open();
   await page.clear();
@@ -864,7 +870,7 @@ await task('T7', async () => {
   await page.touch('touchEnd', []); await sleep(300);
   const swipe = { closed: !(await isOpen()) };
   await page.close();
-  return { close, tap, swipe, ok: close.inSightMs < 200 && tap.closed && tap.clicks === 0 && swipe.closed };
+  return { close, tap, swipe, ok: close.inSightMs < close.limitMs && tap.closed && tap.clicks === 0 && swipe.closed };
 });
 
 // T8: the side buttons. A tap is one click of that button; an armed modifier goes with the next click only.

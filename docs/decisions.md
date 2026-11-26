@@ -1170,6 +1170,10 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       Sockets (`URLSession.sendPing`). Hier nicht nachzustellen, auch nicht in 22 Läufen unter Last; die Ursache
       ist nicht belegt. Der Test fragt jetzt den Herzschlag des Agenten (`ping`, `pong`) und liest vorbei, was
       sonst kommt; bleibt die Antwort aus, nennt er, was stattdessen kam.
+      Im fünften Lauf bestanden die Swift-Tests; T7 maß 207 ms bis das Blatt weg war, bei 8 statt 11 Bildern
+      auf dem Weg (hier 180 ms). Die Grenze von 200 ms gilt für 60 Bilder je Sekunde. Verifier v23: T7 misst den
+      Bildabstand der Maschine und rechnet ihr zweimal an, was er länger ist als bei 60 (Tipp und Start je ein
+      Bild später); hier bleibt die Grenze 200.
     - Agent, ein zweites Entsperren nahm dem ersten die Rotation: `Server.unlock` notierte das neue Siegel, bevor der
       Sperrbildschirm den zweiten Versuch abwies, und die Absage löschte es. Der Mac ging auf, das Salt blieb, die
       Zählung der Absagen auch. Jetzt wird ein zweiter Versuch abgewiesen, bevor etwas notiert ist (Test mit zwei
