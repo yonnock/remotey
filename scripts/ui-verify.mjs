@@ -55,11 +55,18 @@ import { extname, join, resolve } from 'node:path';
 // 20: T6 also swipes the settings' list from a row, a slider's track and a switch: the list scrolls and nothing is
 //     set; sideways along a row slides its value; a tap flips a switch. T19: a phone the Mac knows asks for a ticket
 //     first and hands its old token over only when the Mac does not know it.
-export const VERIFIER_VERSION = 20;
+// 21: the machine's own wishes stay out (reduced transparency and motion, contrast: a CI runner has them set), the
+//     fake Mac's slow answer takes 1.5 s instead of 0.4 s, and T20 counts view requests once they have come to rest.
+//     --slow=N gives the page a fraction of the processor.
+export const VERIFIER_VERSION = 21;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
 const shots = arg('shots', '');
+// --slow=4 gives the page a quarter of the processor, as a busy CI runner does: what only passes on a fast machine fails here too.
+const slow = Number(arg('slow', '1')) || 1;
+// How long the fake Mac takes where a task makes it slow to answer: longer than the measuring takes on a slow machine.
+const SLOW_ANSWER = 1500;
 if (shots) mkdirSync(shots, { recursive: true });
 const gallery = arg('gallery', '');
 if (gallery) mkdirSync(gallery, { recursive: true });
@@ -360,7 +367,9 @@ async function openPage(width, height, { lang = 'de-DE', token = true, scheme = 
   await s('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: dpr, mobile: true });
   await s('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
   await s('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme },
-    ...(contrast ? [{ name: 'prefers-contrast', value: contrast }] : []), ...(transparency ? [{ name: 'prefers-reduced-transparency', value: transparency }] : [])] });
+    { name: 'prefers-contrast', value: contrast ?? 'no-preference' }, { name: 'prefers-reduced-transparency', value: transparency ?? 'no-preference' },
+    { name: 'prefers-reduced-motion', value: 'no-preference' }] });
+  if (slow > 1) await s('Emulation.setCPUThrottlingRate', { rate: slow });
   await s('Page.addScriptToEvaluateOnNewDocument', { source: `try { localStorage.setItem('test-lang', ${JSON.stringify(lang)});
     ${tour ? "localStorage.setItem('test-tour', '1');" : "localStorage.removeItem('test-tour');"} } catch {}` });
   await s('Page.addScriptToEvaluateOnNewDocument', { source: harness });
@@ -934,14 +943,14 @@ await task('T9', async () => {
   const window = { sent: await focuses(), closed: !(await isOpen(page)) };
   // Opened again while the Mac is slow to answer: the list of last time is not offered, since the new one may
   // come in another order under the finger. As many blank places stand in, and a tap on one does nothing.
-  await page.evaluate(`window.__appsDelay = 400`);
+  await page.evaluate(`window.__appsDelay = ${SLOW_ANSWER}`);
   await page.tap('[data-act=apps]'); await sleep(150);
   await page.clear();
   const first = await page.rect('.app');
   await page.touch('touchStart', [[first.x + first.w / 2, first.y + first.h / 2]]); await sleep(40); await page.touch('touchEnd', []); await sleep(60);
   const stale = await page.evaluate(`({ places: document.querySelectorAll('.app.ghost').length, tappable: document.querySelectorAll('.app[data-pid]').length,
     sent: window.__sent.filter((m) => m.t === 'focus').length, open: document.body.classList.contains('apps') })`);
-  await sleep(500);
+  await sleep(SLOW_ANSWER + 200);
   await page.evaluate(`window.__appsDelay = 0`);
   // Then it shows all apps, and a tap on the display puts it away without a click.
   await page.clear();
@@ -959,13 +968,13 @@ await task('T9', async () => {
   // Back from the background with the sheet open: the page connects anew. What was on show is from before,
   // so nothing of it takes a tap until the Mac has answered again.
   await open(page);
-  await page.evaluate(`(window.__appsDelay = 400, document.dispatchEvent(new Event('visibilitychange')))`);
+  await page.evaluate(`(window.__appsDelay = ${SLOW_ANSWER}, document.dispatchEvent(new Event('visibilitychange')))`);
   await sleep(150); await page.clear();
   const old = await page.rect('#apps');
   await page.touch('touchStart', [[old.x + 50, old.y + 40]]); await sleep(40); await page.touch('touchEnd', []); await sleep(60);
   const resumed = await page.evaluate(`({ tappable: document.querySelectorAll('#apps button').length,
     sent: window.__sent.filter((m) => m.t === 'focus').length, open: document.body.classList.contains('apps') })`);
-  await sleep(600);
+  await sleep(SLOW_ANSWER + 300);
   resumed.after = await page.evaluate(`document.querySelectorAll('.app[data-pid]').length`);
   await page.evaluate(`window.__appsDelay = 0`);
   // The same swipe started on an icon, while the list does not scroll: the sheet goes, the app is not asked for.
@@ -1237,13 +1246,13 @@ await task('T12', async () => {
   const two = await tiles(page);
   // Opened again while the Mac is slow to answer: the map of last time takes no tap.
   await page.tap('#readout'); await sleep(300);
-  await page.evaluate(`window.__appsDelay = 400`);
+  await page.evaluate(`window.__appsDelay = ${SLOW_ANSWER}`);
   await page.tap('#readout'); await sleep(150);
   await page.clear();
   const old = (await tiles(page)).list[0];
   await page.touch('touchStart', [[old.x + old.w / 2, old.y + old.h / 2]]); await sleep(40); await page.touch('touchEnd', []); await sleep(60);
   const stale = { off: (await tiles(page)).list.every((t) => t.off), sent: (await page.sent()).filter((m) => m.t === 'display').length, open: await isOpen(page) };
-  await sleep(500);
+  await sleep(SLOW_ANSWER + 200);
   stale.after = (await tiles(page)).list.filter((t) => !t.off).length;
   await page.close();
   return { ...out, one: { hidden: one.hidden, asked: one.asked, connecting: one.connecting }, three, tap, two: { tiles: two.list.length, here: two.list.filter((t) => t.here).map((t) => t.id) }, stale,
@@ -1899,6 +1908,8 @@ await task('T20', async () => {
       const page = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]));
       const views = () => page.evaluate(`window.__sent.filter((m) => m.t === 'view').length`);
       const size = () => page.evaluate(`(() => { const r = document.querySelector('#screen').getBoundingClientRect(); return [r.width, r.height].join('×'); })()`);
+      // The page asks once more when it has measured its frame rate: counted from when the requests have come to rest.
+      for (let last = -1, same = 0; same < 4;) { const now = await views(); same = now === last ? same + 1 : 0; last = now; await sleep(150); }
       const before = { views: await views(), size: await size(), inset: await page.evaluate('window.__view.inset') };
       for (const opener of ['[data-act=apps]', '[data-act=deck]']) { await page.tap(opener); await sleep(400); await closeSheet(page); }
       await openSettings(page); await closeSheet(page);

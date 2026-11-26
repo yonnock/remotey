@@ -1152,6 +1152,15 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       davon gesehen.
     - Seite, der erste Start deckt die Seite zu, aber was darunter lag, blieb für VoiceOver erreichbar: es ist jetzt
       `inert`, der erste Start ein Dialog. Der Hinweis zur Bildschirmaufnahme verlangt keinen Neustart mehr.
+    - Die ersten Läufe der CI (macOS 26.7, Xcode 26.6, Swift 6.3.3; hier Swift 6.4.2). Der Build brach an einer Zeile
+      von main ab: 6.3 wandelt in `ScreenView.viewport` kein `CGFloat` still in das `Double` des Rückgabetyps, 6.4 tat
+      es. Danach liefen dort Build, 293 Swift-Tests, die Node-Tests und der Lauf von Ende zu Ende; drei Aufgaben des
+      Verifiers (T9, T12, T20) nicht. Der Runner hat „Transparenz reduzieren“ gesetzt, also zeichnete die Seite zu
+      Recht kein Glas, und er ist langsam: die Antwort des falschen Macs nach 400 ms war da, bevor die Aufgabe maß,
+      und die Seite fragte die Ansicht noch einmal an, nachdem die Aufgabe schon gezählt hatte. Verifier v21: die
+      Wünsche der Maschine bleiben draußen (Transparenz, Bewegung, Kontrast sind gesetzt, was die Aufgabe setzt),
+      die langsame Antwort braucht 1,5 s, T20 zählt erst, wenn die Anfragen ruhen. `--slow=N` gibt der Seite einen
+      Bruchteil des Prozessors; mit `--slow=4` bestehen hier 27 von 27, wie ohne.
     - Agent, ein zweites Entsperren nahm dem ersten die Rotation: `Server.unlock` notierte das neue Siegel, bevor der
       Sperrbildschirm den zweiten Versuch abwies, und die Absage löschte es. Der Mac ging auf, das Salt blieb, die
       Zählung der Absagen auch. Jetzt wird ein zweiter Versuch abgewiesen, bevor etwas notiert ist (Test mit zwei
