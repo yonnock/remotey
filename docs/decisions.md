@@ -1131,6 +1131,65 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       und dunkel mit einem erfundenen Mac-Bild ab, `--docs=DIR` die Bilder des README. 27 von 27 Prüfungen bestanden.
       Zeiger und Scrollen gleich (schnell 250 px bei 60 Hz 768 → 779, Streuung).
 
+21. Durchsicht der Oberfläche am Mac (frischer Blick auf Runde 20: alle Bilder hell und dunkel neben den Mockups 20
+    bis 22 und neben macOS selbst; Maßstab: so, wie Apple das WLAN-Menü und einen Bereich der Systemeinstellungen
+    ausliefert). Verhalten unverändert; nur wie es aussieht und sich liest.
+    - Entscheidung Akzent: Remoteys Orange (`Accent`, `.systemOrange`, also #ff9500 hell und #ff9f0a dunkel, dieselben
+      Werte wie `--c-accent` der Seite), solange der Nutzer in den Systemeinstellungen „Mehrfarbig“ lässt; wählt er
+      eine Farbe, gilt seine. Das ist die Regel, nach der macOS den Akzent einer App behandelt, die einen eigenen
+      nennt (`NSAccentColorName`): er gilt nur bei „Mehrfarbig“. Ein Asset-Katalog dafür bräuchte `actool` im Build,
+      darum steht die Regel im Code (`AppleAccentColor` fehlt bei „Mehrfarbig“). Gründe: Symbol der App, Seite am
+      Telefon und Mockups sind orange; Runde 20 hatte den Systemakzent gewählt, damit trug derselbe Zustand am Mac
+      Blau und am Telefon Orange. Gilt überall, wo macOS den Akzent einer App nähme: Kreis des verbundenen Geräts,
+      Markierung im Menü, Standardtaste im Assistenten und im Face-ID-Fenster, Schalter (`.tint`), die Symbole der
+      Schritte im Assistenten und das Face-ID-Zeichen. Die Markierung im Menü ist eine Stufe dunkler (#db6e00): Weiß
+      auf dem hellen Orange hätte 2,2 : 1, so 3,4 : 1 (getestet ≥ 3 : 1); macOS dunkelt seine Akzente für
+      Markierungen ebenso ab.
+    - Folge davon: „braucht dich“ war ein oranger Kreis mit Ausrufezeichen und hätte wie der Akzent gelesen. Jetzt
+      das Warnzeichen des Systems (gelbes Dreieck, mehrfarbig), im Menü, im Assistenten und in den Einstellungen;
+      auf der Markierung weiß. Rot bleibt für Fehler, Grün für erledigt.
+    - Menü: eine rechte Kante für Schalter, „Trennen“, Haken, „Eingerichtet“/„Aus“ und Kurzbefehle, 16 pt vom Rand
+      des Panels. Vorher stand „Trennen“ 7 pt davor (das Polster seiner Hover-Fläche) und die Haken 3 pt (mittig in
+      einem 16 pt breiten Rahmen); der Schalter hatte 2 pt weniger Rand als die Zeilen. Eine linke Spalte von 24 pt für
+      Symbole und den Kreis des Geräts: vorher stand die Mitte des Kreises 3 pt neben der Mitte der Symbole und der
+      Name des Geräts 6 pt rechts von den anderen Titeln. Symbole 13 statt 14 pt, wie in Menüs. Markierung
+      konzentrisch zum Panel (Radius 14 − 6 = 8 statt 7). Pausiert ist der Kreis des Geräts grau: es steuert nichts.
+    - Assistent: der Bereich über den Tasten hat in jedem Schritt dieselbe Höhe (480 pt), und Logo, Titel, Satz und
+      Inhalt stehen als ein Block in seiner Mitte, 24 pt zwischen Satz und Inhalt. Vorher hatte nur der Inhalt eine
+      Mindesthöhe und stand in deren Mitte: zwischen Satz und QR-Code lagen rund 60 pt Leere, und das Fenster
+      wechselte zwischen den Schritten die Höhe (Satz mit einer oder zwei Zeilen). QR-Karte und Liste daneben teilen
+      ihre Oberkante. Der QR-Code war im Bild unscharf (ein Bitmap mit einem Pixel je Modul, hochskaliert: das
+      Zeichnen außerhalb des Bildschirms beachtet `.interpolation(.none)` nicht); jetzt zeichnet `QRCodeView` jedes
+      Modul als Rechteck, scharf in jeder Größe (`QRCode.modules`, getestet mit den Suchmustern in drei Ecken).
+      „Weiter“ und „Fertig“ als Hauptaktion (`.borderedProminent` im Akzent). Das Kästchen „Beim Anmelden starten“
+      steht unter den Zeichen der Liste statt 4 pt neben ihrer Kante. Im letzten Schritt wiederholte die Zeile den
+      Titel („Zum Home-Bildschirm“ zweimal) und brach den Code um: jetzt „Warte auf die App …“, darunter „Fragt sie
+      nach einem Code: 482 913“. Die Bildkarten der Schritte haben eine sichtbare Kante auch dunkel.
+    - Einstellungen: alle Symbole der Zeilen in einer Größe und Spalte (`RowSymbol`, 16 pt in 24 pt; vorher 17, 20
+      und die Systemgröße), dieselben wie im Menü (Bildschirmaufnahme `display` statt
+      `rectangle.dashed.badge.record`); „Zugelassen“ bekam ein Symbol, damit sein Titel mit den anderen fluchtet.
+      Das Face-ID-Zeichen ist grau wie die anderen statt grün (der Zustand steht darunter in Worten). Zustände
+      17 statt 20 pt, die Größe eines Schalterknopfs. ⓘ grau statt im Akzent. „Remotey: Bereit auf Port …“ heißt
+      jetzt „Status“: Remotey hieß die Zeile im Fenster von Remotey.
+    - Face-ID-Fenster: der Satz unter dem Titel hatte fünf zentrierte Zeilen, jetzt vier („Das iPhone bekommt einen
+      Passkey, mit dem das Passwort dieses Macs verschlüsselt abgelegt wird. Wer das iPhone entsperren kann, kann
+      dann auch den Mac entsperren.“; die Aussage, dass entsperren kann, wer das iPhone entsperren kann, bleibt).
+      Zeichen und „Weiter“ im Akzent.
+    - Geprüft und gelassen: Die Toolbar der Einstellungen zeichnet im Bild jedes Fach als Kasten. Das kommt nicht
+      aus Remotey: eine leere `NSToolbar` mit `.preference` und `isBordered = false` an jedem Eintrag zeichnet
+      außerhalb des Bildschirms auf macOS 27 dieselben Kästen (Versuch im Test, danach entfernt); Glas braucht den
+      Compositor. Remotey nutzt die Toolbar, die AppKit für Einstellungsfenster vorsieht, und ändert daran nichts.
+      Ebenso grau bleiben im Bild Schalter, Standardtasten und Ampeln: ein Fenster, das nie auf dem Bildschirm war,
+      ist nicht das aktive. Versucht: `isKeyWindow`, `isMainWindow` und `NSApp.isActive` beim Zeichnen auf „ja“
+      gestellt; macOS 27 zeichnet sie trotzdem inaktiv, der Versuch ist wieder weg. Am Bildschirm ungeprüft (die
+      Regel dieser Runde: nichts auf den Bildschirm des Nutzers), also: ob Schalter und „Weiter“ dort orange sind und
+      wie die Toolbar aussieht. Der Schalter „Web-Zugang“ steht oben in seiner Zeile statt in ihrer Mitte: so legt
+      `Form` mit `.grouped` ihn an; gelassen, weil es die Form des Systems ist. Leerraum über dem Logo in Schritten
+      mit kurzem Satz (bis 60 pt): Folge der festen Fensterhöhe, die besser ist als ein springendes Fenster.
+    - Prüfungen: `swift test` 288 Tests (vorher 285; neu `InterfaceLookTests`: Akzent folgt der Wahl des Nutzers,
+      Kontrast der Markierung, Ausrichtung des QR-Codes), alle grün. Bilder: `scripts/mac-pictures.sh` mit Orange
+      wie bei „Mehrfarbig“, unabhängig von diesem Mac.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
