@@ -108,6 +108,11 @@ async function openSocket() {
       offerTour();
     } else if (m.t === 'mac') {
       macSays(m);
+    } else if (m.t === 'bye') {
+      // Someone at the Mac ended this phone's session ("Trennen"); the socket closes right after. Not tried again
+      // until the user asks, or the page is opened anew.
+      dropSocket();
+      link.ended();
     } else if (m.t === 'lock') {
       setLocked(m.on === true, m.key);
     } else if (m.t === 'unlock' && m.ok === false) {
@@ -204,7 +209,7 @@ function showLink() {
   const words = state === 'connected' && locked ? t('mac.locked') : t(`status.${state}`);
   $('#statusText').textContent = words;
   const button = $('#macBtn'), name = macName || t('mac.fallback');
-  button.dataset.state = state === 'connecting' ? 'wait' : !up ? 'bad' : state === 'paused' ? 'held' : locked ? 'shut'
+  button.dataset.state = state === 'connecting' ? 'wait' : state === 'ended' ? 'off' : !up ? 'bad' : state === 'paused' ? 'held' : locked ? 'shut'
     : state === 'noAccess' ? 'bad' : 'ok';
   const meterText = meterOn && viewOn && up && meterLine;
   button.classList.toggle('meter', !!meterText);
@@ -216,7 +221,7 @@ function showLink() {
   $('#menuName').textContent = name;
   const tone = $('#menuState');
   tone.textContent = words;
-  tone.dataset.tone = state === 'connected' ? 'ok' : state === 'connecting' ? '' : 'bad';
+  tone.dataset.tone = state === 'connected' ? 'ok' : state === 'connecting' || state === 'ended' ? '' : 'bad';
   const steps = $('#welcome');
   steps.hidden = state !== 'unpaired' && !welcome;
   steps.querySelector('[data-act=welcome-back]').hidden = state === 'unpaired';
@@ -227,7 +232,7 @@ function showLink() {
 let welcomeShown = false;
 // One notice at a time: what keeps the Mac out of reach comes before what keeps the live view off. A paused Mac
 // has nothing to do here: it goes on when it goes on at the Mac.
-const NOTICES = { unreachable: 'retry', stopped: 'retry', offline: 'retry', noAccess: 'recheck', denied: 'howto', revoked: 'pair',
+const NOTICES = { ended: 'reconnect', unreachable: 'retry', stopped: 'retry', offline: 'retry', noAccess: 'recheck', denied: 'howto', revoked: 'pair',
   paused: null, permission: 'retry', taken: 'takeBack' };
 let viewNotice = null; // 'permission' or 'taken': the Mac refused the live view
 function showNotice() {

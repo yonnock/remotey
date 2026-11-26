@@ -11,6 +11,7 @@
 //   unreachable  nothing answers: Tailscale off on the phone, the Mac asleep or away
 //   stopped      the Mac answers, Remotey on it does not
 //   denied       the Mac refused the key: the pairing is no longer valid
+//   ended        someone at the Mac ended this phone's session ("Trennen"): not tried again until the user asks
 //   offline      the phone has no network
 // After a failure the state stays on show while it is tried again, at a growing interval: a phone left
 // lying does not knock every second, and the notice does not flicker between a failure and "connecting".
@@ -37,6 +38,8 @@ export function cause({ online, status }) {
 }
 
 export const FAILURES = new Set(['unreachable', 'stopped', 'offline']);
+/** States the page leaves only when the user asks: no try by itself, not on coming back, not on the network's return. */
+export const HELD = new Set(['denied', 'unpaired', 'ended']);
 
 export class Link {
   /**
@@ -69,9 +72,9 @@ export class Link {
   begin({ paired = true, ask = false } = {}) {
     this.stop();
     if (!paired) return this.set('unpaired');
-    // Refused or unknown, a phone is not tried again behind the user's back: the notice or the first start
-    // stays until they ask (a tap, a new pairing).
-    if ((this.state === 'denied' || this.state === 'unpaired') && !ask) return;
+    // Refused, unknown or sent away at the Mac, a phone is not tried again behind the user's back: the notice or
+    // the first start stays until they ask (a tap, a new pairing, the page opened anew).
+    if (HELD.has(this.state) && !ask) return;
     // A failure stays on show while it is tried again by itself; a tap shows that something happens, and
     // starts the intervals over.
     if (ask) this.attempt = 0;
@@ -113,11 +116,21 @@ export class Link {
   }
 
   /**
+   * The Mac said `bye`: someone there ended this phone's session, and the socket closes right after. Coming back
+   * into sight or the network returning must not undo that; only a tap does, or the page opened anew.
+   */
+  ended() {
+    this.stop();
+    this.generation++;
+    this.set('ended');
+  }
+
+  /**
    * The socket closed, or timed out, or fell silent. A connection that worked is tried again at once, since
    * most losses are a moment of radio; a try that failed asks what went wrong and waits a little longer each time.
    */
   async lost() {
-    if (this.state === 'denied' || this.state === 'unpaired') return;
+    if (HELD.has(this.state)) return;
     this.stop();
     if (this.up) { this.attempt = 0; this.set('connecting'); this.begin(); return; }
     const generation = ++this.generation;

@@ -167,7 +167,8 @@ body.moved #hint { opacity: 0; }
 #macBtn .bad { width: 16px; height: 16px; color: var(--c-bad); stroke-width: 2; }
 #macBtn .shut, #macBtn .held { width: 15px; height: 15px; stroke-width: 2; }
 #macBtn[data-state=ok] .ok, #macBtn[data-state=wait] .wait, #macBtn[data-state=bad] .bad,
-#macBtn[data-state=shut] .shut, #macBtn[data-state=held] .held { display: block; }
+#macBtn[data-state=shut] .shut, #macBtn[data-state=held] .held, #macBtn[data-state=off] .off { display: block; }
+#macBtn .off { width: 10px; height: 10px; stroke: var(--glass-ink); stroke-width: 1.6; opacity: .6; }
 #macBtn .words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #macState:not(:empty)::before { content: ' · '; }
 #macBtn.meter #macName { font-variant-numeric: tabular-nums; }
@@ -559,7 +560,7 @@ body.wide #tour { left: 50%; right: auto; width: min(380px, calc(100% - 2 * var(
   pointer-events: none; background: var(--c-scrim); animation: page-in .2s ease-out; }
 #notice .card { width: min(100%, 320px); display: grid; justify-items: center; gap: var(--s-2); text-align: center; }
 #notice .sym { width: 48px; height: 48px; margin-bottom: var(--s-1); stroke: var(--c-label-2); stroke-width: 1.5; display: none; }
-#notice[data-kind=unreachable] [data-for=unreachable], #notice[data-kind=stopped] [data-for=stopped],
+#notice[data-kind=ended] [data-for=ended], #notice[data-kind=unreachable] [data-for=unreachable], #notice[data-kind=stopped] [data-for=stopped],
 #notice[data-kind=noAccess] [data-for=noAccess], #notice[data-kind=denied] [data-for=denied], #notice[data-kind=revoked] [data-for=revoked],
 #notice[data-kind=offline] [data-for=offline], #notice[data-kind=permission] [data-for=permission], #notice[data-kind=paused] [data-for=paused],
 #notice[data-kind=taken] [data-for=taken] { display: block; }
