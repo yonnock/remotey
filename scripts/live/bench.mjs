@@ -1,12 +1,13 @@
 // Measures the live view of a running agent: delay from a pointer move to the message that shows it,
 // delivered frame rate, CPU time, and whether a burst of pointer moves arrives complete.
-// Usage: node scripts/bench.mjs [--fps=120] [--size=366x420] [--move-rate=240] [--ack-delay=30 | --link=wifi | --link=relay | --link=3mbit | --link=relay,3mbit] [--jpeg] [--still] [--seconds=8]
+// Usage: node scripts/live/bench.mjs --live [--fps=120] [--size=366x420] [--move-rate=240] [--ack-delay=30 | --link=wifi | --link=relay | --link=3mbit | --link=relay,3mbit] [--jpeg] [--still] [--seconds=8]
 // Moves the pointer for about 20 seconds and puts it back. --still leaves the pointer alone and measures the stream
 // for 8 seconds only, or --seconds: meant for an agent started with REMOTEY_TEST_PATTERN, whose picture moves by itself.
 // Close Remotey on the phone first: the most recent viewer gets the live view.
 // Frames are answered on arrival, so the numbers are the Mac's side: no decoding, no network.
+import './guard.mjs'; // first: refuses without --live
 import { execFileSync } from 'node:child_process';
-import { POINTER, parseUpdate } from '../Web/live-view.js';
+import { POINTER, parseUpdate } from '../../Web/live-view.js';
 import { PORT, fail, open, pointer, sleep, token } from './agent.mjs';
 
 const codec = process.argv.includes('--jpeg') ? 'jpeg' : 'h264';
@@ -81,7 +82,7 @@ agentSocket.onMessage = (e) => {
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data);
     if (m.t === 'cursor') bytes += e.data.length;
-    if (m.t === 'view' && m.ok === false) fail('no Screen Recording permission');
+    if (m.t === 'view' && m.ok === false) fail(m.why === 'taken' ? 'another viewer took the live view' : 'no Screen Recording permission');
     return;
   }
   const update = parseUpdate(e.data);

@@ -1,17 +1,19 @@
 // Locks this Mac and checks the running agent behind the lock screen: it says that the Mac is locked, the
 // pointer and the live view go on, a display that sleeps comes back with the next input, a wrong password is
 // typed and refused, and the unlock is told.
-// Usage: node scripts/lock.mjs [--password-stdin]
+// Usage: node scripts/live/lock.mjs --live --lock-mac [--password-stdin]
 // Keep your hands off keyboard, mouse and Touch ID from the start until it says "unlock the Mac". An Apple Watch
 // that unlocks the Mac opens it at the first input and ends the run early: switch that off for the run.
 // One wrong password is typed into the lock screen. With --password-stdin the script reads the real one from
-// standard input and unlocks the Mac itself, e.g. `op read op://VAULT/ITEM/password | node scripts/lock.mjs --password-stdin`.
+// standard input and unlocks the Mac itself, e.g. `op read op://VAULT/ITEM/password | node scripts/live/lock.mjs --live --lock-mac --password-stdin`.
 // Close Remotey on the phone first: the most recent viewer gets the live view.
+import { asked } from './guard.mjs'; // first: refuses without --live
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { parseUpdate, POINTER } from '../Web/live-view.js';
+import { parseUpdate, POINTER } from '../../Web/live-view.js';
 import { fail, open, pointer, sleep, token } from './agent.mjs';
 
+if (!asked('--lock-mac')) fail('this locks the Mac: add --lock-mac');
 const password = process.argv.includes('--password-stdin') ? readFileSync(0, 'utf8').replace(/\r?\n$/, '') : null;
 if (password === '') fail('--password-stdin got no password');
 const asleep = () => execFileSync('osascript', ['-l', 'JavaScript', '-e',
@@ -31,7 +33,7 @@ mac.onMessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.t === 'lock') locked = m.on;
     else if (m.t === 'unlock') refused = m;
-    else if (m.t === 'view' && m.ok === false) fail('no Screen Recording permission');
+    else if (m.t === 'view' && m.ok === false) fail(m.why === 'taken' ? 'another viewer took the live view' : 'no Screen Recording permission');
     return;
   }
   const update = parseUpdate(e.data);

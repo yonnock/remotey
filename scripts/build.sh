@@ -24,8 +24,15 @@ codesign --force --options runtime --sign "$IDENTITY" "$APP"
 echo "Gebaut: $APP"
 
 if [ "${1:-}" = "--install" ]; then
-    pkill -x Remotey 2>/dev/null || true
-    while pgrep -x Remotey >/dev/null; do sleep 0.1; done # `open` fails while the old instance is still quitting
+    # SIGTERM: the agent quits in order and gives a window in the phone's shape its frame back. One that does
+    # not end within 10 s is killed; its next start puts the window back (see ShapedFrame.swift).
+    pkill -TERM -x Remotey 2>/dev/null || true
+    waited=0
+    while pgrep -x Remotey >/dev/null; do # `open` fails while the old instance is still quitting
+        waited=$((waited + 1))
+        if [ "$waited" -ge 100 ]; then pkill -KILL -x Remotey 2>/dev/null || true; fi
+        sleep 0.1
+    done
     rm -rf /Applications/Remotey.app
     ditto "$APP" /Applications/Remotey.app
     # Launch Services can still hold the replaced bundle for a moment and refuse with error -600.

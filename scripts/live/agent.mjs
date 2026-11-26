@@ -1,4 +1,4 @@
-// What the scripts need to talk to a running agent on this Mac.
+// What the scripts need to talk to a running agent on this Mac. Import `guard.mjs` before this module.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -7,6 +7,8 @@ import { homedir } from 'node:os';
 const port = /^\d+$/.test(process.env.REMOTEY_PORT ?? '') ? Number(process.env.REMOTEY_PORT) : 0;
 export const PORT = port > 0 && port < 65535 ? port : 47800; // as Server.swift reads it
 export const HTTP = `http://127.0.0.1:${PORT}`, WS = `ws://127.0.0.1:${PORT + 1}/ws`;
+/** How often the scripts say they are alive, as the page does while it is visible. */
+export const PING_MS = 5000;
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const fail = (msg) => { console.error('FAIL', msg); process.exit(1); };
 /** The agent writes the pairing token when it first starts. */
@@ -26,13 +28,18 @@ export const pointer = () => execFileSync('osascript', ['-l', 'JavaScript', '-e'
 export function open(first) {
   const ws = new WebSocket(WS);
   ws.binaryType = 'arraybuffer';
-  let answer;
-  const closed = new Promise((r) => { ws.onclose = () => r(null); });
+  let answer, heartbeat;
+  const closed = new Promise((r) => { ws.onclose = () => { clearInterval(heartbeat); r(null); }; });
   const reply = new Promise((r) => { answer = r; });
   const connection = { closed, reply: Promise.race([reply, closed]), onMessage: null,
     send: (msg) => ws.send(JSON.stringify(msg)), close: () => ws.close() };
   ws.onmessage = (e) => {
-    if (answer) { answer(JSON.parse(e.data)); answer = null; } else connection.onMessage?.(e);
+    if (answer) {
+      answer(JSON.parse(e.data));
+      answer = null;
+      // As the page does: the agent drops a phone that is silent for 15 s. Its answers stay here.
+      heartbeat = setInterval(() => { if (ws.readyState === WebSocket.OPEN) connection.send({ t: 'ping' }); }, PING_MS);
+    } else if (typeof e.data !== 'string' || JSON.parse(e.data).t !== 'pong') connection.onMessage?.(e);
   };
   ws.onopen = () => connection.send(first);
   ws.onerror = () => {}; // a refused connection also closes the socket
