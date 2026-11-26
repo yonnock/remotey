@@ -49,6 +49,8 @@ final class InterfacePicturesTests: XCTestCase {
                                      ends: Date().addingTimeInterval(4 * 60 + 38.5))
 
     private func both(_ draw: (Pictures.Look) throws -> Void) rethrows {
+        // Multicolor, the system's default: Remotey's orange, whatever this Mac is set to.
+        Accent.userChoseColor = { false }
         for look in Pictures.Look.allCases { try draw(look) }
     }
 

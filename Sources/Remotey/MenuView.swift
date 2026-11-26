@@ -11,6 +11,12 @@ struct MenuView: View {
     @FocusState private var focused: Bool
 
     static let width: CGFloat = 320
+    /// Every row's content starts and ends this far inside the highlight, and the highlight this far inside the
+    /// panel: 6 + 10 = 16 pt from the panel's edge, so text, ticks, "Trennen" and the shortcuts share one edge.
+    static let inset: CGFloat = 10
+    static let margin: CGFloat = 6
+    /// The column of symbols and the device's circle, so every title starts at the same place.
+    static let symbolColumn: CGFloat = 24
 
     enum Item: Hashable {
         case status(StatusLine.Kind), addPhone, faceID, settings, quit
@@ -26,9 +32,9 @@ struct MenuView: View {
             Text(Texts.Menu.status)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.top, 3)
-                .padding(.bottom, 3)
+                .padding(.horizontal, Self.inset)
+                .padding(.top, 2)
+                .padding(.bottom, 4)
                 .accessibilityAddTraits(.isHeader)
             ForEach(state.statusLines) { line in status(line) }
             separator
@@ -39,8 +45,9 @@ struct MenuView: View {
             separator
             row(.quit, symbol: nil, title: Texts.Menu.quit, trailing: "⌘Q")
         }
-        .padding(6)
+        .padding(Self.margin)
         .frame(width: Self.width)
+        .tint(Accent.color)
         .fixedSize(horizontal: false, vertical: true)
         .focusable()
         .focusEffectDisabled()
@@ -82,26 +89,25 @@ struct MenuView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 8)
-        .padding(.top, 5)
-        .padding(.bottom, 7)
+        .padding(.horizontal, Self.inset)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
     }
 
     @ViewBuilder
     private var sessions: some View {
         if state.sessions.isEmpty {
-            HStack(spacing: 9) {
+            HStack(spacing: 8) {
                 badge("iphone", filled: false)
                 Text(Texts.Menu.noPhone).font(.system(size: 13)).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, Self.inset)
+            .padding(.vertical, 4)
         } else {
             ForEach(state.sessions) { session in
                 let name = MacState.name(of: session)
-                HStack(spacing: 9) {
-                    badge(MacState.symbol(forDevice: session.name), filled: true)
+                HStack(spacing: 8) {
+                    badge(MacState.symbol(forDevice: session.name), filled: !state.paused)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(name).font(.system(size: 13))
                         Text(state.subtitle(of: session)).font(.system(size: 11)).foregroundStyle(.secondary)
@@ -110,29 +116,32 @@ struct MenuView: View {
                     Spacer(minLength: 8)
                     Button(Texts.Menu.end) { model.actions.end(session.id) }
                         .buttonStyle(InlineButtonStyle())
+                        // The key's hover shape reaches past the text; the text keeps the column's edge.
+                        .padding(.trailing, -InlineButtonStyle.padding)
                         .help(Texts.Menu.endHelp(name))
                         .accessibilityLabel(Texts.Menu.endHelp(name))
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, Self.inset)
+                .padding(.vertical, 4)
             }
         }
     }
 
-    /// The device in a circle: in the accent colour while it is connected.
+    /// The device in a circle, as the Wi-Fi menu shows the network it is on: in the accent while the phone
+    /// controls the Mac, grey without a phone and while paused.
     private func badge(_ symbol: String, filled: Bool) -> some View {
         ZStack {
-            Circle().fill(filled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary))
+            Circle().fill(filled ? AnyShapeStyle(Accent.color) : AnyShapeStyle(.quaternary))
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(filled ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
         }
-        .frame(width: 26, height: 26)
+        .frame(width: Self.symbolColumn, height: Self.symbolColumn)
         .accessibilityHidden(true)
     }
 
     private var separator: some View {
-        Divider().padding(.horizontal, 10).padding(.vertical, 5)
+        Divider().padding(.horizontal, Self.inset).padding(.vertical, 5)
     }
 
     private func status(_ line: StatusLine) -> some View {
@@ -217,11 +226,11 @@ struct MenuRow<Trailing: View>: View {
     @ViewBuilder var trailing: Trailing
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 8) {
             if let symbol {
                 Image(systemName: symbol)
-                    .font(.system(size: 14))
-                    .frame(width: 20)
+                    .font(.system(size: 13))
+                    .frame(width: MenuView.symbolColumn)
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 1) {
@@ -238,12 +247,14 @@ struct MenuRow<Trailing: View>: View {
             trailing.fixedSize()
         }
         .foregroundStyle(highlighted ? AnyShapeStyle(Color(nsColor: .selectedMenuItemTextColor)) : AnyShapeStyle(.primary))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.horizontal, MenuView.inset)
+        .padding(.vertical, 3)
         .frame(minHeight: 26)
         .background {
             if highlighted {
-                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color(nsColor: .selectedContentBackgroundColor))
+                // Concentric with the panel: its radius less the margin between them.
+                RoundedRectangle(cornerRadius: MenuPanel.cornerRadius - MenuView.margin, style: .continuous)
+                    .fill(Color(nsColor: Accent.selection))
             }
         }
         .contentShape(Rectangle())
@@ -286,10 +297,13 @@ struct StateMark: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(highlighted ? AnyShapeStyle(Color(nsColor: .selectedMenuItemTextColor)) : AnyShapeStyle(.secondary))
             case .actionNeeded:
-                Image(systemName: "exclamationmark.circle.fill")
-                    .font(.system(size: 13))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, highlighted ? Color(nsColor: .selectedMenuItemTextColor).opacity(0.35) : Color.orange)
+                // The system's warning, yellow, so it never reads as the orange accent.
+                if highlighted {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 12))
+                        .foregroundStyle(Color(nsColor: .selectedMenuItemTextColor))
+                } else {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 12)).symbolRenderingMode(.multicolor)
+                }
             case .failed:
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 13))
@@ -299,7 +313,8 @@ struct StateMark: View {
                 ProgressView().controlSize(.mini)
             }
         }
-        .frame(width: 16, height: 16)
+        // At the row's end edge, whatever the mark's width, like "Trennen" and the shortcuts.
+        .frame(width: 16, height: 16, alignment: .trailing)
         .accessibilityHidden(true)
     }
 }
@@ -307,12 +322,13 @@ struct StateMark: View {
 /// A small key inside a row, like "Trennen": text until the pointer is on it.
 struct InlineButtonStyle: ButtonStyle {
     @State private var hovering = false
+    static let padding: CGFloat = 7
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12))
             .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-            .padding(.horizontal, 7)
+            .padding(.horizontal, Self.padding)
             .padding(.vertical, 3)
             .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(.primary.opacity(configuration.isPressed ? 0.16 : hovering ? 0.08 : 0)))
