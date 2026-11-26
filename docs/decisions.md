@@ -1143,6 +1143,15 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       Antwort (Test: drei Starts, ein Gerät; zwei Fragen zugleich, ein Gerät).
     - „Trennen“ am Mac tat nichts: die Seite war binnen einer Sekunde zurück. Der Mac sagt vor dem Schließen `bye`,
       die Seite bleibt weg, bis ihr Nutzer wieder verbindet.
+    - Seite, die Einstellungen ließen sich kaum scrollen: jede Taste nahm den Finger schon beim Berühren, und die
+      Reihen der Schieber setzten ihren Wert, wo der Finger landete. Ein Wisch, der auf einem Schalter begann, legte
+      ihn um, einer auf einer Reihe verstellte das Zeigertempo, und die Liste stand. Jetzt wirken Tasten in der Liste
+      auf einen Tipp, und bei einer Reihe entscheidet der erste Weg des Fingers: seitwärts gleitet der Wert, auf und
+      ab scrollt die Liste. Ein Tipp auf die Spur setzt weiter den Wert. Verifier v20 (T6): Wisch von Reihe, Spur und
+      Schalter scrollt 76, 55 und 85 px und setzt nichts; vorher hatte er die Liste mit `scrollTop` gestellt und nichts
+      davon gesehen.
+    - Seite, der erste Start deckt die Seite zu, aber was darunter lag, blieb für VoiceOver erreichbar: es ist jetzt
+      `inert`, der erste Start ein Dialog. Der Hinweis zur Bildschirmaufnahme verlangt keinen Neustart mehr.
     - Agent, ein zweites Entsperren nahm dem ersten die Rotation: `Server.unlock` notierte das neue Siegel, bevor der
       Sperrbildschirm den zweiten Versuch abwies, und die Absage löschte es. Der Mac ging auf, das Salt blieb, die
       Zählung der Absagen auch. Jetzt wird ein zweiter Versuch abgewiesen, bevor etwas notiert ist (Test mit zwei

@@ -496,11 +496,11 @@ body.wide #prefs { height: calc(100% - var(--edge-top) - var(--edge-bottom)); }
 .note:empty { display: none; }
 /* A slider: name and value above, the track below. The finger sets the value where it touches the row and while
    it slides; the knob snaps from detent to detent, the filled part shows the value, the longer tick the default. */
-.setting { min-height: 0; display: grid; gap: 2px; padding: 11px var(--s-4) 6px; touch-action: none; }
+.setting { min-height: 0; display: grid; gap: 2px; padding: 11px var(--s-4) 6px; touch-action: pan-y; }
 .setting .name { max-width: none; padding: 0; color: var(--c-label); display: flex; justify-content: space-between; gap: var(--s-2); font-size: var(--t-body); white-space: nowrap; }
 .setting .name span { overflow: hidden; text-overflow: ellipsis; }
 .setting output { color: var(--c-label-2); font-variant-numeric: tabular-nums; }
-.slider { --inset: 14px; position: relative; height: 36px; margin: 0 -4px; touch-action: none; cursor: pointer; border-radius: 10px; }
+.slider { --inset: 14px; position: relative; height: 36px; margin: 0 -4px; touch-action: pan-y; cursor: pointer; border-radius: 10px; }
 .slider::before, .slider::after { content: ''; position: absolute; left: var(--inset); top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; }
 .slider::before { right: var(--inset); background: var(--c-fill-2); }
 .slider::after { width: calc(var(--at, 0) * (100% - 2 * var(--inset))); background: var(--c-accent); transition: width .08s ease-out; }

@@ -346,10 +346,10 @@
   <!-- The first start, without a pairing: what to do at the Mac, and a field for the six digits it shows beside
        its QR code. Also the way back in for a Home Screen app that came up without its key, and for a pairing the
        Mac no longer takes. -->
-  <div id="welcome" hidden>
+  <div id="welcome" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle" hidden>
     <div class="card">
       <svg class="devices" viewBox="0 0 48 48" aria-hidden="true"><use href="#i-devices"/></svg>
-      <h1 data-text="welcome.title"></h1>
+      <h1 id="welcomeTitle" data-text="welcome.title"></h1>
       <p data-text="welcome.text"></p>
       <ol id="steps"></ol>
       <label class="or" for="code" data-text="pair.or"></label>

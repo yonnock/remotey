@@ -227,6 +227,9 @@ function showLink() {
   steps.querySelector('[data-act=welcome-back]').hidden = state === 'unpaired';
   if (!steps.hidden && !welcomeShown) { welcomeShown = true; drawCode(); }
   if (steps.hidden) welcomeShown = false;
+  // The first start covers the page: what lies under it takes no touch and none of VoiceOver's swipes. Sheets
+  // and menus look after themselves (`layout`, `hidden`).
+  for (const under of ['#screen', '#notice', '#hud', '#typebar']) document.querySelector(under).inert = !steps.hidden;
   showNotice();
 }
 let welcomeShown = false;
@@ -349,6 +352,7 @@ function setGlass(on) {
   body.classList.toggle('solid', !on);
   check('glass', on);
 }
+const SLIDE_SLOP = 6; // how far a finger on a setting's row travels before it is a slide or a scroll
 for (const el of $$('[data-setting]')) {
   const name = el.dataset.setting, slider = el.querySelector('[role=slider]'), all = detents(name);
   slider.setAttribute('aria-valuemin', all[0]);
@@ -367,9 +371,32 @@ for (const el of $$('[data-setting]')) {
     const r = slider.getBoundingClientRect(), inset = slider.lastElementChild.offsetWidth / 2;
     setSetting(name, settingAt(name, (x - r.left - inset) / Math.max(1, r.width - 2 * inset)));
   };
-  el.addEventListener('touchstart', (e) => { e.preventDefault(); awake.touched(); slider.classList.add('pressed'); at(e.targetTouches[0].clientX); }, { passive: false });
-  el.addEventListener('touchmove', (e) => { e.preventDefault(); at(e.targetTouches[0].clientX); }, { passive: false });
-  for (const type of ['touchend', 'touchcancel']) el.addEventListener(type, () => slider.classList.remove('pressed'));
+  // The rows stand in a list that scrolls, so the finger's first travel decides: sideways it slides the value,
+  // up or down it scrolls the list (`touch-action: pan-y`) and sets nothing. A tap on the track sets the value there.
+  let from = null;
+  el.addEventListener('touchstart', (e) => {
+    awake.touched();
+    const touch = e.targetTouches[0];
+    from = { x: touch.clientX, y: touch.clientY, sliding: false, onTrack: slider.contains(e.target) };
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    if (!from) return;
+    const touch = e.targetTouches[0], dx = Math.abs(touch.clientX - from.x), dy = Math.abs(touch.clientY - from.y);
+    if (!from.sliding) {
+      if (dy > SLIDE_SLOP && dy >= dx) { from = null; return; } // the list scrolls
+      if (dx <= SLIDE_SLOP) return;
+      from.sliding = true;
+      slider.classList.add('pressed');
+    }
+    if (e.cancelable) e.preventDefault();
+    at(touch.clientX);
+  }, { passive: false });
+  el.addEventListener('touchend', (e) => {
+    if (from && !from.sliding && from.onTrack) { if (e.cancelable) e.preventDefault(); at(from.x); }
+    from = null;
+    slider.classList.remove('pressed');
+  }, { passive: false });
+  el.addEventListener('touchcancel', () => { from = null; slider.classList.remove('pressed'); });
   // Mouse and keyboard, for desktop browsers and assistive tech.
   slider.addEventListener('mousedown', (e) => {
     at(e.clientX);
@@ -936,6 +963,13 @@ function fire(b) {
 // Face ID only then.
 const ON_LIFT = new Set(['type', 'lock', 'enrol']);
 $$('button').forEach((b) => {
+  // A key in a list that scrolls acts on a tap, as the browser tells one from a swipe: taken at the touch, a
+  // swipe that starts on a switch would flip it and scroll nothing.
+  if (b.closest('#prefs .well')) {
+    b.addEventListener('touchstart', () => awake.touched(), { passive: true });
+    b.addEventListener('click', () => fire(b));
+    return;
+  }
   let delay = 0, repeat = 0;
   const stop = () => { clearTimeout(delay); clearInterval(repeat); };
   b.addEventListener('touchstart', (e) => {

@@ -52,7 +52,10 @@ import { extname, join, resolve } from 'node:path';
 // 19: the fake Mac can end a session (`__bye`: `bye`, then the socket closes); T16 checks that the page stays
 //     disconnected through coming back into sight and the network's return, and connects again on the notice's button.
 //     The gallery adds the screen for it (`ended-*`).
-export const VERIFIER_VERSION = 19;
+// 20: T6 also swipes the settings' list from a row, a slider's track and a switch: the list scrolls and nothing is
+//     set; sideways along a row slides its value; a tap flips a switch. T19: a phone the Mac knows asks for a ticket
+//     first and hands its old token over only when the Mac does not know it.
+export const VERIFIER_VERSION = 20;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -752,8 +755,44 @@ await task('T6', async () => {
   const shown = await value();
   // The sheet is not modal: the next move counts with the sheet still open.
   const after = await slowMove();
+  // The list scrolls under a finger that starts on a row, a slider's track or a switch, and such a swipe sets
+  // nothing. A finger that goes sideways along a row slides its value.
+  const state = () => page.evaluate(`(() => { const w = document.querySelector('#prefs .well'); return { top: Math.round(w.scrollTop),
+    set: [...w.querySelectorAll('output')].map((o) => o.textContent).join(' ') + ' ' + [...w.querySelectorAll('[role=switch]')].map((b) => b.getAttribute('aria-checked')).join(' ') }; })()`);
+  const centre = (selector) => page.evaluate(`(() => { const w = document.querySelector('#prefs .well').getBoundingClientRect();
+    const e = [...document.querySelectorAll(${JSON.stringify(selector)})].map((x) => x.getBoundingClientRect()).find((r) => r.top > w.top + 8 && r.bottom < w.bottom - 8);
+    return e ? { x: e.left + e.width / 2, y: e.top + e.height / 2 } : null; })()`);
+  const swipe = async (selector, dx, dy) => {
+    const from = await centre(selector);
+    if (!from) return null;
+    await page.touch('touchStart', [[from.x, from.y]]);
+    for (let i = 1; i <= 8; i++) { await sleep(16); await page.touch('touchMove', [[from.x + dx * i / 8, from.y + dy * i / 8]]); }
+    await sleep(30); await page.touch('touchEnd', []); await sleep(350);
+    return state();
+  };
+  const rest = await state();
+  const scrolls = {};
+  for (const [name, selector] of [['row', '#prefs [data-setting=acceleration] .name'], ['track', '#prefs [data-setting=scroll] [role=slider]'], ['switch', '#prefs [role=switch]']]) {
+    const top = (await state()).top;
+    const then = await swipe(selector, 0, -70);
+    scrolls[name] = then && { by: then.top - top, set: then.set === rest.set };
+  }
+  await page.evaluate(`document.querySelector('#prefs .well').scrollTop = 0`); await sleep(100);
+  const slid = await swipe('#prefs [data-setting=scroll] .name', -120, 4);
+  // A tap still flips a switch: the first one in sight, there and back.
+  const tapped = await (async () => {
+    await swipe('#prefs [data-setting=acceleration] .name', 0, -160);
+    const at = await centre('#prefs [role=switch]');
+    if (!at) return null;
+    const read = () => page.evaluate(`document.elementFromPoint(${at.x}, ${at.y}).closest('[role=switch]')?.getAttribute('aria-checked')`);
+    const flips = [await read()];
+    for (let i = 0; i < 2; i++) { await page.touch('touchStart', [[at.x, at.y]]); await sleep(40); await page.touch('touchEnd', []); await sleep(200); flips.push(await read()); }
+    return flips.join(' ');
+  })();
   await page.close();
-  return { touches, shown, before, after, ratio: round(after / before), ok: shown === '2×' && Math.abs(after / before - 2) < 0.1 };
+  const scrolled = Object.values(scrolls).every((s) => s && s.by > 20 && s.set);
+  return { touches, shown, before, after, ratio: round(after / before), scrolls, slid: slid && slid.set !== rest.set, tapped,
+    ok: shown === '2×' && Math.abs(after / before - 2) < 0.1 && scrolled && !!slid && slid.set !== rest.set && ['true false true', 'false true false'].includes(tapped) };
 });
 
 // T7: the tray. How long it stays in sight after the key closes it, whether it covers the dock on the way,
@@ -1830,9 +1869,9 @@ await task('T19', async () => {
   const ticket = (a) => a.length >= 1 && a.every((m) => /^t\d+$/.test(m.ticket) && m.standalone === false && !('token' in m));
   return { ...out,
     ok: out.link.link === 'connected' && out.link.hash === '' && out.link.paths === '/pair code,/session' && ticket(out.link.auth)
-      && out.upgrade.link === 'connected' && out.upgrade.hash === '' && out.upgrade.token === null && out.upgrade.paths === '/pair token,/session'
-      && ticket(out.upgrade.auth) && out.upgrade.again === '/pair token,/session,/session'
-      && out.old.link === 'connected' && out.old.hash === '#test-token' && out.old.paths === '/pair token' && JSON.stringify(out.old.auth) === '[{"t":"auth","token":"test-token"}]'
+      && out.upgrade.link === 'connected' && out.upgrade.hash === '' && out.upgrade.token === null && out.upgrade.paths === '/session,/pair token,/session'
+      && ticket(out.upgrade.auth) && out.upgrade.again === '/session,/pair token,/session,/session'
+      && out.old.link === 'connected' && out.old.hash === '#test-token' && out.old.paths === '/session' && JSON.stringify(out.old.auth) === '[{"t":"auth","token":"test-token"}]'
       && out.spent.welcome && out.spent.hash === '' && out.spent.says.startsWith('Dieser Code stimmt nicht')
       && out.fresh.welcome && out.fresh.link === 'unpaired' && out.fresh.auth.length === 0
       && out.fresh.field.mode === 'numeric' && out.fresh.field.auto === 'one-time-code' && out.fresh.field.cells === 6 && !!out.fresh.field.label
