@@ -207,7 +207,7 @@ enum Texts {
         static let waitingTitle = "Warte auf das iPhone"
         static let waiting = "Öffne Remotey am iPhone und tippe dort auf „Einrichten“. Das Angebot gilt zwei Minuten."
         static let doneTitle = "Eingerichtet"
-        static let done = "Ist der Mac gesperrt, entsperrt ihn „Entsperren…“ am iPhone mit Face ID."
+        static let done = "Ist der Mac gesperrt, entsperrt ihn „Mit Face ID entsperren“ am iPhone."
         static let password = "Passwort dieses Macs"
         static let passwordAgain = "Passwort noch einmal"
         static let cancel = "Abbrechen"
