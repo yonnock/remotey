@@ -9,9 +9,10 @@ struct AssistantView: View {
     var close: () -> Void = {}
 
     static let width: CGFloat = 600
-    /// Every step has this much room, so the window keeps its size from step to step. The checklist fills it;
-    /// the steps with a picture stand in its middle.
-    static let contentHeight: CGFloat = 318
+    /// The room above the footer, the same in every step so the window keeps its size. The checklist of the
+    /// first step fills it; the other steps stand in its middle as one block, so what space is left goes above
+    /// and below them, never between the sentence and what it speaks of.
+    static let bodyHeight: CGFloat = 480
 
     private var state: MacState { model.state }
 
@@ -28,20 +29,22 @@ struct AssistantView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 420)
+                    .frame(maxWidth: 440)
                     .padding(.top, 6)
                 content
-                    .frame(maxWidth: .infinity, minHeight: Self.contentHeight, alignment: flow.phase == .prepare ? .top : .center)
-                    .padding(.top, 22)
+                    .padding(.top, 24)
             }
             .padding(.horizontal, 40)
-            .padding(.top, 44)
-            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, minHeight: Self.bodyHeight)
+            // Under the title bar, which the content reaches into.
+            .padding(.top, 30)
+            .padding(.bottom, 22)
             Divider()
             footer
         }
         .frame(width: Self.width)
         .background(Color(nsColor: .windowBackgroundColor))
+        .tint(Accent.color)
     }
 
     private var title: String {
@@ -66,9 +69,10 @@ struct AssistantView: View {
     private var content: some View {
         switch flow.phase {
         case .prepare: prepare
-        case .pair: HStack(alignment: .center, spacing: 30) { codeCard; checklist }
-        case .move: HStack(alignment: .center, spacing: 30) { moveCard; checklist }
-        case .homeScreen: HStack(alignment: .center, spacing: 30) { homeCard; homeSteps }
+        // The picture and the list beside it share their top edge.
+        case .pair: HStack(alignment: .top, spacing: 32) { codeCard; checklist }
+        case .move: HStack(alignment: .top, spacing: 32) { moveCard; checklist }
+        case .homeScreen: HStack(alignment: .top, spacing: 32) { homeCard; homeSteps }
         }
     }
 
@@ -84,6 +88,7 @@ struct AssistantView: View {
             }
             loginItem
         }
+        .frame(maxWidth: .infinity)
     }
 
     private var loginItem: some View {
@@ -100,19 +105,20 @@ struct AssistantView: View {
                 .foregroundStyle(.secondary)
                 .padding(.leading, 20)
         }
-        .padding(.horizontal, 4)
+        // The box under the card's marks, as the rows above put their state first.
+        .padding(.leading, 15)
     }
 
     // MARK: Pair
 
     private var codeCard: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white)
-                RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.black.opacity(0.14), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous).fill(Color.white)
+                RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous).strokeBorder(Color.black.opacity(0.14), lineWidth: 0.5)
                 codeFace
             }
-            .frame(width: 196, height: 196)
+            .frame(width: Self.card, height: Self.card)
             digits
         }
     }
@@ -121,10 +127,9 @@ struct AssistantView: View {
     private var codeFace: some View {
         switch flow.code {
         case .open(_, let link):
-            Image(nsImage: QRCode.image(link))
-                .interpolation(.none)
-                .resizable()
-                .frame(width: 172, height: 172)
+            QRCodeView(text: link)
+                .frame(width: Self.card - 24, height: Self.card - 24)
+                .accessibilityElement()
                 .accessibilityLabel(Texts.Assistant.qrLabel)
         case .expired, .tries:
             VStack(spacing: 10) {
@@ -172,7 +177,7 @@ struct AssistantView: View {
     private var checklist: some View {
         let serve = state.row(.serve)
         let screen = state.row(.screenRecording)
-        return VStack(alignment: .leading, spacing: 11) {
+        return VStack(alignment: .leading, spacing: 14) {
             Check(state: state.facts.accessibility ? .done : .missing,
                   title: state.facts.accessibility ? Texts.Assistant.accessibilityDone : Texts.Assistant.accessibilityMissing)
             Check(state: screen.state == .ok ? .done : .missing,
@@ -186,7 +191,7 @@ struct AssistantView: View {
                   title: flow.moved ? Texts.Assistant.moveStepDone : Texts.Assistant.moveStep)
             Check(state: .pending, title: Texts.Assistant.homeStep)
         }
-        .frame(width: 270, alignment: .leading)
+        .frame(width: Self.column, alignment: .leading)
     }
 
     private var sharedNote: String? {
@@ -215,35 +220,17 @@ struct AssistantView: View {
     // MARK: Move
 
     private var moveCard: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: .controlBackgroundColor))
-            RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
-            Image(systemName: flow.moved ? "checkmark.circle.fill" : "hand.draw")
-                .font(.system(size: 72, weight: .light))
-                .foregroundStyle(flow.moved ? Color.green : Color.accentColor)
-                .contentTransition(.symbolEffect(.replace))
-                .accessibilityHidden(true)
-        }
-        .frame(width: 196, height: 196)
+        PictureCard(symbol: flow.moved ? "checkmark.circle.fill" : "hand.draw", done: flow.moved)
     }
 
     // MARK: Home Screen
 
     private var homeCard: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: .controlBackgroundColor))
-            RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
-            Image(systemName: flow.onHomeScreen ? "checkmark.circle.fill" : "apps.iphone.badge.plus")
-                .font(.system(size: 72, weight: .light))
-                .foregroundStyle(flow.onHomeScreen ? Color.green : Color.accentColor)
-                .contentTransition(.symbolEffect(.replace))
-                .accessibilityHidden(true)
-        }
-        .frame(width: 196, height: 196)
+        PictureCard(symbol: flow.onHomeScreen ? "checkmark.circle.fill" : "apps.iphone.badge.plus", done: flow.onHomeScreen)
     }
 
     private var homeSteps: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             ForEach(Array(Texts.Assistant.homeSteps.enumerated()), id: \.offset) { index, step in
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text("\(index + 1)")
@@ -255,22 +242,28 @@ struct AssistantView: View {
                     Self.instruction(step).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Divider().padding(.vertical, 2)
+            Divider().padding(.vertical, 4)
             if flow.onHomeScreen {
                 Check(state: .done, title: Texts.Assistant.homeDone)
             } else {
-                Check(state: .current, title: Texts.Assistant.homeStep,
+                Check(state: .current, title: Texts.Assistant.homeWaiting,
                       note: { if case .open(let offer, _) = flow.code { return Texts.Assistant.homeDigits(Self.grouped(offer.digits)) }; return nil }())
             }
         }
-        .frame(width: 270, alignment: .leading)
+        .frame(width: Self.column, alignment: .leading)
     }
+
+    /// The square beside the list: the code, or a picture of the step.
+    static let card: CGFloat = 196
+    static let cardRadius: CGFloat = 12
+    /// The list beside it.
+    static let column: CGFloat = 280
 
     /// A step with the symbol of the key it names in place of `{symbol}`, as Apple's instructions show it.
     static func instruction(_ step: (text: String, symbol: String)) -> Text {
         let parts = step.text.components(separatedBy: "{symbol}")
         guard parts.count == 2 else { return Text(step.text) }
-        return Text(parts[0]) + Text(Image(systemName: step.symbol)).foregroundColor(.accentColor) + Text(parts[1])
+        return Text(parts[0]) + Text(Image(systemName: step.symbol)).foregroundColor(Accent.color) + Text(parts[1])
     }
 
     // MARK: Footer
@@ -287,6 +280,8 @@ struct AssistantView: View {
                 Button(flow.phase == .homeScreen ? Texts.Assistant.done : Texts.Assistant.next) {
                     if flow.next() == nil { close() }
                 }
+                // The main action in the accent, also while the window is not the key one.
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!flow.canGoOn)
                 .help(flow.phase == .prepare && !flow.canGoOn ? Texts.Assistant.notReady : "")
@@ -295,6 +290,46 @@ struct AssistantView: View {
         .controlSize(.large)
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
+    }
+}
+
+/// The square beside a step's list with the step's symbol: in the accent until it is done, then a green tick.
+struct PictureCard: View {
+    var symbol: String
+    var done: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: AssistantView.cardRadius, style: .continuous).fill(Color(nsColor: .controlBackgroundColor))
+            RoundedRectangle(cornerRadius: AssistantView.cardRadius, style: .continuous).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+            Image(systemName: symbol)
+                .font(.system(size: 64, weight: .light))
+                .symbolRenderingMode(done ? .palette : .monochrome)
+                .foregroundStyle(done ? Color.white : Accent.color, Color.green)
+                .contentTransition(.symbolEffect(.replace))
+                .accessibilityHidden(true)
+        }
+        .frame(width: AssistantView.card, height: AssistantView.card)
+    }
+}
+
+/// The code as squares, one per module: sharp at any size and in any picture, where a scaled bitmap is not.
+struct QRCodeView: View {
+    var text: String
+
+    var body: some View {
+        let modules = QRCode.modules(text)
+        Canvas { context, size in
+            guard !modules.isEmpty else { return }
+            let side = min(size.width, size.height) / CGFloat(modules.count)
+            var path = Path()
+            for (y, row) in modules.enumerated() {
+                for (x, dark) in row.enumerated() where dark {
+                    path.addRect(CGRect(x: CGFloat(x) * side, y: CGFloat(y) * side, width: side, height: side))
+                }
+            }
+            context.fill(path, with: .color(.black))
+        }
     }
 }
 
@@ -376,6 +411,7 @@ struct Check: View {
     /// The round mark: a tick in green, a mark that asks in orange or red, a spinner, or an empty ring.
     struct Mark: View {
         var state: State
+        var size: CGFloat = 20
 
         var body: some View {
             ZStack {
@@ -383,17 +419,19 @@ struct Check: View {
                 case .done:
                     Image(systemName: "checkmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .green)
                 case .missing:
-                    Image(systemName: "exclamationmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .orange)
+                    // The system's warning, so it never reads as the orange accent.
+                    Image(systemName: "exclamationmark.triangle.fill").symbolRenderingMode(.multicolor)
+                        .font(.system(size: size * 0.85))
                 case .failed:
                     Image(systemName: "xmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .red)
                 case .current:
                     ProgressView().controlSize(.small)
                 case .pending:
-                    Circle().strokeBorder(.tertiary, lineWidth: 1.5).frame(width: 18, height: 18)
+                    Circle().strokeBorder(.tertiary, lineWidth: 1.5).frame(width: size - 2, height: size - 2)
                 }
             }
-            .font(.system(size: 20))
-            .frame(width: 22, height: 22)
+            .font(.system(size: size))
+            .frame(width: size + 2, height: size + 2)
             .accessibilityHidden(true)
         }
     }

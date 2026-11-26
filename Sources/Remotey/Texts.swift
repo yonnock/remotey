@@ -64,7 +64,8 @@ enum Texts {
         static let homeSteps = [(text: "In Safari auf {symbol} „Teilen“ tippen.", symbol: "square.and.arrow.up"),
                                 (text: "„Zum Home-Bildschirm“ {symbol} wählen.", symbol: "plus.square"),
                                 (text: "Remotey vom Home-Bildschirm öffnen.", symbol: "")]
-        static func homeDigits(_ digits: String) -> String { "Fragt die App nach einem Code, gib \(digits) ein." }
+        static let homeWaiting = "Warte auf die App …"
+        static func homeDigits(_ digits: String) -> String { "Fragt sie nach einem Code: \(digits)" }
         static let homeDone = "Remotey läuft vom Home-Bildschirm."
 
         static let startAtLogin = "Beim Anmelden starten"
@@ -116,7 +117,7 @@ enum Texts {
         static let remoteControlNote = "Aus: die iPhones bleiben gekoppelt, steuern aber nichts und sehen kein Bild."
         static let address = "Adresse im Tailnet"
         static let addressMissing = "Noch nicht freigegeben"
-        static let agent = "Remotey"
+        static let agent = "Status"
         static func listening(_ port: UInt16) -> String { "Bereit auf Port \(port) und \(port + 1)" }
         static let starting = "Startet …"
         static func failed(_ reason: String) -> String { "Nicht erreichbar: \(reason). Neuer Versuch folgt." }
@@ -201,8 +202,8 @@ enum Texts {
 
     enum FaceUnlock {
         static let title = "Mit Face ID entsperren"
-        static let intro = "Das iPhone bekommt einen Passkey, und das Passwort dieses Macs wird damit verschlüsselt abgelegt: "
-            + "ohne Face ID am iPhone ist es nicht zu lesen. Den Mac entsperrt dann, wer das iPhone entsperren kann."
+        static let intro = "Das iPhone bekommt einen Passkey, mit dem das Passwort dieses Macs verschlüsselt abgelegt "
+            + "wird. Wer das iPhone entsperren kann, kann dann auch den Mac entsperren."
         static let waitingTitle = "Warte auf das iPhone"
         static let waiting = "Öffne Remotey am iPhone und tippe dort auf „Einrichten“. Das Angebot gilt zwei Minuten."
         static let doneTitle = "Eingerichtet"

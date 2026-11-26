@@ -78,6 +78,8 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         }
         cancel.keyEquivalent = "\u{1b}"
         proceed.keyEquivalent = "\r"
+        // The main action in Remotey's accent, as in the assistant.
+        proceed.bezelColor = Accent.nsColor
         buttons.distribution = .fillEqually
         buttons.spacing = 10
         content.orientation = .vertical
@@ -123,7 +125,7 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         let done = step == .done
         let symbol = NSImage(systemSymbolName: done ? "checkmark.circle.fill" : "faceid", accessibilityDescription: nil)
         icon.image = symbol?.withSymbolConfiguration(.init(pointSize: 42, weight: .regular))
-        icon.contentTintColor = done ? .systemGreen : .controlAccentColor
+        icon.contentTintColor = done ? .systemGreen : Accent.nsColor
         switch step {
         case .password(let why):
             title.stringValue = Texts.FaceUnlock.title
