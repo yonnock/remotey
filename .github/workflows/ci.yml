@@ -4,6 +4,8 @@ on:
   push:
     branches: [main, development]
   pull_request:
+  # By hand, from the Actions tab or `gh workflow run ci.yml --ref BRANCH`.
+  workflow_dispatch:
 
 permissions:
   contents: read
