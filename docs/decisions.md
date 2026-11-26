@@ -547,6 +547,19 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       auch auf main: ein Bild der vorigen Anfrage war noch unterwegs, als der Test zu zählen begann. Er zählt jetzt
       nur Bilder der neuesten Anfrage.
 
+17. Zeiger voraus nur in Telefonform (nach dem Test am iPhone: mit Telefonform „nicht schlecht“, mit „Auto“ allein
+    „wirklich horrible, es laggt noch mehr“). Ursache: in Telefonform steht das Bild, und der Zeiger bewegt sich darin;
+    was die Seite vorauszeichnet, stimmt dann mit dem, was der Mac antwortet, überein. Folgt das Bild dem Zeiger (Zoom
+    von Hand) oder schiebt der Zeiger es an den Rändern (Auto), läuft der vorausgezeichnete Zeiger dem Bild davon, bis
+    an dessen Rand, und kommt zurück, wenn das Bild nachzieht: die Hand steuert gegen ein Bild, das einen Hin- und
+    Rückweg alt ist, und der Zeiger wandert unter ihr.
+    - Entscheidung: die Seite zeichnet den Zeiger nur voraus, solange Telefonform an ist (`LiveView.lead`, von
+      `syncView` gesetzt) und das Bild auf ein Fenster eingepasst ist. Ohne Fenster vorn schneidet der Mac auch mit
+      Telefonform um den Zeiger; dann wartet der Zeiger wie zuvor. Alles andere aus Runde 16 gilt in jedem Modus:
+      Bitrate und Größe nach der Strecke, Schärfe in Ruhe, ganze Punkte, die Antwort auf eine Bewegung an der Kante.
+    - Kein Schalter in der Oberfläche: der Modus entscheidet. Verifier v16: T15 prüft erst, dass der Zeiger ohne
+      Telefonform auf den Mac wartet (17 Bewegungen gesendet, Zeiger unverändert), dann wie bisher mit Telefonform.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -599,3 +612,5 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   Nicht gemessen: ein Mac mit mehreren Displays (die Kante zwischen zweien ist nur in Tests gerechnet), ein Telefon,
   das langsamer dekodiert, als die Strecke liefert (es sähe aus wie eine Schlange), und ein Weg zum Telefon von mehr
   als 300 ms von Anfang an (kostet einen Schritt auf die Hälfte, wie der Stillstand im Relay-Modell).
+- Runde 17: nur in Chromium und in Tests. Ob „Auto“ allein am iPhone wieder so läuft wie vor Runde 16, ist dort nicht
+  geprüft; der Zeiger nimmt denselben Weg wie vorher (der Ort aus der Meldung des Macs).
