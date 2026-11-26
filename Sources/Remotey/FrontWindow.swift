@@ -9,7 +9,8 @@ import ApplicationServices
 ///
 /// Asked to (`shape`), it also gives that window the phone's shape, so the window fills the phone's display.
 /// One window at a time: it gets the frame it had back when another one comes to the front, when `shape` is
-/// taken away and with `stop`. An agent that crashes leaves the window as it is.
+/// taken away and with `stop`. An agent that crashes leaves the window as it is, and gives it its frame back at
+/// the next start (`ShapedFrame`).
 final class FrontWindow {
     /// Which window is in front and where, and when to say so. Another window is told at once. One that
     /// moves or changes size is told once it holds still: a window dragged across the screen would
@@ -71,6 +72,8 @@ final class FrontWindow {
     }
 
     private let changed: (CGRect?, Bool) -> Void
+    /// Holds the shaped window's frame from before, for as long as it has the phone's shape.
+    private let record: URL
     private var track = Track<Element>()
     /// The window `changed` was last called for.
     private var told: Element?
@@ -93,7 +96,8 @@ final class FrontWindow {
     /// `changed` gets the frame of the window in front, in global points with the origin at the top left of
     /// the main display, whenever it is another one: at `start`, and when the app in front says so. Its second
     /// argument is false for the same window as last time, which was moved or changed its size.
-    init(changed: @escaping (CGRect?, _ another: Bool) -> Void) {
+    init(record: URL = ShapedFrame.file(), changed: @escaping (CGRect?, _ another: Bool) -> Void) {
+        self.record = record
         self.changed = changed
     }
 
@@ -107,7 +111,10 @@ final class FrontWindow {
     func stop() {
         app.stop()
         settling?.cancel()
-        if let shaped { Self.put(shaped.window.ref, at: shaped.original) }
+        if let shaped {
+            Self.put(shaped.window.ref, at: shaped.original)
+            ShapedFrame.remove(at: record)
+        }
         shaped = nil
         told = nil
         track = Track()
@@ -133,6 +140,7 @@ final class FrontWindow {
             let frame = Self.put(held.window.ref, at: held.original)
             if window == held.window { put = frame }
             shaped = nil
+            ShapedFrame.remove(at: record)
         }
         if let shape, let found, let window, found.resizable {
             let original = shaped?.original ?? found.frame
@@ -140,6 +148,11 @@ final class FrontWindow {
             if shaped?.asked != asked {
                 shaped = Shaped(window: window, original: original, asked: asked)
                 put = Self.put(found.window, at: asked)
+                var pid: pid_t = 0
+                if let put, AXUIElementGetPid(found.window, &pid) == .success {
+                    ShapedFrame(pid: pid, bundle: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+                                original: original, shaped: put).save(to: record)
+                }
             }
         }
         let step = if let window, let put { track.put(window, at: put) }
@@ -182,7 +195,7 @@ final class FrontWindow {
     /// Asks a window to take `frame`, and returns the one it has then: an app may hold a window to a
     /// smallest size, a largest one, or steps of its own.
     @discardableResult
-    private static func put(_ window: AXUIElement, at frame: CGRect) -> CGRect? {
+    static func put(_ window: AXUIElement, at frame: CGRect) -> CGRect? {
         var size = frame.size, origin = frame.origin
         guard let sizeValue = AXValueCreate(.cgSize, &size), let originValue = AXValueCreate(.cgPoint, &origin) else { return nil }
         // The size first and again after the move: a window may not grow past the edge of the display it is on.
