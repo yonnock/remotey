@@ -37,7 +37,7 @@ const de = {
   'notice.permission.title': 'Live-Bild nicht erlaubt',
   'notice.permission.text': 'Am Mac fehlt die Freigabe „Bildschirmaufnahme“ für Remotey. Dort erlauben und Remotey neu starten.',
   'notice.taken.title': 'Live-Bild auf einem anderen Gerät',
-  'notice.taken.text': 'Ein anderes Gerät zeigt jetzt das Live-Bild. Das Trackpad steuert weiter.',
+  'notice.taken.text': 'Ein anderes Gerät zeigt jetzt das Live‑Bild. Das Trackpad steuert weiter.',
   'notice.takeBack': 'Hierher holen',
 
   // The first start, without a key. A step is a list item; more steps or another way to pair go here.
@@ -129,7 +129,6 @@ const de = {
   'apps': 'Apps',
   'apps.key': 'Apps und Fenster am Mac',
   'deck.key': 'Steuerung: Medien und Tasten',
-  'mouse.rightNarrow': 'Rechts\u00adklick',
   'view': 'Live-Bild',
 
   // Typing, and the password of a locked Mac.
@@ -201,7 +200,7 @@ const de = {
   'settings.layout': 'Bedienung',
   'settings.swap': 'Maustasten rechts',
   'settings.glass': 'Durchsichtige Flächen',
-  'settings.layoutNote': 'Maustasten rechts gilt im Querformat. Ohne durchsichtige Flächen stehen die Knöpfe auf festem Grund, das spart Rechenleistung über dem Live-Bild.',
+  'settings.layoutNote': 'Maustasten rechts gilt im Querformat. Ohne durchsichtige Flächen stehen die Knöpfe auf festem Grund, das spart Rechenleistung über dem Live‑Bild.',
   'settings.help': 'Hilfe',
   'settings.tour': 'Gesten-Tour',
 
@@ -356,7 +355,6 @@ const en = {
   'apps': 'Apps',
   'apps.key': 'Apps and windows on the Mac',
   'deck.key': 'Controls: media and keys',
-  'mouse.rightNarrow': 'Right-click',
   'view': 'Live view',
 
   'typebar': 'Special keys',
