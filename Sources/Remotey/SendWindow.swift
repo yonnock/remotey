@@ -74,11 +74,15 @@ struct SendWindow {
             + (draining ? ", running empty" : "")
     }
 
-    /// For a new viewer: the old one may never answer. Numbers go on, so a late answer of the old one fits no new picture.
-    mutating func reset() {
+    /// For a new viewer, or a decoder that starts over: the pictures under way may never be answered. Numbers go
+    /// on, so a late answer fits no new picture. Returns how many pictures were under way.
+    @discardableResult
+    mutating func reset() -> Int {
+        let dropped = underWay.count
         underWay.removeAll()
         fastestAnswer = .infinity
         draining = false
         drained = false
+        return dropped
     }
 }
