@@ -75,6 +75,12 @@ jobs:
           node scripts/ui-verify.mjs --json=ui-verify.json --shots=ui-shots > /dev/null
           node .github/check-ui-verify.mjs ui-verify.json
 
+      - name: Pairing end to end
+        if: success() || steps.swift.outcome == 'failure' || steps.ui.outcome == 'failure'
+        # The agent headless on a free port (no status item, no prompts, input not posted), the real page in
+        # chrome-headless-shell: pairs by code, connects with a ticket, a finger on the pad arrives as moves.
+        run: node scripts/pairing-e2e.mjs --agent="$(swift build --show-bin-path)/Remotey"
+
       - name: Keep logs and pictures
         if: failure()
         uses: actions/upload-artifact@v4
