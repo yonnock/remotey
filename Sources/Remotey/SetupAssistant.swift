@@ -15,7 +15,7 @@ final class SetupAssistant {
         var moved: () -> Bool
     }
 
-    /// What the actions do outside the model. The windows supply pairing and the restart.
+    /// What the actions do outside the model. The windows supply pairing.
     struct Effects {
         var open: (URL) -> Void = { NSWorkspace.shared.open($0) }
         var copy: (String) -> Void = {
@@ -23,7 +23,6 @@ final class SetupAssistant {
             NSPasteboard.general.setString($0, forType: .string)
         }
         var showPairing: () -> Void
-        var restart: () -> Void
         var askForAccessibility: () -> Void = Permissions.askForAccessibility
         var askForScreenRecording: () -> Void = Permissions.askForScreenRecording
         var setLoginItem: (Bool) throws -> Void = LoginItem.set
@@ -95,6 +94,13 @@ final class SetupAssistant {
 
     /// One look now. A look at Tailscale that is still out is not started twice.
     func refresh() {
+        refreshLocal()
+        lookAtTailscale()
+    }
+
+    /// Only the reads that are cheap on the main thread, not Tailscale: for the menu bar symbol, which follows
+    /// the permissions while nothing watches.
+    func refreshLocal() {
         var next = facts
         next.accessibility = probes.accessibility()
         next.screenRecording = probes.screenRecording()
@@ -102,7 +108,6 @@ final class SetupAssistant {
         next.paired = probes.paired()
         next.moved = probes.moved()
         facts = next
-        lookAtTailscale()
     }
 
     /// Looks once and says whether the assistant should open by itself.
@@ -209,8 +214,6 @@ final class SetupAssistant {
             facts.loginItem = probes.loginItem()
         case .openLoginItems:
             effects.openLoginItems()
-        case .restart:
-            effects.restart()
         }
     }
 

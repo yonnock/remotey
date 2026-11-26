@@ -54,7 +54,6 @@ enum Setup {
         case showPairing
         case setLoginItem(Bool)
         case openLoginItems
-        case restart
 
         var title: String {
             switch self {
@@ -71,7 +70,6 @@ enum Setup {
             case .showPairing: return "QR-Code zeigen …"
             case .setLoginItem(let on): return on ? "Einschalten" : "Ausschalten"
             case .openLoginItems: return "Anmeldeobjekte öffnen"
-            case .restart: return "Remotey neu starten"
             }
         }
     }
@@ -151,12 +149,8 @@ enum Setup {
     }
 
     private static func screenRecording(_ facts: Facts) -> Row {
-        let permission = facts.screenRecording
-        if permission.needsRestart {
-            return Row(item: .screenRecording, state: .actionNeeded,
-                       detail: "Erlaubt. Das Live-Bild startet nach einem Neustart von Remotey.", action: .restart)
-        }
-        if permission.granted {
+        // The server reads the grant the same way and starts the live view without a restart.
+        if facts.screenRecording.granted {
             return Row(item: .screenRecording, state: .ok, detail: "Das iPhone kann den Bildschirm zeigen.")
         }
         return Row(item: .screenRecording, state: .actionNeeded,

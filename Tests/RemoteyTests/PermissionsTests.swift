@@ -30,12 +30,6 @@ final class PermissionsTests: XCTestCase {
         XCTAssertNil(visible([window(1, "Remotey"), window(9, "Fenster")]))
     }
 
-    func testARestartIsNeededOnlyWhenTheGrantCameAfterTheStart() {
-        XCTAssertTrue(Permissions.ScreenRecording(granted: true, preflight: false).needsRestart)
-        XCTAssertFalse(Permissions.ScreenRecording(granted: true, preflight: true).needsRestart)
-        XCTAssertFalse(Permissions.ScreenRecording(granted: false, preflight: false).needsRestart)
-    }
-
     func testTheLoginItemHasFourStates() {
         XCTAssertEqual(LoginItem.state(.enabled), .on)
         XCTAssertEqual(LoginItem.state(.notRegistered), .off)

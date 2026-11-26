@@ -20,11 +20,8 @@ enum Permissions {
         /// What the switch in System Settings says now.
         var granted: Bool
         /// What `CGPreflightScreenCaptureAccess` says in this process. It keeps its first answer until the app
-        /// restarts, and Server.swift asks it before the live view starts.
+        /// restarts, so it only counts where no window tells.
         var preflight: Bool
-
-        /// Allowed after the app started: the live view stays refused until a restart.
-        var needsRestart: Bool { granted && !preflight }
     }
 
     /// Without the permission, the window server leaves out the titles of other apps' windows; with it, every

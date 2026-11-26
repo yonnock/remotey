@@ -59,15 +59,16 @@ final class SetupTests: XCTestCase {
         XCTAssertNil(Setup.row(.accessibility, Self.ready()).action, "a green row has nothing to do")
     }
 
-    func testScreenRecordingAsksOnceThenOpensSettingsAndSaysWhenARestartIsDue() {
+    func testScreenRecordingAsksOnceThenOpensSettingsAndCountsAGrantWithoutARestart() {
         XCTAssertEqual(row(.screenRecording) { $0.screenRecording = .init(granted: false, preflight: false) }.action, .askForScreenRecording)
         XCTAssertEqual(row(.screenRecording) {
             $0.screenRecording = .init(granted: false, preflight: false)
             $0.askedForScreenRecording = true
         }.action, .openSettings(Permissions.screenRecordingSettings))
+        // Granted after the start: the server reads it the same way and starts the live view.
         let late = row(.screenRecording) { $0.screenRecording = .init(granted: true, preflight: false) }
-        XCTAssertEqual(late.state, .actionNeeded)
-        XCTAssertEqual(late.action, .restart)
+        XCTAssertEqual(late.state, .ok)
+        XCTAssertNil(late.action)
     }
 
     func testOnlyRequiredRowsBringTheAssistantBack() {
