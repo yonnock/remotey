@@ -74,6 +74,8 @@ enum Wire {
         var win: Int?
         var fit: String?
         var shape: Double?
+        /// What the page's controls cover of the display element: top, right, bottom, left.
+        var inset: [Double]?
         var id: Int64?
         // Of a passkey, each base64url: its id, its public key, the authenticator's and the browser's data,
         // the signature, the secret, the secret for the next salt.
@@ -146,8 +148,10 @@ enum Wire {
     private static func view(_ m: Fields) -> ScreenView.Request? {
         guard m.on == true, let width = m.w, let height = m.h, let zoom = m.zoom, let pixelRatio = m.dpr,
               let codec = m.codec, let fps = m.fps else { return nil }
+        // Anything but four margins covers nothing; `Request` bounds each.
+        let inset = m.inset.flatMap { $0.count == 4 ? ScreenView.Inset(top: $0[0], right: $0[1], bottom: $0[2], left: $0[3]) : nil }
         return ScreenView.Request(width: width, height: height, zoom: zoom, pixelRatio: pixelRatio, h264: codec == "h264",
-                                  fps: fps, fit: m.fit == "window", shape: m.shape, number: m.v ?? 0)
+                                  fps: fps, fit: m.fit == "window", shape: m.shape, number: m.v ?? 0, inset: inset ?? .zero)
     }
 
     /// The token was right. `page` is `Web.version`: a page that was loaded from an older agent reloads itself.

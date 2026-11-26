@@ -53,10 +53,20 @@ struct LiveUpdate {
 ///
 /// `@unchecked Sendable`: state is confined to the main queue or the frame queue, as marked below.
 final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
+    /// The margins of the phone's display element that the page's controls cover, in CSS pixels.
+    struct Inset: Equatable {
+        var top = 0.0, right = 0.0, bottom = 0.0, left = 0.0
+        static let zero = Inset()
+    }
+
     struct Request: Equatable {
         /// Size of the phone's display element in CSS pixels; the captured region gets the same aspect.
         let width: Double
         let height: Double
+        /// What the page's controls cover of it. The view is cut for the rest, as if that were the whole
+        /// element, and then grown by these margins: what lies under the controls is picture as well, but
+        /// nothing the view keeps in sight is only there.
+        let inset: Inset
         /// 1 = one Mac point per CSS pixel, 2 = twice as large on the phone.
         let zoom: Double
         let pixelRatio: Double
@@ -74,10 +84,18 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
 
         /// Nil for a size no phone display has.
         init?(width: Double, height: Double, zoom: Double, pixelRatio: Double, h264: Bool, fps: Int, fit: Bool = false,
-              shape: Double? = nil, number: UInt32 = 0) {
+              shape: Double? = nil, number: UInt32 = 0, inset: Inset = .zero) {
             guard (50...4000).contains(width), (50...4000).contains(height) else { return nil }
             self.width = width
             self.height = height
+            // The rest keeps at least the size of the smallest element; margins that leave less shrink alike.
+            func sides(_ a: Double, _ b: Double, of length: Double) -> (Double, Double) {
+                let a = a.isFinite ? max(a, 0) : 0, b = b.isFinite ? max(b, 0) : 0, room = length - 50
+                guard a + b > room else { return (a, b) }
+                return (a * room / (a + b), b * room / (a + b))
+            }
+            let (left, right) = sides(inset.left, inset.right, of: width), (top, bottom) = sides(inset.top, inset.bottom, of: height)
+            self.inset = Inset(top: top, right: right, bottom: bottom, left: left)
             // How far out the view really goes is set by the displays (see `region`); this only bounds the arithmetic.
             self.zoom = min(max(zoom, 0.02), 4)
             self.pixelRatio = min(max(pixelRatio, 1), ScreenView.maxPixelRatio)
@@ -86,6 +104,23 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             self.fit = fit
             self.shape = fit ? shape.map { min(max($0, 0.05), ScreenView.maxFitZoom) } : nil
             self.number = number
+        }
+
+        /// The request for the part of the element no control covers, which everything is worked out for.
+        var inner: Request {
+            guard inset != .zero else { return self }
+            // `max`: margins shrunk to leave 50 may leave a hair less after rounding.
+            return Request(width: max(50, width - inset.left - inset.right), height: max(50, height - inset.top - inset.bottom), zoom: zoom,
+                           pixelRatio: pixelRatio, h264: h264, fps: Int(framesPerSecond), fit: fit, shape: shape, number: number)!
+        }
+
+        /// The view of the whole element, for `view`, the view of the part no control covers: grown by the
+        /// covered margins, at its scale. Beyond the desktop that is black, as space no display covers is.
+        func outer(_ view: CGRect) -> CGRect {
+            guard inset != .zero else { return view }
+            let inner = self.inner, x = view.width / inner.width, y = view.height / inner.height
+            return CGRect(x: view.minX - inset.left * x, y: view.minY - inset.top * y,
+                          width: view.width + (inset.left + inset.right) * x, height: view.height + (inset.top + inset.bottom) * y)
         }
     }
 
@@ -104,10 +139,10 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let revision: UInt64
         let framesPerSecond: Int32
 
-        /// The view that shows `point`: the pointer, or the text caret while the phone types.
+        /// The view that shows `point`, the pointer or the text caret while the phone types, in the part of
+        /// the element no control covers.
         func view(around point: CGPoint) -> CGRect {
-            if let window { return ScreenView.fitted(request, displays: displays.map(\.bounds), to: window, holding: point) }
-            return ScreenView.viewport(request, displays: displays.map(\.bounds), around: point)
+            ScreenView.inner(request, displays: displays.map(\.bounds), window: window, around: point)
         }
     }
 
@@ -405,7 +440,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     /// window takes the phone's shape meanwhile, and gets its frame back with the end of that.
     private func watchWindow() {
         if let request, request.fit, !locked {
-            frontWindow.shape = request.shape.map { CGSize(width: request.width / $0, height: request.height / $0) }
+            frontWindow.shape = Self.shape(for: request)
             if !frontWindow.isWatching { frontWindow.start() }
         } else {
             if frontWindow.isWatching {
@@ -414,6 +449,13 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             }
             frontWindow.shape = nil
         }
+    }
+
+    /// The size in points a window in front takes for `request`: the part of the element no control covers,
+    /// at the request's zoom. Nil: windows stay as they are.
+    static func shape(for request: Request) -> CGSize? {
+        let inner = request.inner
+        return request.shape.map { CGSize(width: inner.width / $0, height: inner.height / $0) }
     }
 
     private func setWindow(_ frame: CGRect?) {
@@ -487,7 +529,8 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let displays = Self.displays()
         guard !displays.isEmpty else { throw DisplayUnavailable() }
         let window = fitTo
-        let regionWidth = Self.region(request, fitting: displays.map(\.bounds), window: window).width
+        let inner = Self.region(request.inner, fitting: displays.map(\.bounds), window: window)
+        let regionWidth = request.outer(CGRect(origin: .zero, size: inner)).width
         let fullWidth = min(regionWidth * displays.map(\.backingScale).max()!,
                             request.width * request.pixelRatio, Self.maxOutputWidth)
         // The size for this view's pixels: a smaller view may be sent whole with the bit rate that was too
@@ -688,6 +731,19 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
                       width: size.width, height: size.height)
     }
 
+    /// The view sent for `point`, in global points: worked out for the part of the element no control covers,
+    /// then grown to the whole element.
+    static func view(_ request: Request, displays: [CGRect], window: CGRect?, around point: CGPoint) -> CGRect {
+        request.outer(inner(request, displays: displays, window: window, around: point))
+    }
+
+    /// The view for `point` in the part of the element no control covers: fitted to `window`, or around the point.
+    static func inner(_ request: Request, displays: [CGRect], window: CGRect?, around point: CGPoint) -> CGRect {
+        let inner = request.inner
+        if let window { return fitted(inner, displays: displays, to: window, holding: point) }
+        return viewport(inner, displays: displays, around: point)
+    }
+
     /// The region that shows `window` whole, in global points: as large as the pad's aspect allows, so the
     /// window fills the pad's width or its height, whichever limits.
     ///
@@ -717,13 +773,14 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     // MARK: Frames (frame queue)
 
     /// The view and the point it is cut around: the text caret while the phone types, else the pointer.
+    /// Worked out for the part no control covers; what is sent is the whole element's.
     private func framing(_ geometry: Geometry, cursor: CGPoint) -> (view: CGRect, focus: CGPoint, text: Bool) {
         if let text, let view = Self.textView(for: text, held: textView, around: geometry.view(around:)) {
             textView = view
-            return (view, CGPoint(x: text.rect.midX, y: text.rect.midY), true)
+            return (geometry.request.outer(view), CGPoint(x: text.rect.midX, y: text.rect.midY), true)
         }
         textView = nil
-        return (geometry.view(around: cursor), cursor, false)
+        return (geometry.request.outer(geometry.view(around: cursor)), cursor, false)
     }
 
     /// The view for typed text, or nil if the text gives no place to show (then the pointer's view is shown).

@@ -204,6 +204,12 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(try shaped(#""fit":"window","shape":9"#)?.shape, 2, "at twice its size at most, as a fitted window")
         XCTAssertEqual(try shaped(#""fit":"window","shape":0"#)?.shape, 0.05)
         XCTAssertNil(try shaped(#""shape":0.6"#)?.shape, "only a window the view is fitted to")
+        XCTAssertEqual(try shaped(#""inset":[60,0,120,8.5]"#)?.inset, ScreenView.Inset(top: 60, right: 0, bottom: 120, left: 8.5))
+        XCTAssertEqual(try shaped(#""v":4"#)?.inset, .zero, "a page that sends none")
+        for odd in [#""inset":[60,0,120]"#, #""inset":[]"#, #""inset":[1,2,3,4,5]"#] {
+            XCTAssertEqual(try shaped(odd)?.inset, .zero, odd)
+        }
+        XCTAssertEqual(try shaped(#""inset":[-60,0,9000,0]"#)?.inset, ScreenView.Inset(top: 0, right: 0, bottom: 794, left: 0), "bounded")
         for off in [#"{"t":"view","on":false}"#, #"{"t":"view","on":true,"w":390,"h":844}"#,
                     on.replacingOccurrences(of: "390", with: "5")] {
             guard case .view(nil) = try command(off) else { return XCTFail(off) }
