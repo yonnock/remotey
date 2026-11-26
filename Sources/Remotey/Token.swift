@@ -36,18 +36,22 @@ enum Token {
         return token
     }
 
-    private static func make() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
+    private static func make() -> String { random() }
+
+    /// `count` random bytes, base64url without padding: tokens, device keys, codes and tickets.
+    static func random(_ count: Int = 32) -> String {
+        var bytes = [UInt8](repeating: 0, count: count)
         precondition(SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess)
-        return Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        return Data(bytes).base64URL
     }
 
-    /// Written beside the file and renamed over it, so the file holds the old token or the new one, never a part.
-    /// The new file is 0600 from the start.
     private static func save(_ token: String, to file: URL) throws {
+        try write(Data(token.utf8), to: file)
+    }
+
+    /// Written beside the file and renamed over it, so the file holds the old content or the new one, never a part.
+    /// The new file is 0600 from the start.
+    static func write(_ data: Data, to file: URL) throws {
         let fm = FileManager.default
         let directory = file.deletingLastPathComponent()
         do {
@@ -56,7 +60,7 @@ enum Token {
             throw WriteFailure(description: "\(directory.path): \(error.localizedDescription)")
         }
         let temporary = directory.appendingPathComponent(".\(file.lastPathComponent)-\(UUID().uuidString)")
-        guard fm.createFile(atPath: temporary.path, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600]) else {
+        guard fm.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
             throw WriteFailure(description: "\(directory.path) ist nicht beschreibbar")
         }
         guard rename(temporary.path, file.path) == 0 else {
