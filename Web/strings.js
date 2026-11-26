@@ -43,7 +43,7 @@ const de = {
   // The first start, without a key. A step is a list item; more steps or another way to pair go here.
   'welcome.title': 'Mit dem Mac verbinden',
   'welcome.text': 'Remotey steuert deinen Mac über dein Tailnet.',
-  'welcome.steps': ['Remotey am Mac öffnen', 'Im Menü „iPhone koppeln (QR‑Code)…“ wählen', 'Den Code mit der Kamera scannen'],
+  'welcome.steps': ['Remotey am Mac öffnen', 'Im Menü „iPhone hinzufügen …“ wählen', 'Den Code mit der Kamera scannen'],
   'welcome.note': 'Beide Geräte brauchen Tailscale mit demselben Konto.',
   'welcome.back': 'Zurück',
 
@@ -163,7 +163,7 @@ const de = {
   'notice.paused.title': 'Fernsteuerung pausiert',
   'notice.paused.text': 'Am Mac wurde Remotey angehalten. Sobald es dort weitergeht, steuert dieses iPhone wieder.',
   'notice.revoked.title': 'Dieses iPhone wurde getrennt',
-  'notice.revoked.text': 'Am Mac wurde die Kopplung dieses iPhones aufgehoben. Mit einem neuen Code wieder koppeln.',
+  'notice.revoked.text': 'Am Mac wurde die Kopplung aufgehoben. Dort im Menü „iPhone hinzufügen …“ wählen, um neu zu koppeln.',
   'notice.pair': 'Neu koppeln',
   'meter.short': (fps, ms) => `${fps} fps · ${ms === null ? '–' : ms} ms`,
 
@@ -230,7 +230,7 @@ const de = {
   'pair.busy': 'Kopple…',
   'pair.done': 'Gekoppelt',
   'pair.code': 'Dieser Code stimmt nicht oder ist abgelaufen. Der Mac zeigt den gültigen.',
-  'pair.closed': 'Am Mac ist gerade keine Kopplung offen. Dort im Menü „iPhone koppeln (QR‑Code)…“ wählen.',
+  'pair.closed': 'Am Mac ist gerade keine Kopplung offen. Dort im Menü „iPhone hinzufügen …“ wählen.',
   'pair.tries': 'Zu viele Versuche. Am Mac einen neuen Code anzeigen lassen und es in einer Minute erneut versuchen.',
   'pair.offline': 'Der Mac antwortet nicht. Ist Tailscale auf diesem iPhone verbunden?',
   'pair.old': 'Dieser Mac kennt noch keine Ziffern. Bitte den QR‑Code scannen.',
@@ -275,7 +275,7 @@ const en = {
 
   'welcome.title': 'Connect to Your Mac',
   'welcome.text': 'Remotey controls your Mac through your tailnet.',
-  'welcome.steps': ['Open Remotey on the Mac', 'Choose “iPhone koppeln (QR‑Code)…” in its menu', 'Scan the code with the camera'],
+  'welcome.steps': ['Open Remotey on the Mac', 'Choose “iPhone hinzufügen …” in its menu', 'Scan the code with the camera'],
   'welcome.note': 'Both devices need Tailscale with the same account.',
   'welcome.back': 'Back',
 
@@ -388,7 +388,7 @@ const en = {
   'notice.paused.title': 'Remote control paused',
   'notice.paused.text': 'Remotey was paused on the Mac. As soon as it resumes there, this iPhone is back in control.',
   'notice.revoked.title': 'This iPhone was removed',
-  'notice.revoked.text': 'The pairing of this iPhone was removed on the Mac. Pair again with a new code.',
+  'notice.revoked.text': 'The pairing was removed on the Mac. Choose “iPhone hinzufügen …” in its menu to pair again.',
   'notice.pair': 'Pair Again',
   'meter.short': (fps, ms) => `${fps} fps · ${ms === null ? '–' : ms} ms`,
 
@@ -450,7 +450,7 @@ const en = {
   'pair.busy': 'Pairing…',
   'pair.done': 'Paired',
   'pair.code': 'This code is wrong or has expired. The Mac shows the current one.',
-  'pair.closed': 'The Mac isn’t pairing right now. Choose “iPhone koppeln (QR‑Code)…” in its menu.',
+  'pair.closed': 'The Mac isn’t pairing right now. Choose “iPhone hinzufügen …” in its menu there.',
   'pair.tries': 'Too many tries. Show a new code on the Mac and try again in a minute.',
   'pair.offline': 'The Mac doesn’t answer. Is Tailscale connected on this iPhone?',
   'pair.old': 'This Mac doesn’t take digits yet. Please scan the QR code.',
