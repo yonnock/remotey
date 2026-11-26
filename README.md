@@ -176,7 +176,7 @@ Name the test files as above: `node --test scripts/` runs them on Node 26 but fi
 
 `scripts/mac-pictures.sh` draws with made-up data and does not start the agent. Pictures drawn off screen show inactive windows (grey switches and traffic lights) and the menu's material as a flat colour.
 
-CI (`.github/workflows/ci.yml`) runs on a hosted Mac (`macos-26`, Node 24) for every pull request and every push to `main` and `development`: `swift build --build-tests`, `swift test`, the Node tests, `ui-verify.mjs` with its check, and `pairing-e2e.mjs`. A hosted Mac has no Accessibility and no Screen Recording permission; no test needs them. On a failure it keeps the Swift log, the report and the pictures.
+CI (`.github/workflows/ci.yml`) runs on a hosted Mac (`macos-26`, Node 24) for every pull request and every push to `main`: `swift build --build-tests`, `swift test`, the Node tests, `ui-verify.mjs` with its check, and `pairing-e2e.mjs`. A hosted Mac has no Accessibility and no Screen Recording permission; no test needs them. On a failure it keeps the Swift log, the report and the pictures.
 
 The scripts in `scripts/live/` act on this Mac through its running agent: they move the pointer, bring windows forward or lock the Mac. Each one does nothing unless the command line carries `--live`, and `lock.mjs` also `--lock-mac`. They authenticate with the old shared token, so they need "Web-Zugang ohne Gerätebindung" on:
 
