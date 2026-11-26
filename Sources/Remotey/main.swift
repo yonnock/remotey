@@ -1,7 +1,9 @@
 import AppKit
 
 let app = NSApplication.shared
-let delegate = AppDelegate()
+// Held here: the application keeps only a weak reference to its delegate.
+let delegate: NSApplicationDelegate = Headless.on ? Headless() : AppDelegate()
 app.delegate = delegate
-app.setActivationPolicy(.accessory)
+// Headless: no Dock icon, no menu bar, never the active app.
+app.setActivationPolicy(Headless.on ? .prohibited : .accessory)
 app.run()

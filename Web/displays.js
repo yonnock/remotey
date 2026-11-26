@@ -2,6 +2,8 @@
 // one, and the live view follows it there. Sources/Remotey/Displays.swift makes the list and Wire.swift writes
 // it; this module reads the `displays` message, says what a tap asks the Mac for (`display`) and draws the map.
 
+import { t } from './strings.js';
+
 const isDisplay = (d) => Number.isInteger(d?.id) && typeof d.name === 'string'
   && [d.x, d.y, d.w, d.h].every(Number.isFinite) && d.w > 0 && d.h > 0;
 /** The list of a `displays` message, or null if it has another shape. */
@@ -10,7 +12,7 @@ export const readDisplays = (message) => (Array.isArray(message?.list) && messag
 export const tapDisplay = (display) => ({ t: 'display', id: display.id });
 
 /** What a screen reader says for a tile. */
-export const displayLabel = (display) => `Display ${display.name}${display.pointer ? ', mit dem Zeiger' : ''}`;
+export const displayLabel = (display) => t('display.label', display.name, display.pointer);
 
 /**
  * The arrangement as a map: `ratio` is its width over its height, and each tile's place is given in shares

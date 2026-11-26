@@ -13,7 +13,7 @@ final class ServerTests: XCTestCase {
         (httpPort, wsPort) = (Self.nextPort, Self.nextPort + 1)
         Self.nextPort += 2
         server = Server(token: "test-token-test-token-test-token-test", input: Input(),
-                        port: httpPort, pendingTimeout: 0.5)
+                        port: httpPort, pendingTimeout: 0.5, devices: .temporary(), permissions: { (true, true) })
         try server.start()
         // Listeners come up asynchronously. NWConnection waits for them, URLSession would not.
         let probes = [idle(port: httpPort), idle(port: wsPort)]
@@ -26,6 +26,11 @@ final class ServerTests: XCTestCase {
     override func tearDown() {
         server.stop()
         server = nil
+    }
+
+    override class func tearDown() {
+        Devices.removeTemporaries()
+        super.tearDown()
     }
 
     /// A TCP connection that sends nothing; `closed` is fulfilled once the server hangs up.
@@ -73,25 +78,31 @@ final class ServerTests: XCTestCase {
         bad.resume()
         try await bad.send(.string(#"{"t":"auth","token":"wrong"}"#))
         let denied = text(try await bad.receive())
-        XCTAssertEqual(denied, #"{"t":"denied"}"#)
+        XCTAssertEqual(denied, #"{"t":"denied","why":"token"}"#)
 
         let good = URLSession.shared.webSocketTask(with: url)
         good.resume()
         try await good.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
         let ok = text(try await good.receive())
         XCTAssertTrue(ok.hasPrefix(#"{"t":"ok""#), ok)
-        // Read, so that the pong below is not held up behind it.
+        let mac = text(try await good.receive())
+        XCTAssertTrue(mac.hasPrefix(#"{"t":"mac""#), mac)
         let lock = text(try await good.receive())
         XCTAssertTrue(lock.hasPrefix(#"{"t":"lock""#), lock)
         try await Task.sleep(for: .seconds(1))
-        // Still connected: an unknown message is ignored, a closed socket would fail the ping.
+        // Still connected: an unknown message is ignored, and the agent answers the page's own ping. The
+        // socket's ping frame is not asked: URLSession holds its pong back behind any message not yet read.
         try await good.send(.string(#"{"t":"noop"}"#))
-        let alive = expectation(description: "pong")
-        good.sendPing { error in
-            XCTAssertNil(error)
-            alive.fulfill()
+        try await good.send(.string(#"{"t":"ping"}"#))
+        let patience = Task {
+            try await Task.sleep(for: .seconds(5))
+            good.cancel(with: .goingAway, reason: nil)
         }
-        await fulfillment(of: [alive], timeout: 2)
+        defer { patience.cancel() }
+        var heard: [String] = []
+        while heard.last != Wire.pong {
+            do { heard.append(text(try await good.receive())) } catch { return XCTFail("no pong after \(heard): \(error)") }
+        }
         good.cancel(with: .goingAway, reason: nil)
     }
 
@@ -107,6 +118,8 @@ final class ServerTests: XCTestCase {
         try await socket.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
         let ok = try await next()
         XCTAssertEqual(ok["t"] as? String, "ok")
+        let mac = try await next()
+        XCTAssertEqual(mac["t"] as? String, "mac")
         // Whether the Mac is locked follows at once, so the page knows what its field is for.
         let lock = try await next()
         XCTAssertEqual(lock["t"] as? String, "lock")
@@ -116,8 +129,9 @@ final class ServerTests: XCTestCase {
         let first = try await next()
         XCTAssertEqual(first["t"] as? String, "apps")
         let apps = try XCTUnwrap(first["list"] as? [[String: Any]])
-        // Finder always runs in a session with a Dock.
-        XCTAssertTrue(apps.contains { $0["icon"] as? String == "com.apple.finder" }, "\(apps.compactMap { $0["name"] })")
+        // Finder runs in every session with a Dock; a machine without one lists no apps.
+        let finder = NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.apple.finder" }
+        XCTAssertEqual(apps.contains { $0["icon"] as? String == "com.apple.finder" }, finder, "\(apps.compactMap { $0["name"] })")
         for app in apps {
             XCTAssertGreaterThan(try XCTUnwrap(app["pid"] as? Int), 0)
             XCTAssertFalse(try XCTUnwrap(app["name"] as? String).isEmpty)
@@ -141,7 +155,7 @@ final class ServerTests: XCTestCase {
         XCTAssertEqual(answer["t"] as? String, "displays")
         let displays = try XCTUnwrap(answer["list"] as? [[String: Any]])
         XCTAssertEqual(displays.count, NSScreen.screens.count)
-        XCTAssertEqual(displays.filter { $0["pointer"] as? Bool == true }.count, 1)
+        XCTAssertEqual(displays.filter { $0["pointer"] as? Bool == true }.count, displays.isEmpty ? 0 : 1)
         XCTAssertTrue(displays.allSatisfy { ($0["w"] as? Double ?? 0) > 0 && ($0["name"] as? String)?.isEmpty == false })
 
         // Asked again, the list comes without its icons: the next message is the answer to what follows it.
@@ -150,5 +164,115 @@ final class ServerTests: XCTestCase {
             let again = try await next()
             XCTAssertEqual(again["t"] as? String, "apps")
         }
+
+        // After a reconnect the page names the icons it kept: only the one it lacks comes. Before, all came again.
+        guard let lacking = icons.sorted().first else { return }
+        let later = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(wsPort)/ws")!)
+        later.resume()
+        defer { later.cancel(with: .goingAway, reason: nil) }
+        func nextLater() async throws -> [String: Any] {
+            guard case .string(let text) = try await later.receive() else { return [:] }
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        }
+        try await later.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
+        _ = try await nextLater() // ok
+        _ = try await nextLater() // mac
+        _ = try await nextLater() // lock
+        let have = try JSONSerialization.data(withJSONObject: Array(icons.subtracting([lacking])))
+        try await later.send(.string(#"{"t":"apps","have":\#(String(decoding: have, as: UTF8.self))}"#))
+        let list = try await nextLater()
+        XCTAssertEqual(list["t"] as? String, "apps")
+        let only = try await nextLater()
+        XCTAssertEqual(only["t"] as? String, "icon")
+        XCTAssertEqual(only["id"] as? String, lacking)
+        try await later.send(.string(#"{"t":"apps"}"#))
+        let after = try await nextLater()
+        XCTAssertEqual(after["t"] as? String, "apps", "no other icon came between")
+    }
+
+    // MARK: Health
+
+    /// A port in use failed silently before: the listener's state said so, and nobody read it. The menu offered a
+    /// QR code for an agent that listened on nothing.
+    @MainActor
+    func testASecondServerOnTheSamePortsSaysItFailedAndTriesAgain() async throws {
+        XCTAssertEqual(server.health, .listening)
+        var heard: [Server.Health] = []
+        let second = Server(token: "test-token-test-token-test-token-test", input: Input(), port: httpPort, devices: .temporary(),
+                            timing: Server.Timing(retry: Backoff(first: 0.2, longest: 0.2)), screen: { _, _ in FakeScreen() })
+        second.healthChanged = { heard.append($0) }
+        try second.start()
+        defer { second.stop() }
+        let failed = await eventually { if case .failed = second.health { true } else { false } }
+        XCTAssertTrue(failed)
+        guard case .failed(let reason) = second.health else { return XCTFail("\(second.health)") }
+        XCTAssertTrue(reason.contains("\(httpPort)") || reason.contains("\(wsPort)"), reason)
+        XCTAssertEqual(server.health, .listening, "the first one keeps its ports")
+        // The ports come free: the next try takes them.
+        server.stop()
+        let recovered = await eventually(3) { second.health == .listening }
+        XCTAssertTrue(recovered)
+        guard case .failed = heard.first else { return XCTFail("\(heard)") }
+        XCTAssertTrue(heard.contains(.starting), "the next try")
+        XCTAssertEqual(heard.last, .listening)
+    }
+
+    // MARK: Where a request comes from
+
+    /// What the HTTP port answers a request with this `Host`, as a browser would send it.
+    private func status(host: String?) throws -> String {
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: httpPort)!, using: .tcp)
+        let answered = expectation(description: "answer")
+        var head = ""
+        connection.stateUpdateHandler = { if case .ready = $0 {
+            let request = "GET / HTTP/1.1\r\n" + (host.map { "Host: \($0)\r\n" } ?? "") + "\r\n"
+            connection.send(content: Data(request.utf8), completion: .idempotent)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 64) { data, _, _, _ in
+                head = String(decoding: data ?? Data(), as: UTF8.self)
+                answered.fulfill()
+            }
+        } }
+        connection.start(queue: .main)
+        wait(for: [answered], timeout: 2)
+        connection.cancel()
+        return String(head.split(separator: "\r\n").first ?? "")
+    }
+
+    func testThePageIsServedOnlyUnderItsOwnNames() throws {
+        XCTAssertEqual(try status(host: "127.0.0.1:\(httpPort)"), "HTTP/1.1 200 OK")
+        XCTAssertEqual(try status(host: "localhost:\(httpPort)"), "HTTP/1.1 200 OK")
+        XCTAssertEqual(try status(host: "mac.example.ts.net:8443"), "HTTP/1.1 200 OK", "as tailscale serve hands it on")
+        XCTAssertEqual(try status(host: nil), "HTTP/1.1 200 OK", "a program, which reaches the port anyway")
+        XCTAssertEqual(try status(host: "rebound.example.com:\(httpPort)"), "HTTP/1.1 403 Forbidden", "DNS rebinding")
+    }
+
+    /// A web page in the Mac's browser opened sockets to the loopback port before, and filled the pending slots.
+    func testASocketFromAnotherPageIsRefusedAtTheHandshake() async throws {
+        func outcome(origin: String, host: String? = nil) async -> String {
+            var request = URLRequest(url: URL(string: "ws://127.0.0.1:\(wsPort)/ws")!)
+            request.setValue(origin, forHTTPHeaderField: "Origin")
+            if let host { request.setValue(host, forHTTPHeaderField: "Host") } // as `tailscale serve` hands it on
+            let socket = URLSession.shared.webSocketTask(with: request)
+            socket.resume()
+            defer { socket.cancel(with: .goingAway, reason: nil) }
+            do {
+                try await socket.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
+                guard case .string(let text) = try await socket.receive() else { return "binary" }
+                return text.hasPrefix(#"{"t":"ok""#) ? "ok" : text
+            } catch {
+                return "refused"
+            }
+        }
+        let own = await outcome(origin: "https://mac.example.ts.net:8443", host: "mac.example.ts.net:8443")
+        XCTAssertEqual(own, "ok", "the page behind tailscale serve")
+        // Anyone can publish a page under a `ts.net` name through Funnel; in the Mac's browser it asks loopback.
+        let published = await outcome(origin: "https://evil.example.ts.net")
+        XCTAssertEqual(published, "refused", "a page of another host, whatever its name ends in")
+        let development = await outcome(origin: "http://127.0.0.1:\(httpPort)")
+        XCTAssertEqual(development, "ok", "the page of a development build")
+        let other = await outcome(origin: "https://evil.example.com")
+        XCTAssertEqual(other, "refused")
+        let sandboxed = await outcome(origin: "null")
+        XCTAssertEqual(sandboxed, "refused")
     }
 }

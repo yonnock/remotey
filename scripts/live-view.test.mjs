@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { Ahead, Cadence, H264, HEADER, JPEG, LiveView, Meter, POINTER, parseUpdate } from '../Web/live-view.js';
+import { Ahead, Cadence, FAULTS, FAULT_MS, H264, HEADER, JPEG, KEY_MS, LiveView, Meter, POINTER, parseUpdate } from '../Web/live-view.js';
 
 function setup() {
   const outputs = [], chunks = [], drawn = [], shown = [], placed = [];
-  let fallback = 0, closed = 0;
+  let fallback = 0, closed = 0, keyframes = 0;
   globalThis.VideoDecoder = class {
     static async isConfigSupported() { return { supported: true }; }
     constructor(callbacks) { this.state = 'unconfigured'; outputs.push(callbacks); }
@@ -19,13 +19,14 @@ function setup() {
   const canvas = { clientWidth: 320, clientHeight: 180, getContext: () => ({ drawImage: (image) => drawn.push(image.timestamp) }) };
   const aim = { style: {} }, cursor = { style: {} }, picture = { style: {} };
   const player = new LiveView(canvas, { picture, aim, cursor }, {
-    shown: (n) => shown.push(n), placed: (meta) => placed.push(meta), fallback: () => fallback++,
+    shown: (n) => shown.push(n), placed: (meta) => placed.push(meta), fallback: () => fallback++, keyframe: () => keyframes++,
   });
   player.show(true);
   const output = (index, n) => outputs[index].output({
     timestamp: n, displayWidth: 640, displayHeight: 360, close: () => closed++,
   });
-  return { player, chunks, drawn, shown, placed, outputs, output, canvas, aim, cursor, picture, get fallback() { return fallback; }, get closed() { return closed; } };
+  return { player, chunks, drawn, shown, placed, outputs, output, canvas, aim, cursor, picture, get fallback() { return fallback; }, get closed() { return closed; },
+    get keyframes() { return keyframes; } };
 }
 
 /** An update as the agent sends it (Sources/Remotey/Wire.swift), of a view that runs at 60 fps. */
@@ -127,15 +128,69 @@ test('closing while support detection is pending never starts a decoder', async 
   assert.deepEqual(s.drawn, []);
 });
 
-test('a decoder that withholds output falls back instead of deadlocking the send window', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('a decoder that withholds output asks for a key frame instead of deadlocking the send window', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const s = setup();
   s.player.receive(packet(1)); s.player.receive(packet(2, false));
   await s.player.chain;
   t.mock.timers.tick(2000);
+  assert.equal(s.keyframes, 1, 'the Mac is asked for a key frame');
+  assert.equal(s.fallback, 0);
+  assert.equal(s.player.codec, 'h264');
+  assert.deepEqual(s.shown, [1, 2], 'the pictures in the dropped decoder are answered');
+  // Until the key frame, a picture that builds on others is answered and not decoded.
+  s.player.receive(packet(3, false)); await s.player.chain;
+  assert.deepEqual(s.shown, [1, 2, 3]);
+  assert.equal(s.chunks.length, 2);
+  // The key frame starts a new decoder, and the stream goes on.
+  s.player.receive(packet(4)); s.player.receive(packet(5, false)); await s.player.chain;
+  assert.equal(s.outputs.length, 2);
+  s.output(1, 4); s.output(1, 5);
+  assert.deepEqual(s.drawn, [4, 5]);
+  s.player.close();
+});
+
+test('a decoder that keeps failing falls back to JPEG, so the phone still gets a picture', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const s = setup();
+  for (let i = 0; i < FAULTS; i++) {
+    s.player.receive(packet(i * 2 + 1)); await s.player.chain;
+    s.outputs.at(-1).error(new Error('decode'));
+    t.mock.timers.tick(1000);
+  }
+  assert.equal(s.keyframes, FAULTS - 1);
   assert.equal(s.fallback, 1);
   assert.equal(s.player.codec, 'jpeg');
-  assert.deepEqual(s.shown, [1, 2]);
+  s.player.close();
+});
+
+test('faults far apart are each mended with a key frame', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const s = setup();
+  for (let i = 0; i < FAULTS + 2; i++) {
+    s.player.receive(packet(i + 1)); await s.player.chain;
+    s.outputs.at(-1).error(new Error('decode'));
+    t.mock.timers.tick(FAULT_MS / 2 + 1);
+  }
+  assert.equal(s.keyframes, FAULTS + 2);
+  assert.equal(s.fallback, 0);
+  s.player.close();
+});
+
+test('a Mac that does not answer the request for a key frame counts as another fault', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const s = setup();
+  s.player.receive(packet(1)); await s.player.chain;
+  s.outputs[0].error(new Error('decode'));
+  assert.equal(s.keyframes, 1);
+  // Pictures keep coming, none of them a key frame.
+  const last = 1 + 60 * (KEY_MS / 1000 + 1);
+  for (let n = 2; n <= last; n++) {
+    s.player.receive(packet(n, false)); await s.player.chain;
+    t.mock.timers.tick(1000 / 60);
+  }
+  assert.ok(s.keyframes >= 2, 'asked again');
+  assert.deepEqual(s.shown, Array.from({ length: last }, (_, i) => i + 1), 'every picture is answered');
   s.player.close();
 });
 
@@ -151,7 +206,7 @@ test('a decoder that keeps giving pictures back is no stall, however long some s
   assert.equal(s.fallback, 0);
   assert.equal(s.player.codec, 'h264');
   t.mock.timers.tick(2000); // then nothing comes out
-  assert.equal(s.fallback, 1);
+  assert.equal(s.keyframes, 1);
   s.player.close();
 });
 

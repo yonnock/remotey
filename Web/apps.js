@@ -2,6 +2,11 @@
 // Sources/Remotey/Apps.swift makes the list and Wire.swift writes it; this module reads the `apps` and `icon`
 // messages, says what a tap asks the Mac for (`focus`) and draws both views.
 
+import { t } from './strings.js';
+
+/** The most icons the page keeps, and names in its request for the list. */
+export const ICONS = 256;
+
 const isWindow = (w) => Number.isInteger(w?.id) && typeof w.title === 'string';
 const isApp = (a) => Number.isInteger(a?.pid) && typeof a.name === 'string' && typeof a.icon === 'string'
   && Array.isArray(a.windows) && a.windows.every(isWindow);
@@ -24,8 +29,8 @@ export const windowTitle = (app, window) => window.title.trim() || app.name;
 
 /** What a screen reader says for an app: its name, and what the icon shows without words. */
 export function appLabel(app) {
-  return [app.name, app.windows.length > 1 && `${app.windows.length} Fenster zur Auswahl`, app.front && 'im Vordergrund',
-    app.hidden && 'ausgeblendet'].filter(Boolean).join(', ');
+  return [app.name, app.windows.length > 1 && t('apps.choice', app.windows.length), app.front && t('apps.front'),
+    app.hidden && t('apps.hidden')].filter(Boolean).join(', ');
 }
 
 // Names and titles come from apps and web pages: they are set as text, never as markup, and each runs in its
@@ -86,12 +91,22 @@ export class Switcher {
     this.draw();
   }
 
-  /** An icon arrived. It stays for the life of the page; the Mac sends each one once per connection. */
+  /**
+   * An icon arrived. It stays for the life of the page, across reconnects: the page names the icons it has
+   * when it asks for the list (`known`), and the Mac sends only the others. The newest ICONS are kept.
+   */
   picture(id, png) {
     if (typeof id !== 'string' || typeof png !== 'string') return;
     const source = `data:image/png;base64,${png}`;
+    this.pictures.delete(id);
     this.pictures.set(id, source);
+    if (this.pictures.size > ICONS) this.pictures.delete(this.pictures.keys().next().value);
     for (const img of [this.parts.icon, ...this.parts.list.querySelectorAll('img')]) if (img.dataset.icon === id) img.src = source;
+  }
+
+  /** The names of the icons the page has, for the Mac to leave out: at most ICONS, the newest. */
+  known() {
+    return [...this.pictures.keys()];
   }
 
   back() {
@@ -129,10 +144,10 @@ export class Switcher {
     const app = apps?.find((a) => a.pid === this.chosen && a.windows.length > 1) ?? null;
     this.chosen = app?.pid ?? null;
     back.hidden = icon.parentElement.hidden = !app;
-    title.textContent = app ? app.name : 'Offene Apps';
+    title.textContent = app ? app.name : t('apps.title');
     title.dir = app ? 'auto' : 'ltr';
-    title.classList.toggle('legend', !app);
-    note.textContent = app ? `${app.windows.length} Fenster` : '';
+    title.classList.toggle('heading', !app);
+    note.textContent = app ? t('apps.windows', app.windows.length) : '';
     if (app) this.show(icon, app);
     const view = this.notice ? 'notice' : app ? 'windows' : apps ? 'grid' : 'grid waiting';
     const changed = list.className !== view;
@@ -140,7 +155,7 @@ export class Switcher {
     list.style.minHeight = '';
     list.setAttribute('aria-busy', view === 'grid waiting');
     list.replaceChildren(...(this.notice ? [make('p', '', this.notice)]
-      : app ? app.windows.map((w) => this.row(app, w))
+      : app ? [...app.windows.map((w) => this.row(app, w)), make('p', 'foot', t('apps.windowsNote'))]
         : apps ? apps.map((a) => this.tile(a))
           : Array.from({ length: this.apps?.length || 8 }, () => make('span', 'app ghost'))));
     if (changed) {
@@ -183,7 +198,7 @@ export class Switcher {
     // The window that is in front on the Mac right now.
     if (app.front && window.main) { button.classList.add('front'); button.setAttribute('aria-current', 'true'); }
     button.append(make('span', 'title', windowTitle(app, window)));
-    if (window.min) button.append(make('span', 'legend', 'Minimiert'));
+    if (window.min) button.append(make('span', 'state', t('apps.minimized')));
     return button;
   }
 }

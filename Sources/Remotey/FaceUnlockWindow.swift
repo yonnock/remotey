@@ -13,7 +13,25 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         case done
     }
 
+    /// What the directory says about a password.
+    enum Verdict: Equatable {
+        case right, wrong
+        /// It could not be asked, or it gave another answer than yes or no.
+        case unknown
+    }
+
+    /// What a password typed into the window leads to.
+    enum Outcome: Equatable {
+        case seal
+        case refuse(String)
+        /// Unchecked: typed once more, it is sealed if both are the same.
+        case confirm
+    }
+
     private let server: Server
+    private let check: (String) -> Verdict
+    /// The first entry of a password the directory could not check, until it is typed again.
+    private var unconfirmed: String?
     private(set) var window: NSWindow?
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
@@ -21,8 +39,8 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
     private let field = NSSecureTextField()
     private let problem = NSTextField(wrappingLabelWithString: "")
     private let spinner = NSProgressIndicator()
-    private let cancel = NSButton(title: "Abbrechen", target: nil, action: nil)
-    private let proceed = NSButton(title: "Weiter", target: nil, action: nil)
+    private let cancel = NSButton(title: Texts.FaceUnlock.cancel, target: nil, action: nil)
+    private let proceed = NSButton(title: Texts.FaceUnlock.proceed, target: nil, action: nil)
     private lazy var buttons = NSStackView(views: [cancel, proceed])
     private lazy var content = NSStackView(views: [icon, title, text, field, problem, spinner, buttons])
     private var step = Step.password()
@@ -31,15 +49,19 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
     /// How long the window says that the phone is enrolled before it closes.
     static let farewell: TimeInterval = 2.5
 
-    init(server: Server) {
+    /// Hears when a phone was enrolled and when the window closed: the menu and the settings show the state.
+    var changed: (() -> Void)?
+
+    init(server: Server, check: @escaping (String) -> Verdict = FaceUnlockWindow.verdict) {
         self.server = server
+        self.check = check
         super.init()
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         title.alignment = .center
         text.font = .systemFont(ofSize: 12)
         text.textColor = .secondaryLabelColor
         text.alignment = .center
-        field.placeholderString = "Passwort dieses Macs"
+        field.placeholderString = Texts.FaceUnlock.password
         field.controlSize = .large
         field.target = self
         field.action = #selector(offer)
@@ -56,6 +78,8 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         }
         cancel.keyEquivalent = "\u{1b}"
         proceed.keyEquivalent = "\r"
+        // The main action in Remotey's accent, as in the assistant.
+        proceed.bezelColor = Accent.nsColor
         buttons.distribution = .fillEqually
         buttons.spacing = 10
         content.orientation = .vertical
@@ -70,9 +94,18 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
 
     func show() {
         window?.close()
+        let window = makeWindow()
+        window.center()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// The window at its first step, not yet on screen.
+    @discardableResult
+    func makeWindow() -> NSWindow {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Self.width + 48, height: 260),
                               styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-        window.title = "Entsperren mit Face ID"
+        window.title = Texts.FaceUnlock.title
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
@@ -81,10 +114,9 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         window.contentView = content
         self.window = window
         field.stringValue = ""
+        unconfirmed = nil
         set(.password())
-        window.center()
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        return window
     }
 
     /// Shows `step`: only what it needs, in a window that is as tall as that.
@@ -93,19 +125,18 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         let done = step == .done
         let symbol = NSImage(systemSymbolName: done ? "checkmark.circle.fill" : "faceid", accessibilityDescription: nil)
         icon.image = symbol?.withSymbolConfiguration(.init(pointSize: 42, weight: .regular))
-        icon.contentTintColor = done ? .systemGreen : .controlAccentColor
+        icon.contentTintColor = done ? .systemGreen : Accent.nsColor
         switch step {
         case .password(let why):
-            title.stringValue = "Entsperren mit Face ID"
-            text.stringValue = "Das iPhone bekommt einen Passkey, und das Passwort dieses Macs wird damit verschlüsselt abgelegt: "
-                + "ohne Face ID am iPhone ist es nicht zu lesen. Den Mac entsperrt dann, wer das iPhone entsperren kann."
+            title.stringValue = Texts.FaceUnlock.title
+            text.stringValue = Texts.FaceUnlock.intro
             problem.stringValue = why ?? ""
         case .waiting:
-            title.stringValue = "Warte auf das iPhone"
-            text.stringValue = "Öffne Remotey am iPhone und tippe dort auf „Einrichten“. Das Angebot gilt zwei Minuten."
+            title.stringValue = Texts.FaceUnlock.waitingTitle
+            text.stringValue = Texts.FaceUnlock.waiting
         case .done:
-            title.stringValue = "Eingerichtet"
-            text.stringValue = "Ist der Mac gesperrt, entsperrt ihn „Entsperren…“ am iPhone mit Face ID."
+            title.stringValue = Texts.FaceUnlock.doneTitle
+            text.stringValue = Texts.FaceUnlock.done
         }
         var asks = false, problemShown = false
         if case .password(let why) = step { (asks, problemShown) = (true, why != nil) }
@@ -133,12 +164,23 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
         guard case .password = step, !password.isEmpty else { return }
         field.stringValue = ""
         // A typo would be sealed and typed into the lock screen at every unlock.
-        guard Self.isPassword(password) else { return set(.password(problem: "Das ist nicht das Passwort dieses Macs.")) }
+        let earlier = unconfirmed
+        unconfirmed = nil
+        switch Self.judge(password, verdict: earlier == nil ? check(password) : .unknown, earlier: earlier) {
+        case .refuse(let why): return set(.password(problem: why))
+        case .confirm:
+            unconfirmed = password
+            field.placeholderString = Texts.FaceUnlock.passwordAgain
+            return set(.password(problem: Self.unchecked))
+        case .seal: break
+        }
+        field.placeholderString = Texts.FaceUnlock.password
         set(.waiting)
         server.offerFaceUnlock(password: password) { [weak self] enrolled in
             guard let self else { return }
-            guard enrolled else { return self.set(.password(problem: "Die Zeit ist um, nichts wurde eingerichtet.")) }
+            guard enrolled else { return self.set(.password(problem: Texts.FaceUnlock.timeUp)) }
             self.set(.done)
+            self.changed?()
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.farewell) { [weak self] in
                 if self?.step == .done { self?.window?.close() }
             }
@@ -147,16 +189,44 @@ final class FaceUnlockWindow: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         field.stringValue = ""
+        unconfirmed = nil
+        field.placeholderString = Texts.FaceUnlock.password
         server.withdrawFaceUnlock()
+        changed?()
     }
 
-    /// Whether `password` is the password of the user this runs as. True as well where the directory
-    /// cannot be asked: the lock screen will tell.
-    static func isPassword(_ password: String) -> Bool {
+    static let unchecked = Texts.FaceUnlock.unchecked
+
+    /// What `password` leads to. `earlier` is its first entry, where the directory could not check it: a typo
+    /// is then caught by comparing, as a new password is set. A password that is consistently wrong gets
+    /// through that way; the lock screen refuses it, and twice refused it is deleted (`FaceUnlock`).
+    static func judge(_ password: String, verdict: Verdict, earlier: String?) -> Outcome {
+        if let earlier { return password == earlier ? .seal : .refuse(Texts.FaceUnlock.different) }
+        return switch verdict {
+        case .right: .seal
+        case .wrong: .refuse(Texts.FaceUnlock.wrong)
+        case .unknown: .confirm
+        }
+    }
+
+    /// Asks the directory whether `password` is the password of the user this runs as.
+    static func verdict(_ password: String) -> Verdict {
         guard let node = try? ODNode(session: ODSession.default(), type: ODNodeType(kODNodeTypeAuthentication)),
               let record = try? node.record(withRecordType: kODRecordTypeUsers, name: NSUserName(), attributes: nil) else {
-            return true
+            return .unknown
         }
-        return (try? record.verifyPassword(password)) != nil
+        do {
+            try record.verifyPassword(password)
+            return .right
+        } catch {
+            return verdict(error)
+        }
+    }
+
+    /// Only "credentials invalid" says that the password is wrong. Anything else (an account locked after
+    /// too many tries, a directory that does not answer) says nothing about it.
+    static func verdict(_ error: Error) -> Verdict {
+        let error = error as NSError
+        return error.domain == ODFrameworkErrorDomain && error.code == Int(kODErrorCredentialsInvalid.rawValue) ? .wrong : .unknown
     }
 }

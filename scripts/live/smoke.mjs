@@ -1,10 +1,11 @@
 // Smoke test against a running agent: HTTP page, auth, pointer movement, live view flow control.
-// Usage: node scripts/smoke.mjs [--h264] [--fps=120] [--capture=/tmp/view.h264] [--focus] [--display]   (moves the cursor a little and back; sends no keystrokes)
+// Usage: node scripts/live/smoke.mjs --live [--h264] [--fps=120] [--capture=/tmp/view.h264] [--focus] [--display]   (moves the cursor a little and back; sends no keystrokes)
 // --focus also brings another app's window to the front and the one that was in front back, so what you see changes for two seconds.
 // --display also puts the pointer on another display and back to where it was, on a Mac with more than one.
 // Close Remotey on the phone first: the most recent viewer gets the live view, so an open phone takes it back.
+import './guard.mjs'; // first: refuses without --live
 import { writeFileSync } from 'node:fs';
-import { Ahead, H264, JPEG, POINTER, parseH264, parseUpdate } from '../Web/live-view.js';
+import { Ahead, H264, JPEG, POINTER, parseH264, parseUpdate } from '../../Web/live-view.js';
 import { HTTP, fail, open, pointer, sleep, token } from './agent.mjs';
 
 const codec = process.argv.includes('--h264') ? 'h264' : 'jpeg';

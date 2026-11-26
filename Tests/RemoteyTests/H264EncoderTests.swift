@@ -3,6 +3,16 @@ import XCTest
 @testable import Remotey
 
 final class H264EncoderTests: XCTestCase {
+    /// A Mac in a virtual machine, as CI runs on, may have no hardware encoder. There the tests say so and skip;
+    /// on any other Mac a missing encoder is a failure.
+    override func setUpWithError() throws {
+        do {
+            _ = try H264Encoder(width: 640, height: 360)
+        } catch let failure as H264Encoder.Failure where ProcessInfo.processInfo.environment["CI"] != nil {
+            throw XCTSkip("no hardware H.264 encoder on this CI machine (VideoToolbox status \(failure.status))")
+        }
+    }
+
     func testStreamStartsWithParameterSetsAndIDRThenUsesDeltaFrames() throws {
         let encoder = try H264Encoder(width: 640, height: 360)
         let context = CIContext()
@@ -28,6 +38,20 @@ final class H264EncoderTests: XCTestCase {
             return false
         }
         XCTAssertEqual(keys, [0])
+    }
+
+    /// The phone's decoder lost its state (`idr`): one key frame with its parameter sets, then delta frames again.
+    func testAKeyFrameOnRequestAndDeltaFramesAfterIt() throws {
+        let encoder = try H264Encoder(width: 640, height: 360)
+        let context = CIContext()
+        let image = CIImage(color: CIColor(red: 0.2, green: 0.5, blue: 0.8)).cropped(to: CGRect(x: 0, y: 0, width: 640, height: 360))
+        XCTAssertEqual(try encode(image, encoder: encoder, context: context)[3], 1)
+        XCTAssertEqual(try encode(image, encoder: encoder, context: context)[3], 0)
+        encoder.requestKeyFrame()
+        let key = try encode(image, encoder: encoder, context: context)
+        XCTAssertEqual(key[3], 1)
+        XCTAssertTrue(nalTypes(key).isSuperset(of: [7, 8, 5]), "decodable without anything before it")
+        XCTAssertEqual(try encode(image, encoder: encoder, context: context)[3], 0, "once")
     }
 
     func testNewSizeStartsAnIndependentStream() throws {

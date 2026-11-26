@@ -204,13 +204,22 @@ final class Input {
         }
     }
 
-    /// Prefers the real key of the active layout so apps that read key codes (shortcuts, players) work;
-    /// everything else (umlauts on a US layout, emoji) goes in as a Unicode string.
-    private func typeCharacter(_ ch: Character, flags: CGEventFlags, keymap: [Character: CGKeyCode]) {
-        if let code = keymap[ch] {
-            press(code, flags: flags)
-        } else if ch.isUppercase, let code = keymap[Character(ch.lowercased())] {
-            press(code, flags: flags.union(.maskShift))
+    /// A key of the active layout and the modifiers it needs for a character: Shift for `?` on a US layout,
+    /// Option for `@` on a German one.
+    struct Key: Equatable {
+        let code: CGKeyCode
+        let flags: CGEventFlags
+    }
+
+    /// Prefers the real key of the active layout, with the modifiers it needs, as a person at the keyboard
+    /// types it: apps that read key codes (shortcuts, players, the login window) get the character they
+    /// expect. Modifiers armed on the phone go with it, so ⌘ and `?` is ⌘⇧/ on a US layout, as there.
+    /// Everything without a key (emoji, umlauts on a US layout) goes in as a Unicode string.
+    private func typeCharacter(_ ch: Character, flags: CGEventFlags, keymap: [Character: Key]) {
+        if let key = keymap[ch] {
+            // An event made for a key code carries what the key types without modifiers ("1" for "!"), so an
+            // app that reads the text and one that reads code and flags would differ: it carries the character.
+            press(key.code, flags: flags.union(key.flags), text: key.flags.isEmpty ? nil : ch)
         } else {
             let utf16 = Array(String(ch).utf16)
             for down in [true, false] {
@@ -222,34 +231,55 @@ final class Input {
         }
     }
 
-    private func press(_ code: CGKeyCode, flags: CGEventFlags) {
+    private func press(_ code: CGKeyCode, flags: CGEventFlags, text: Character? = nil) {
         for down in [true, false] {
             guard let e = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { continue }
             e.flags = flags
+            if let text {
+                let utf16 = Array(String(text).utf16)
+                e.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+            }
             post(e)
         }
     }
 
-    /// Character -> key code for the unshifted main block of the active keyboard layout.
+    /// The modifier states a character is looked for in, fewest first: a character that a key gives
+    /// without Shift goes without it, so plain shortcuts stay plain.
+    static let layers: [CGEventFlags] = [[], .maskShift, .maskAlternate, [.maskShift, .maskAlternate]]
+
+    /// Character -> key and modifiers, over the main block of the active keyboard layout.
     /// Rebuilt per message so layout switches need no invalidation.
-    private static func keymap() -> [Character: CGKeyCode] {
+    static func keymap() -> [Character: Key] {
         guard let inputSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let raw = TISGetInputSourceProperty(inputSource, kTISPropertyUnicodeKeyLayoutData) else { return [:] }
         let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
-        var map: [Character: CGKeyCode] = [:]
-        data.withUnsafeBytes { buffer in
-            guard let layout = buffer.bindMemory(to: UCKeyboardLayout.self).baseAddress else { return }
-            for code in UInt16(0)...UInt16(50) {
+        return data.withUnsafeBytes { buffer -> [Character: Key] in
+            guard let layout = buffer.bindMemory(to: UCKeyboardLayout.self).baseAddress else { return [:] }
+            return keymap { code, flags in
+                // Carbon's modifier bits, shifted down by 8 as UCKeyTranslate wants them.
+                let modifiers = UInt32((flags.contains(.maskShift) ? shiftKey : 0) | (flags.contains(.maskAlternate) ? optionKey : 0)) >> 8
                 var deadKeyState: UInt32 = 0
                 var length = 0
                 var chars = [UniChar](repeating: 0, count: 4)
-                let status = UCKeyTranslate(layout, code, UInt16(kUCKeyActionDown), 0, UInt32(LMGetKbdType()),
+                let status = UCKeyTranslate(layout, code, UInt16(kUCKeyActionDown), modifiers, UInt32(LMGetKbdType()),
                                             0, &deadKeyState, chars.count, &length, &chars)
-                // Dead keys (deadKeyState != 0) are skipped: pressing them would start a composition.
-                guard status == noErr, deadKeyState == 0, length == 1, chars[0] > 0x20, chars[0] != 0x7F,
-                      !(0xF700...0xF8FF).contains(chars[0]),
-                      let ch = String(utf16CodeUnits: chars, count: 1).first, map[ch] == nil else { continue }
-                map[ch] = code
+                // A dead key (deadKeyState != 0) would start a composition instead of typing.
+                guard status == noErr, deadKeyState == 0 else { return nil }
+                return String(utf16CodeUnits: chars, count: length)
+            }
+        }
+    }
+
+    /// The key map for a layout that `translate` describes: what a key types with some modifiers, nil
+    /// for a dead key. The first key and the fewest modifiers win.
+    static func keymap(translate: (CGKeyCode, CGEventFlags) -> String?) -> [Character: Key] {
+        var map: [Character: Key] = [:]
+        for flags in layers {
+            for code in CGKeyCode(0)...CGKeyCode(50) {
+                guard let text = translate(code, flags), text.utf16.count == 1, let unit = text.utf16.first,
+                      unit > 0x20, unit != 0x7F, !(0xF700...0xF8FF).contains(unit), // controls, space, delete, function keys
+                      let ch = text.first, map[ch] == nil else { continue }
+                map[ch] = Key(code: code, flags: flags)
             }
         }
         return map

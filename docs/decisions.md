@@ -560,6 +560,746 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
     - Kein Schalter in der Oberfläche: der Modus entscheidet. Verifier v16: T15 prüft erst, dass der Zeiger ohne
       Telefonform auf den Mac wartet (17 Bewegungen gesendet, Zeiger unverändert), dann wie bisher mit Telefonform.
 
+18. Einrichtungsassistent, das Modell ohne Oberfläche (Issue 2, Teil 1). Heute sind es etwa 15 Schritte von Hand und
+    vier Befehle im Terminal, sechs davon scheitern still. Der Assistent ist eine Liste, die sich etwa einmal je Sekunde
+    selbst prüft; jede Zeile hat genau einen Zustand und höchstens eine Taste. Diese Runde baut nur das Modell darunter,
+    in neuen Dateien; Fenster, Menü und Einstellungen kommen danach darauf.
+    - Entscheidung Form: drei Schichten. `Tailscale` (Werte aus dem Werkzeug) und `TailscaleCLI` (das Werkzeug, hinter
+      dem Protokoll `TailscaleClient`), `Permissions` und `LoginItem`, und `Setup` (reine Logik: `Facts` hinein,
+      `[Row]` heraus) mit `SetupAssistant` (sammelt die Fakten, führt die Tasten aus). Eine Zeile hat `state`
+      (`ok`, `actionNeeded`, `working`, `failed`), in jedem Zustand einen Satz (`detail`) und höchstens eine `Action`
+      mit eigenem Titel; `SetupAssistant.perform` führt sie aus, die Oberfläche muss keine kennen. Für das Menü gibt es
+      `summary` (eine Zeile), für das Fenster `rows` und `changed`, für die Einstellungen `facts.tailscale`
+      (Name, Besitzer, Version, Freigabe) und die Tasten `.removeServe` und `.setLoginItem`.
+    - Entscheidung Pflicht: Bedienungshilfen, Tailscale, HTTPS und die Freigabe müssen grün sein; ist eine nicht grün,
+      öffnet sich der Assistent beim Start von selbst (`launchCheck`), sonst nur beim ersten Start. Bildschirmaufnahme
+      (nur fürs Live-Bild), Kopplung, erste Bewegung und Anmeldeobjekt sind es nicht: wer sie beim ersten Mal ließ,
+      wird nicht bei jedem Start gefragt, und ob schon ein Telefon gekoppelt war, weiß nur der Server. Eine Zeile, die
+      noch prüft (`working`), öffnet ihn nicht, sie kann einen Augenblick später grün sein.
+    - Entscheidung Takt: der Assistent schaut nur, solange ihn jemand ansieht (`watch`/`unwatch` gezählt), dann jede
+      Sekunde, mit einem Timer im Modus `.common`, damit er auch bei offenem Menü läuft. Tailscale wird nie doppelt
+      gefragt; was sich währenddessen änderte, holt ein Blick danach nach. `changed` kommt nur, wenn sich etwas
+      änderte, nicht jede Sekunde. Werkzeug und Abruf laufen im Hintergrund mit Zeitgrenze: lesen 5 s, ändern 20 s,
+      warten auf eine Person (Zustimmung, Anmeldung) 600 s, Abruf 30 s. An der Grenze bekommt das Werkzeug `SIGTERM`,
+      nach einer Sekunde `SIGKILL`; stdin ist leer, damit keine Frage es aufhält.
+    - Tailscale: gesucht in `/opt/homebrew/bin`, `/usr/local/bin`, dann im Binary der App. Aus `status --json`:
+      `BackendState`, `Version` (ab 1.52, da kam `serve --bg --set-path`), `Self.DNSName` ohne Punkt am Ende, der
+      `LoginName` zu `Self.UserID`, `CertDomains` (leer: HTTPS im Tailnet aus) und `AuthURL`. Aus
+      `serve status --json`: unsere Freigabe ist es, wenn auf Port 8443 `/` auf `127.0.0.1` oder `localhost` mit dem
+      Port der Seite zeigt und `/ws` auf den danach; ein Port mit anderem Ziel heißt „zeigt auf …“ und wird beim
+      Freigeben umgestellt. `AllowFunnel` für `…:8443` ist ein eigener, roter Zustand: die Fernbedienung wäre aus dem
+      Internet erreichbar; seine Taste entfernt die Freigabe.
+    - Freigeben führt dieselben zwei Befehle aus wie scripts/tailscale-serve.sh. Ist Serve im Tailnet noch nicht
+      erlaubt, druckt das Werkzeug einen Link und wartet, bis jemand zustimmt; der Läufer reicht deshalb die Ausgabe
+      weiter, während es läuft, und die Zeile bietet den Link, bis das Werkzeug von selbst fertig wird. Gelesen wird
+      der Link nur aus ganzen Zeilen: der Test mit einem Link, der über zwei Stücke der Pipe kam, schlug zuerst fehl
+      (`…/f/se`). Entfernen nimmt nur die beiden Pfade weg, damit anderes auf dem Port bleibt, und liest danach nach,
+      ob sie weg sind, statt die Meldungen des Werkzeugs zu deuten. Anmelden (`login`) geht wie Freigeben über den
+      gedruckten Link. Ein Homebrew-Dienst, der nicht läuft, braucht `sudo`: die Taste kopiert den Befehl.
+    - Selbsttest: einmal je Name, sobald die Freigabe steht und kein Funnel an ist, wieder nach jedem Freigeben und auf
+      Tastendruck, nicht jede Sekunde. Er holt `https://<Name>:8443/` und vergleicht den Inhalt mit der eigenen Seite,
+      eine andere Seite oder 502 (Tailscale erreicht den Agenten nicht) ist rot.
+    - Gemessen am Mac des Nutzers, nur lesend (Homebrew-tailscale 1.104.7, macOS 27): Form von `status --json` und
+      `serve status --json` wie oben; die echte Ausgabe ergab „läuft, Name, Besitzer, Zertifikat, unsere Freigabe, kein
+      Funnel“. Die Testdaten im Repo sind erfunden. Und: vom Mac an seinen eigenen Namen nimmt tailscaled die Verbindung
+      an und schließt sie vor dem TLS-Handschlag (curl: „Connection reset by peer“, `URLSession`: -1200 mit
+      Stream-Fehler -9816, `errSSLClosedNoNotify`; tailscaled schreibt „TLS handshake error … socket is not
+      connected“), während das iPhone über dieselbe Adresse kommt (so in den Runden davor). Der Selbsttest kann am Mac
+      also nicht gelingen. Dieser eine Fall heißt `inconclusive`: die Zeile ist grün und sagt, dass erst das iPhone
+      zeigt, ob die Adresse antwortet. Ein Handschlag, der mit einer Meldung endet (ein Zertifikat, das Tailscale nicht
+      bekommt), bleibt rot. Damit holt der Selbsttest hier auch kein Zertifikat vorab: der Handschlag kommt nie so weit
+      (gefolgert aus dem Protokoll von tailscaled).
+    - Bildschirmaufnahme: `CGPreflightScreenCaptureAccess` behält seine erste Antwort bis zum Neustart. Ohne die
+      Erlaubnis lässt der Window Server die Titel der Fenster anderer Apps weg (`kCGWindowName`), mit ihr hat jedes
+      einen, wenn auch leeren. Gemessen mit einem kleinen Programm auf macOS 27, einmal aus der Shell (Erlaubnis da:
+      Preflight `true`, 14 von 14 fremden Fenstern mit Titel) und einmal als launchd-Job (keine Erlaubnis: `false`,
+      1 von 14, und das eine gehört WindowManager, einem Systemprozess). Die Prüfung zählt deshalb nur Fenster regulärer
+      Apps (`activationPolicy == .regular`): eines mit Titel heißt erlaubt, keines heißt nicht erlaubt, ohne ein
+      solches Fenster gilt Preflight. In keinem Lauf kam eine Abfrage. Das Fragen ist eine eigene Taste:
+      `CGRequestScreenCaptureAccess` beim ersten Druck (Dialog, und Remotey steht danach in der Liste), danach öffnet
+      sie den Bereich in den Einstellungen; Bedienungshilfen ebenso mit `AXIsProcessTrustedWithOptions`.
+    - Server.swift fragt vor dem Live-Bild weiter Preflight (diese Runde ändert keine bestehende Datei). Solange es so
+      ist, sagt die Zeile bei einer Erlaubnis nach dem Start „Neustart nötig“ (`needsRestart`) mit der Taste
+      „Remotey neu starten“. Fragt der Server `Permissions.screenRecording`, entfällt das.
+    - Anmeldeobjekt: `SMAppService.mainApp` mit vier Zuständen; „braucht Erlaubnis“ öffnet die Anmeldeobjekte, und
+      ohne Bundle (`swift run`) gibt es keines.
+    - Tests: `SetupTests` (jede Zeile in jedem Zustand, Zusammenfassung, wann der Assistent aufgeht), `SetupAssistantTests`
+      (Takt, Zustimmungslink, Selbsttest einmal, Fehler bis zum nächsten Versuch, mit Warteschlangen, die sofort
+      laufen), `TailscaleTests` (aufgezeichnete Ausgaben, die Befehle des Skripts), `PermissionsTests`,
+      `CommandTests` (gegen /bin/sh: Grenze, Ausgabe während des Laufs).
+18. Entsperren härter, Live-Bild unter den Bedienelementen (nach einer Durchsicht des Codes: vier Lücken beim
+    Entsperren, und die Seite soll das Bild über das ganze Telefon legen, mit Bedienelementen als Glas darüber).
+    - Sonderzeichen im Passwort: `Input.keymap` kannte nur die Tasten ohne Umschalt, dazu Umschalt für Großbuchstaben.
+      `! ? @ € { }` gingen als Unicode-Text mit dem Tastencode der A-Taste; liest das Anmeldefenster den Tastencode,
+      kommt ein anderes Zeichen an, und zweimal abgelehnt ist das versiegelte Passwort gelöscht. Jetzt sucht die
+      Tabelle über die Ebenen ohne, Umschalt, Wahl und Umschalt+Wahl, in dieser Reihenfolge, und die erste Taste der
+      ersten Ebene gewinnt: ein Zeichen ohne Umschalt bleibt ohne, Kurzbefehle bleiben, wie sie waren. Tote Tasten
+      bleiben draußen, Unicode bleibt für Zeichen ohne Taste. Gemessen beim Test: ein Ereignis, das mit einem
+      Tastencode angelegt wird, trägt den Text der Taste ohne Umschalt („1“ für „!“), auch mit gesetztem Umschalt-Flag.
+      Damit eine App, die den Text liest, und eine, die Code und Flags liest, dasselbe Zeichen sehen, trägt ein
+      Zeichen, das Umschalt oder Wahl braucht, sich selbst als Text. Ein auf dem Telefon gerasteter Modifier kommt
+      dazu: ⌘ und `?` ist auf US ⌘⇧/, wie an der Tastatur. So geht auch ⌘+ auf US jetzt als ⌘⇧= statt als Unicode.
+      Tests: eine erfundene Belegung (Ebenen, Vorrang, tote Taste) und die aktive, wie sie ist: `!?@` gehen auf US
+      wie auf Deutsch als ihre Taste mit ihren Modifiern.
+    - Return ohne zweiten Blick: `LockScreen.unlock` tippt jetzt in Blöcken zu vier Zeichen, wartet nach jedem
+      25 ms, damit die Tasten angekommen sind, und fragt vor jedem Block und vor Return, ob der Mac noch gesperrt ist
+      und das Feld die Tastatur hat. Öffnet ihn Touch ID oder eine Uhr dabei, erreichen höchstens ein Block und was
+      noch unterwegs war die App vorn; Return nie. Verliert das Feld die Tastatur, endet der Versuch als `field` (nur
+      ein Teil ist getippt; das zählt nicht als Ablehnung). Kosten: 25 ms je Block, bei 16 Zeichen 125 ms.
+    - Rotierendes Geheimnis: PRF gibt für dasselbe Salt denselben Wert. Wer ein Entsperren auf der Loopback-Strecke
+      mitschneidet und die Datei liest, hatte das Passwort für immer; „eine aufgezeichnete Antwort wird abgelehnt“ galt
+      für die Signatur, nicht für das Geheimnis. Jetzt nennt jedes `lock` neben `salt` ein frisches `next`, die Seite
+      fragt PRF für beide (`eval: { first, second }`) und schickt `prf` und `next`. Der Agent öffnet mit `prf`,
+      versiegelt dasselbe Passwort gleich unter `next` und hält das im Speicher; erst wenn der Mac danach offen ist,
+      kommt es in die Datei, mit `next` als neuem Salt. Ein mitgeschnittenes Geheimnis öffnet danach nichts mehr.
+      Entscheidungen zu den Rändern:
+      Lehnt der Mac das Passwort ab, bleibt alles, wie es war (die Rotation wird verworfen, die Ablehnung gezählt).
+      Gibt das Telefon kein zweites Geheimnis, eines gleich dem ersten oder eines, das keines sein kann, wird
+      entsperrt wie bisher und nicht rotiert. Geht eine Antwort verloren, ändert sich nichts: die Seite hält keinen
+      Zustand, sie nimmt das Salt, das der nächste `lock` nennt, und der nennt, was in der Datei steht. Geändert wird
+      die Datei nur nach einem Entsperren, nur wenn sie noch das Salt hat, von dem die Rotation ausging (nicht nach
+      einem neuen Einrichten oder Entfernen dazwischen), und nur ganz: geschrieben wird daneben und dann ersetzt, und
+      erst ein geschriebener Schlüssel gilt im Speicher. Verworfen: den alten Schlüssel bis zum nächsten Entsperren
+      zu behalten, falls das zweite Geheimnis falsch wäre. Er hielte das mitgeschnittene Geheimnis eine Runde länger
+      gültig; prüfen lässt sich das zweite Geheimnis ohne eine weitere Frage an Face ID nicht, ein Browser, der für
+      `second` einen falschen Wert gibt, ist nicht bekannt. Bliebe es dabei, zeigten zwei Ablehnungen nichts an (das
+      Geheimnis öffnet dann nicht, es wird gar nicht getippt): „Abgelehnt“ und Einrichten von vorn.
+      Das Format der Datei ist unverändert (Passkey, Salt, versiegelt, Ablehnungen): die Einrichtung auf dem Mac des
+      Nutzers (gelesen wurden nur die Namen und Längen der Felder) gilt weiter und rotiert beim ersten Entsperren.
+      Ein fester Vektor in diesem Format, mit festem Schlüssel, Geheimnis und Salt, steht in `FaceUnlockTests`. Der
+      Vektor aus Chromium in `PasskeyTests` betrifft nur die Signatur und bleibt. `TestPhone` gibt jetzt wie PRF für
+      jedes Salt ein eigenes Geheimnis (HMAC über einen Samen), sonst sähen die Tests keine Rotation.
+    - Passwort ungeprüft: `FaceUnlockWindow.isPassword` sagte ja, wo OpenDirectory nicht zu fragen war, und so wurde
+      jeder Tippfehler versiegelt. Jetzt gibt es drei Antworten: richtig, falsch (nur `kODErrorCredentialsInvalid`)
+      und unbekannt (kein Verzeichnis, kein Eintrag, jeder andere Fehler, auch ein gesperrtes Konto). Unbekannt sagt
+      das Fenster („ließ sich nicht prüfen“) und verlangt das Passwort noch einmal; abgelegt wird es nur, wenn beide
+      gleich sind, wie beim Setzen eines neuen Passworts. Ein immer gleich falsch getipptes kommt so durch; der
+      Sperrbildschirm lehnt es ab, und zweimal abgelehnt wird es gelöscht. Verworfen: das Passwort gegen den
+      Schlüsselbund oder `pam` prüfen, beides kein besserer Weg zum selben Verzeichnis.
+    - Live-Bild unter den Bedienelementen: die Ansichtsanfrage trägt optional `inset: [oben, rechts, unten, links]` in
+      CSS-Pixeln, die Ränder des Elements, die Bedienelemente verdecken. Alles, was der Agent für den Ausschnitt
+      rechnet (um Zeiger, Schreibmarke oder Fenster, die 20 Pixel, ab denen der Zeiger schiebt, das Einpassen, die
+      Größe in Telefonform, die Grenzen an Displaykanten, das Herauszoomen bis zum ganzen Schreibtisch, „Folgt Text“),
+      rechnet er für das Rechteck dazwischen, als wäre das das ganze Element (`Request.inner`). Danach wächst der
+      Ausschnitt um die Ränder, geteilt durch den Zoom (`Request.outer`), und füllt das Element; jenseits des
+      Schreibtischs ist das schwarz. Die Menüleiste beginnt so an der Unterkante der oberen Bedienelemente. Der Kopf
+      jedes Bildes beschreibt das gesendete Bild, also den äußeren Ausschnitt; Breite in Punkten = `w / zoom`, wie
+      bisher. Ohne `inset`, mit vier Nullen oder mit einer anderen Zahl von Werten ist alles wie vorher, Bit für Bit
+      (Test über Zoom, Displays, Fenster und Punkte). Geklemmt: nicht endliche und negative Ränder zählen 0, zwei
+      gegenüberliegende lassen mindestens 50 px dazwischen und schrumpfen sonst im selben Verhältnis.
+    - Prüfungen: `swift test` 142 Tests, `node --test scripts/` 70 Tests, `scripts/ui-verify.mjs` (Seite in Chromium,
+      T14 mit einem `lock` ohne `next`, wie ein älterer Agent ihn schickt). Jeder neue Swift-Test scheitert ohne seine
+      Änderung (für das Tippen in Blöcken vorgeführt: sechs Fehler im alten `LockScreen`).
+18. CI, sichere Skripte und die Robustheit des Agenten (Runde aus einer Analyse des Repos; jeder Befund am Code
+    geprüft, jede Änderung mit einem Test, der ohne sie fehlschlägt: neun Abwandlungen von `Server`, `Wire` und
+    `Origins`, je eine Änderung zurückgenommen, ließen je ihren Test scheitern).
+    - CI: `.github/workflows/ci.yml` auf `macos-26` für Pull Requests und Pushes auf `main` und `development`:
+      `swift build --build-tests`, `swift test`, `node --test scripts/*.test.mjs` (Node 24), `ui-verify.mjs`.
+      Die Tests heißen beim Namen: `node --test scripts/` fand auf Node 24 keine (vom Lead gemeldet), hier auf
+      Node 26 69. chrome-headless-shell kommt per `npx playwright@1.64.0 install --only-shell chromium`, das ist
+      Build 1248 wie bei den Messungen oben; kein `package.json`. `ui-verify.mjs` urteilt nicht und endet mit 0,
+      darum prüft `.github/check-ui-verify.mjs` jedes `ok` im Bericht (lokal 19 von 19) und nennt die falschen als
+      Annotation. Ein Fehlschlag druckt die gescheiterten Swift-Tests und lädt Log, Bericht und Bilder hoch.
+    - Was auf einem gehosteten Mac anders ist: eine virtuelle Maschine mit angemeldeter Sitzung, ohne
+      Bedienungshilfen und Bildschirmaufnahme. Kein Test braucht die beiden Rechte: ohne Bedienungshilfen hat die
+      App-Liste keine Fenster, das prüft niemand. Der Hardware-Encoder fehlt in einer VM womöglich; dann überspringen
+      die `H264EncoderTests` mit dem Status von VideoToolbox, aber nur, wenn `CI` gesetzt ist, sonst schlagen sie
+      fehl. Finder und die Displays werden nicht mehr vorausgesetzt, sondern mit dem verglichen, was die Maschine
+      hat (`NSWorkspace`, `NSScreen`). Die Server-Tests mit Eingaben posten nichts: `Input` sammelt die Ereignisse,
+      das Live-Bild ist ein Stellvertreter (`LiveScreen`), Bildschirmrecht und Nutzeraktivität sind eingesetzt.
+    - Skripte: `smoke`, `bench`, `lock` und `agent.mjs` liegen in `scripts/live/`. Jedes importiert zuerst
+      `guard.mjs`, das ohne `--live` wirft; Importe werden in ihrer Reihenfolge ausgewertet, also läuft vorher nichts,
+      auch kein Lesen des Tokens. `lock.mjs` braucht dazu `--lock-mac`. Geprüft: ohne Schalter, als Import und mit
+      `node --test scripts/live/` tun sie nichts. `agent.mjs` sendet alle 5 s `ping` und reicht `pong` nicht weiter
+      (gegen einen nachgebauten Socket: nach 11 s zwei `ping`, kein `pong` beim Skript).
+    - Ports (a): `NWListener` wirft beim Belegen nicht, er meldet `.failed` später. Gemessen auf macOS 27: ein
+      zweiter Listener auf demselben Port scheitert mit EADDRINUSE, mit und ohne `allowLocalEndpointReuse`, auch
+      gegen einen anderen Prozess mit SO_REUSEADDR auf 0.0.0.0 oder SO_REUSEPORT auf 127.0.0.1; ein Port mit
+      Verbindungen in TIME_WAIT öffnet in beiden Fällen, auch aus einem neuen Prozess. Der Schalter ändert also
+      nichts, was sich hier zeigt; er bleibt. `Server.health` ist `starting`, `listening` oder `failed(Grund)` mit
+      `healthChanged`; scheitert einer der beiden Listener, gehen beide, und ein neues Paar versucht es nach 1, 2,
+      4 … höchstens 60 s. Das Menü zeigt den Zustand, Koppeln und Link sind aus, solange nichts lauscht, das Symbol
+      ist gedimmt. Der Alarm beim Start entfällt: er hätte nie erscheinen können, und eine Wiederholung braucht ihn
+      nicht. Test: ein zweiter Server auf denselben Ports meldet `failed` mit dem Port und lauscht, sobald der erste
+      geht.
+    - Herzschlag (b): die Seite sendet `{"t":"ping"}` alle 5 s, solange sie sichtbar ist, der Agent antwortet
+      `{"t":"pong"}`. Jede Nachricht zählt als Lebenszeichen. Nach 10 s Stille lässt der Agent die Tasten dieses
+      Telefons los und beendet seinen Bildlauf, nach 15 s schließt er die Verbindung, was alles weitere wie ein
+      Schließen erledigt (Bild aus, Fenster zurück). Die Zeiten sind in `Server.Timing` einsetzbar, die Tests laufen
+      mit 0,3 und 0,8 s. Geprüft alle 1/10 der kürzeren Zeit.
+    - Mehrere Telefone (c): jedes `Client` führt die Tasten, die es drückte; ein Telefon, das geht oder schweigt,
+      lässt nur diese los. Eine Taste, die ein anderes hält, kann es weder drücken noch loslassen noch klicken (sonst
+      endete dessen Ziehen). Der Bildlauf gehört dem, der zuletzt scrollte: `Input` hat nur einen.
+    - Verdrängt (d): wer das Live-Bild an ein anderes Telefon verliert, hört `{"t":"view","ok":false,"why":"taken"}`;
+      die fehlende Bildschirmaufnahme heißt `{"t":"view","ok":false,"why":"permission"}`. Wer nur neu anfragt,
+      verdrängt niemanden.
+    - Token (e): geschrieben in eine 0600-Datei daneben und per `rename` darüber, also steht dort der alte oder der
+      neue, nie ein Teil. Scheitert das, wirft `rotate` und der alte gilt weiter, im Speicher wie nach einem
+      Neustart; das Menü meldet es. Ein Token, der beim ersten Start nicht gespeichert werden kann, gilt bis zum
+      Beenden, und das Menü sagt das.
+    - Fehlerhafte Nachrichten (f): ein Feld vom falschen Typ zählt als fehlend, Feld für Feld geprüft, weil eine
+      Zahl außerhalb des Bereichs (`"q":-1`, `"n":1.5`) ihren Feldnamen im `DecodingError` nicht nennt. So kostet
+      es nur eine Nachricht, deren Art das Feld braucht; die Verbindung bleibt, `REMOTEY_STATS` schreibt sie auf.
+      Eine Ansichtsanfrage mit `on: true` und fehlendem Feld wird verworfen statt als „aus“ gelesen. Was kein
+      JSON-Objekt ist, beendet die Verbindung weiter. Der schnelle Weg (ein Dekodieren) bleibt für jede gültige
+      Nachricht.
+    - Schlüsselbild (g): `{"t":"idr"}` vom Betrachter: der Encoder macht das nächste Bild zum Schlüsselbild
+      (`kVTEncodeFrameOptionKey_ForceKeyFrame`, dieselbe Sitzung und Ratenregelung), das Sendefenster beginnt neu,
+      `LinkRate` zählt die unbeantworteten Bilder nicht mehr als unterwegs (sonst hielte es die Strecke für
+      belegt; dasselbe galt schon beim Wechsel des Codecs und ist mit behoben). Höchstens eins je Sekunde, nur für
+      H.264; ein JPEG-Strom braucht keins.
+    - Symbole (h): `{"t":"apps","have":[…]}` nennt bis zu 256 Symbole, die die Seite hat; nur die übrigen gehen
+      hinaus. Ohne `have` gilt, was die Verbindung schon bekam, wie bisher.
+    - Schlafendes Display (i): der Neuaufbau wartet nach jedem Fehlschlag doppelt so lang, 1 bis 30 s. Eine Eingabe
+      vom Betrachter kürzt eine Wartezeit über der ersten ab und beginnt wieder bei 1 s; das Aufwachen der Displays
+      (`screensDidWakeNotification`) kürzt jede ab. Der erste Versuch nach einem Fehlschlag kommt also wie bisher
+      nach 1 s, und der Weg von der Eingabe zum Bild aus Runde 11 (0,34 s, mit Neuaufbau im Sekundentakt bis etwa
+      1,5 s) wird nicht länger: die Eingabe weckt, das Aufwachen baut sofort neu auf.
+    - Signale (j): SIGTERM und SIGINT beenden über `NSApp.terminate`, also mit `applicationWillTerminate` und dem
+      Rahmen zurück. `build.sh` sendet SIGTERM und erst nach 10 s SIGKILL. Solange ein Fenster in Telefonform ist,
+      steht sein alter Rahmen in `shaped-window` (je Port, wie der Token); beim nächsten Start bekommt das Fenster
+      ihn zurück, wenn die App noch läuft (pid und Bundle) und das Fenster noch den Rahmen hat, den es nahm, auf
+      einen Punkt genau. Was der Nutzer seitdem damit tat, bleibt.
+    - Herkunft (k): geprüft werden `Host` auf beiden Ports und `Origin` beim WebSocket-Handshake
+      (`setClientRequestHandler` sieht die Kopfzeilen, gemessen: `Host` ist darunter). Beleg aus Tailscale,
+      `ipn/ipnlocal/serve.go` (main, f2c476c): der Proxy ist `httputil.ReverseProxy` mit `Rewrite`, und
+      `reverseProxy.ServeHTTP` setzt `r.Out.Host = r.In.Host`, außer bei einem Unix-Socket als Ziel; dazu kommen
+      `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-For` und die `Tailscale-User-*`-Kopfzeilen. `Origin`
+      fasst es nicht an: `ReverseProxy` entfernt nur Hop-by-hop-Kopfzeilen und mitgebrachte `X-Forwarded-*`. Das Telefon sendet also `Host:
+      <mac>.<tailnet>.ts.net:8443` und `Origin: https://<mac>.<tailnet>.ts.net:8443`. Regel: zugelassen sind
+      127.0.0.1, localhost, ::1 und jeder Name auf `.ts.net`, mit beliebigem Port, in beiden Feldern; ein Feld, das
+      fehlt, lässt durch, `Origin: null` nicht. Gewählt, damit sie das eigene Telefon nicht abweisen kann, auch wo
+      ich nichts prüfen konnte: ältere Tailscale-Versionen, die `Host` womöglich auf das Ziel umschrieben, stünden
+      bei 127.0.0.1; der Name des Macs wird nicht verglichen, weil ihn nur `tailscale status` liefert und ein
+      umbenannter Mac sonst gesperrt wäre; Host und Origin müssen nicht übereinstimmen (in der Entwicklung liegt
+      der Socket einen Port weiter). Was das abwehrt: eine Seite im Browser des Macs (ihr `Origin` ist ihr eigener
+      Name), DNS-Rebinding (ihr `Host` ist ihr Name), auch das Füllen der 32 Plätze, denn der Handshake scheitert
+      sofort statt nach 5 s. Was nicht: ein Prozess auf dem Mac, der sendet, was er will. `HeaderFields` liest
+      Kopfzeilen für beide Wege und ist für Gerätschlüssel und `Tailscale-User-*` wiederverwendbar.
+18. Fundament für die neue Oberfläche (Analyse mit Mockups, Schritt eins von zwei: der Umbau zu „Glas über dem Mac“
+    folgt). Verifier v17 (neu: T16 Zustände der Verbindung, T17 Schrift und Wörter, T18 Protokoll), Basis = 37dff3d mit
+    v16, beide in derselben Chromium-Version.
+    - Wörter: eine Tabelle (`Web/strings.js`), Deutsch und Englisch, gewählt nach der ersten Sprache des Telefons, die
+      die Seite spricht, sonst Englisch. Das Markup nennt nur Schlüssel (`data-text`, `data-label`), die Module fragen
+      `t()`; ein Test prüft, dass außer dem Titel und „fps“ kein Wort mehr im Markup steht und beide Sprachen dieselben
+      Schlüssel haben. Neue Namen: Klick, Rechtsklick, Auf dem Mac schreiben (schmal „Schreiben“, per Container-Abfrage),
+      Live-Bild, Fenster einpassen, An iPhone anpassen, Steuerung, Einstellungen, Zeigertempo, Beschleunigung,
+      Scrolltempo, Zurücksetzen, Mit Face ID entsperren (mit Passkey) oder Mac entsperren, esc und tab klein. Zahlen
+      mit Komma oder Punkt nach Sprache. Die Schritte des ersten Starts nennen den Menüpunkt, wie er heute heißt
+      („iPhone koppeln (QR-Code)…“), nicht den der Analyse.
+    - Zeichen statt Wort, wo kein Platz ist: „Auto“ und „Form“ über dem Zoom sind jetzt ein Fenster- oder
+      Telefonsymbol, das nur bei eingeschaltetem Einpassen steht (vorher 8 px Versalien, an oder aus nur an der Farbe);
+      die Taste „Bild“ ist ein Display mit Bild oder durchgestrichen, mit `aria-pressed`.
+    - Schrift: Systemschrift, Stufen nach den Textstilen von iOS als Tokens in 1/17 der Grundgröße. Die Grundgröße ist
+      `-apple-system-body`, wo Safari sie gibt, also Dynamic Type; gedeckelt bei einem Drittel mehr, weil das Layout noch
+      feste Höhen hat. Gemessen (T17, alle Telefone, beide Lagen, beide Sprachen, Schublade auf jeder Seite, Umschalter,
+      gesperrter Mac): kleinste Schrift 11 px (Basis: 8 px „Auto“, 10 px an neun Stellen), keine Versalien mit
+      Sperrung, kein eigenes Wort abgeschnitten.
+    - Farbe als Rollen-Tokens (Akzent, ok, Fehler, Warnung, Bühne, Trackpad, Flächen, Beschriftung in drei Stufen,
+      Glas), dazu Radien 47/31/22/12/Kapsel und Abstände 4/8/12/16/24. Akzent Orange (#ff9f0a) nur für „gewählt“ oder
+      „Hauptaktion“: gerastete Modifier, eingeschaltete Taste, Schieberfüllung, Fertig, Einrichten, gesperrter Mac
+      an der Schreibtaste. Nicht mehr Akzent: Zeigerring (hell mit dunklem Rand), App im Vordergrund (Fläche und Punkt
+      wie im Dock), vorderes Fenster (Haken), Display mit Zeiger (heller Rahmen), Drücken, mittlere Messwerte (Gelb).
+      Dunkel bleibt; ein helles Schema ist ein zweiter Satz derselben Rollen, nichts darunter nennt eine Farbe. Grau
+      nach den Systemfarben, das Trackpad ohne Punktraster.
+    - Verbindung als Zustandsmaschine (`Web/connection.js`, in Node getestet): nicht gekoppelt, verbinde, verbunden,
+      kein Zugriff (ohne Bedienungshilfen), Mac nicht erreichbar, Remotey läuft nicht, Kopplung ungültig, offline. Die
+      Ursache: nach einem gescheiterten Versuch fragt die Seite ihren eigenen Ursprung per HEAD; keine Antwort in 5 s
+      heißt nicht erreichbar, eine Antwort (502 hinter `tailscale serve`, aber auch das 404, mit dem der Agent HEAD
+      beantwortet) heißt, der Mac ist da und Remotey antwortet nicht. `navigator.onLine` falsch heißt offline.
+      Wiederholung nach 0,5, 1, 2, 4 … bis 30 s, sofort bei Tipp (Intervalle beginnen neu), bei Rückkehr in Sicht und
+      bei `online`. Ein Fehler bleibt während der Wiederholungen stehen, statt zwischen Fehler und „Verbinde…“ zu
+      flackern. Eine Verbindung, die schon lief, wird sofort ohne Nachfrage neu versucht. Ohne Antwort auf den Schlüssel
+      in 10 s gilt ein Versuch als gescheitert (ein Mac außer Reichweite lässt den Socket oft nur hängen). Ein
+      abgelehnter Schlüssel wird nicht wiederholt, bis man es verlangt.
+    - Anzeige: oben links Symbol und Wort (Punkt grün „Verbunden“, drehender Ring „Verbinde…“, rotes Warnzeichen mit
+      Zustand); bei einem Fehler über dem gedimmten Display ein Hinweis mit Symbol, Titel, einem Satz zur Ursache und
+      einem Knopf (Erneut versuchen, Erneut prüfen, So geht's, Hierher holen). Der Hinweis nimmt keine Berührung außer
+      auf dem Knopf. Ohne Schlüssel die drei Schritte über dem ganzen Telefon (`#welcome`, Schritte aus der Tabelle; ein
+      anderer Weg zu koppeln ergänzt dort Schritte). Maustasten blass, solange der Mac nicht verbunden ist.
+      Gemessen (T16): jeder Zustand mit Wort, Symbol, Titel und Knopf; Abstände der Versuche 500/1000/2000 ms (Basis:
+      1000 ms immer); Tipp versucht sofort; online versucht sofort; verlorene Verbindung ein Versuch, kein Hinweis;
+      abgelehnt: 0 Versuche in 1,5 s, „So geht's“ zeigt die Schritte, Zurück schließt sie.
+    - Live-Bild abgelehnt: `why: "taken"` sagt „auf einem anderen Gerät“ mit „Hierher holen“, sonst (auch ohne `why`)
+      fehlt die Bildschirmaufnahme. Das Trackpad steuert unter dem Hinweis weiter.
+    - Messwerte (fps, ms) sind eine Einstellung, aus. Ihre Taste steht auf der Einstellungsseite neben „Zurücksetzen“.
+      Die Seite ist dafür neu gelegt: Name und Wert über dem Schieber, die ganze Zeile nimmt den Finger. Kleinste
+      Fassung, weil die Schublade im Umbau verschwindet.
+    - Tippflächen: Zoomtasten 36 × 32 sichtbar, mit `::after` 44 × 46 und über dem Rand der Anzeige (`z-index`), die
+      Anzeige 52 × 44; Seitentasten bei 320 px 44 breit, Werkzeugtasten 48 bis 56 × 48. T17 prüft für Zoom und Dock einen
+      runden Finger von 44 pt (acht Punkte auf seinem Rand): überall getroffen. Die Tasten in der Schublade blieben, wie
+      sie sind (Umbau).
+    - Protokoll, Seitenhälfte: `ping` alle 5 s in Sicht, alles Ankommende zählt als Leben, 15 s Stille: Verbindung zu,
+      neu (T18: 1 Ping in 5,6 s). Dekoderfehler oder 2 s ohne Bild: Dekoder weg, `{"t":"idr"}`, bis zum Schlüsselbild
+      werden Bilder beantwortet und verworfen, damit das Sendefenster des Macs weiterläuft; Bilder ohne Schlüsselbild
+      länger als 2 s nach der Bitte zählen als weiterer Fehler; drei Fehler in 10 s, dann JPEG. Eine Konfiguration, die
+      der Browser nicht kann, geht sofort auf JPEG. Text in Stücken zu höchstens 1000 Graphemen und 8000 UTF-16-Einheiten
+      (der Mac nimmt 2000 Swift-Zeichen; die Hälfte lässt Raum, falls Segmenter und Swift eine Folge verschieden zählen),
+      T18: 2350 Zeichen in 3 Stücken, Flagge ganz. Symbole bleiben über Verbindungen (höchstens 256, die neuesten) und
+      stehen in `{"t":"apps","have":[…]}`. Wake Lock: gehalten bei Berührung, losgelassen nach 3 Minuten ohne.
+    - Unverändert (T1 bis T15): alle zwölf Hauptaktionen erreichbar, auf allen Telefonen in beiden Lagen. Display-Anteil
+      hochkant 69/73/80 → 70/74/81 %, quer 72/76/82 → 73/77/83 % (der Rahmen ist 1 statt 2 px). Live-Bild beim Tippen
+      206/86/164/84 → 208/88/166/86 px. Zeiger und Scrollen gleich (schnell 250 px bei 60 Hz 768 → 764). Schublade
+      200 → 196 ms sichtbar, 0 px über dem Dock.
+    - Verifier: das Bild des falschen Macs ist 256 statt 64 Pixel breit. Mit 64 rundete seine Höhe so weit neben das
+      Seitenverhältnis des Displays, dass T15 den Zeiger bei einem um 1 px breiteren Display einen halben Punkt daneben
+      sah; die Seite war richtig.
+19. Koppeln je Gerät, Sitzungen, Pause (der geteilte Token war alles: im Fragment des Links und für immer im
+    localStorage, für jedes Telefon derselbe, ein verlorenes nur auszusperren, indem man alle aussperrt, und am Mac
+    nicht zu sehen, wer verbunden ist).
+    - Geräte: `Devices` hält je Gerät Id, Namen, Kopplung, zuletzt gesehen, den Tailscale-Login, von dem es koppelte,
+      und nur den SHA-256 seines Schlüssels, in `devices` neben dem Token (je Port wie `face-unlock`, 0600, daneben
+      geschrieben und umbenannt; `Token.write` ist dafür herausgelöst). Erst gespeichert, dann gültig: ein Gerät, das
+      sich nicht speichern lässt, gibt es nicht. In derselben Datei stehen die beiden Schalter (alter Token,
+      Pause) und ob ein Telefon den Zeiger schon bewegt hat, damit alle drei einen Neustart überleben. Fehlt die
+      Datei, nimmt der Agent den alten Token an (das Telefon des Nutzers geht nach dem Update weiter); ist sie da
+      und unlesbar, nicht: es könnte eine sein, in der er abgeschaltet war. Die Telefone koppeln dann neu.
+    - Angebot: `Pairing` öffnet ein Angebot für höchstens fünf Minuten mit zwei Codes, 128 Bit für den Link
+      (`#p=…`) und sechs Ziffern zum Tippen (ohne Schieflage gezogen: Werte ab dem letzten Vielfachen einer Million unter 2^32 werden
+      neu gezogen). Der erste Gebrauch verbraucht beide, fünf falsche Versuche beenden das Angebot, danach gibt es
+      429, bis der Mac ein neues öffnet. Beide Codes werden bei jedem Versuch verglichen, in konstanter Zeit.
+      Entschieden: keine Bestätigung am Mac. Das Öffnen des Kopplungsfensters ist die Zustimmung, die Codes gibt es
+      nur, solange es offen ist; schließt es, sind sie weg (`closePairing`). Eine zweite Frage hätte nur dieselbe
+      Person am selben Mac gefragt, und das Raten der sechs Ziffern bleibt bei 5 zu 10^6 je Angebot.
+    - Cookie: `remotey-device` (auf anderen Ports `remotey-device-<port>`: Cookies kennen keine Ports, und ein
+      Entwicklungsagent auf 127.0.0.1 darf den Cookie des installierten nicht überschreiben), `HttpOnly`,
+      `SameSite=Strict`, `Path=/`, kein `Domain`, `Max-Age` 400 Tage (das Höchste, was Chromium hält), bei jedem
+      `POST /session` erneuert. `Secure` überall außer auf 127.0.0.1, localhost und ::1, wo die Entwicklungsseite
+      HTTP ist; entschieden nach `Host`, nicht nach `X-Forwarded-Proto`, weil ein fehlendes Feld so nur einen
+      Cookie ohne `Secure` auf Loopback ergibt und nie einen, den das Telefon verwirft. Was ein verlorenes Telefon
+      wertlos macht, ist das Entfernen am Mac, nicht das Ende des Cookies.
+    - Ticket: der Handshake-Handler sieht die Kopfzeilen (auch `Cookie`), kann sie aber keiner Verbindung
+      zuordnen; einen sauberen Weg dafür gibt es in Network nicht. Also tauscht die Seite ihren Cookie per
+      `POST /session` gegen ein Ticket, gut einmal und 30 s, höchstens 64 offen. Ein Ticket eines entfernten Geräts
+      sagt `revoked`, nicht `ticket`, damit die Seite neu koppeln lässt statt neu zu fragen.
+    - HTTP: bisher las der Agent nur die erste Zeile. `HTTPRequest` liest Kopf und Körper, höchstens 8 KiB Kopf
+      (431) und 4 KiB Körper (413), nur nach `Content-Length` (`Transfer-Encoding` 411, zwei Längen 400), alles
+      innerhalb der 5 s, die eine Verbindung ohne Antwort warten darf. Für die beiden POST-Routen gilt: `Host`
+      und Tailscale wie für alles, `Origin` eigen oder fehlend oder `null`, und `Content-Type: application/json`.
+      Das letzte ist die eigentliche Sperre gegen eine Seite im Browser des Macs: JSON geht von fremdem Ursprung
+      nur nach einer CORS-Vorabfrage, die der Agent nie beantwortet (404), und ein `no-cors`-fetch oder ein
+      Formular kann es nicht setzen. `null` lasse ich durch, weil die Fetch-Spezifikation es bei einer
+      Referrer-Policy wie `no-referrer` (die die Seite setzt) für Anfragen außerhalb des CORS-Modus vorsieht und ich
+      nicht geprüft habe, ob Safari es auch für das eigene fetch sendet. Eine fremde Seite oder ein falscher Name
+      kostet das Angebot keinen Versuch.
+    - Tailscale: gelesen in `ipn/ipnlocal/serve.go` auf main, f2c476c. `addTailscaleIdentityHeaders` löscht
+      zuerst jedes mitgebrachte `Tailscale-User-Login`, `-Name`, `-Profile-Pic`, `Tailscale-Funnel-Request` und
+      `Tailscale-Headers-Info`, auch mit `_` statt `-` geschrieben (`delHeaderVariants`). Dann setzt es für eine
+      Anfrage über Funnel `Tailscale-Funnel-Request: ?1` und sonst nichts; findet `WhoIs` die Quelle nicht
+      („traffic from outside of Tailnet (funneled or local machine)“) oder ist sie ein getaggtes Gerät, setzt es
+      nichts; sonst Login und Namen, über `mime.QEncoding` (ASCII bleibt, wie es ist, anderes wird RFC 2047).
+      Durch `serve` lässt sich das also nicht fälschen, ein Prozess am Mac kann alles schicken. Regel
+      (`TailnetIdentity`): Funnel wird abgewiesen; ein Login, der lesbar ist und nicht der des Besitzers
+      (`Tailscale.Status.loginName`, ohne Rücksicht auf Groß- und Kleinschreibung), wird abgewiesen, auf beiden Ports
+      und im Handshake; alles andere kommt durch: ohne Feld, ohne bekannten Besitzer (nil oder `tagged-devices`,
+      so heißt der Besitzer eines getaggten Macs), ein Wert, der sich nicht dekodieren lässt. Das Telefon des
+      Besitzers kann die Regel so nicht aussperren. Der Login ist auch die Beschriftung, von wem ein Gerät
+      gekoppelt wurde. Den Besitzer liest das Menü beim Start einmal im Hintergrund und bei jedem Koppeln.
+    - Alter Token: angenommen, solange `acceptsToken` an ist; `setAcceptsToken(false)` schließt die Telefone, die
+      ihn benutzen, mit `denied`/`token`. `POST /pair` mit `{"token":…}` macht so ein Telefon zum Gerät, ohne zu
+      scannen. Ein neuer Token („Alle trennen“ im Menü) trennt nur die Telefone des alten; das Menü entfernt dazu
+      alle Geräte. Die Skripte in `scripts/live/` bleiben beim Token: ein Gerät bräuchte das Kopplungsfenster, und
+      jeder Agent hat seine eigene Datei, also nimmt ein Entwicklungsagent auf einem anderen Port den Token, was
+      immer der installierte tut. Abgeschaltet sagt `agent.mjs`, woran es liegt.
+    - Sitzungen: `Server.sessions` (Id, Gerät oder nil, Name, seit, Live-Bild, Home-Bildschirm) mit
+      `sessionsChanged`; `end` schließt die Verbindung, die Seite verbindet sich danach von selbst wieder. Wer
+      draußen bleiben soll, wird entfernt oder die Pause eingeschaltet. `isPaired` und `hasMoved` sind die beiden
+      Proben des Assistenten.
+    - Pause: verwirft Eingaben, Live-Bild, App-Liste, Fokus, Sprung auf ein Display, Entsperren und Einrichten;
+      Ping, die Liste der Displays und das Ausschalten des Bildes gehen weiter. Beim Einschalten lässt der Agent
+      gehaltene Tasten los, beendet den Bildlauf und das Bild (`view`/`paused`). Niemand wird entkoppelt.
+    - `mac`: nach `ok` und bei jeder Änderung von Bedienungshilfen, Bildschirmaufnahme oder Pause, gelesen alle 2 s,
+      solange ein Telefon verbunden ist, sonst gar nicht. Das Live-Bild fragt jetzt `Permissions.screenRecording`
+      statt Preflight, und der Server fragt nicht mehr nach der Erlaubnis (bisher rief eine Bildanfrage
+      `CGRequestScreenCaptureAccess`): das Fragen ist die Taste des Assistenten, die Seite sieht in `mac`, was fehlt.
+    - Ohne Oberfläche: `REMOTEY_HEADLESS=1` mit `REMOTEY_PORT` (nicht 47800, sonst endet er) startet den Agenten
+      ohne Statussymbol, Fenster und Abfragen, mit `.prohibited` (kein Dock, nie vorn), mit Token, Geräten und
+      Face-ID-Datei in einem eigenen Ordner, der beim Ende geht, und einer Eingabe, die nichts postet, sondern
+      jedes Ereignis auf stdout schreibt; Bedienungshilfen gelten als da, Bildschirmaufnahme nie. `main.swift` wählt
+      den Delegate. `scripts/pairing-e2e.mjs` startet ihn auf einem freien Port, öffnet die echte Seite in
+      chrome-headless-shell (Touch-Emulation, Safari-Kennung des iPhones), koppelt mit den sechs Ziffern, verbindet
+      mit einem Ticket und prüft, dass ein Finger über das Feld als Bewegungen nach rechts ankommt (lokal: 19
+      Bewegungen, 129 Punkte), ohne Klick. Die Seite kann das Koppeln noch nicht; bis dahin koppelt das Skript per
+      fetch im Ursprung der Seite (der Browser hält den Cookie, `document.cookie` zeigt ihn nicht), und eine Hülle um
+      den WebSocket der Seite ersetzt deren `auth` mit Token durch eines mit Ticket. Sobald `remote.js` `/session`
+      nennt, lässt das Skript die Hülle weg und öffnet `/#p=<code>`: dann muss die Seite selbst `POST /pair` mit
+      `{"code":…}` und `Content-Type: application/json` schicken, vor jedem Verbinden `POST /session`, und mit
+      `{"t":"auth","ticket":…,"standalone":…}` öffnen. `--mode=page` erzwingt das heute und scheitert, wie es soll,
+      mit „no "paired"“. In der CI nach `ui-verify`.
+    - Prüfungen: `swift test` 257 Tests, `node --test scripts/*.test.mjs` 70, `ui-verify.mjs` 19 von 19,
+      `pairing-e2e.mjs` grün. Je Sicherheitsregel ein Test; vierzehn Abwandlungen (Origin, JSON, Login über HTTP
+      und im Handshake, Ticket einmal, Versuche, Verbrauch, Entfernen, Pause, HttpOnly, Token-Schalter, Hash statt
+      Schlüssel, Ablauf, Erlaubnis), je eine Regel zurückgenommen, ließen je ihren Test scheitern.
+20. Die Oberfläche am Mac: Menü, Assistent, Einstellungen (Analyse mit Mockups, Mockups 20 bis 22). Vorher zeigte der
+    Mac ein NSMenu mit Textzeilen, ein Fenster mit QR-Code und sonst nichts; wer verbunden ist, ob Bildschirmaufnahme
+    und Tailscale gehen, sah man nicht, und eingerichtet wurde im Terminal. Die Modelle (Runden 18 und 19) waren
+    fertig, diese Runde setzt die Oberfläche darauf.
+    - Entscheidung Darstellung des Menüs: ein Panel (`MenuPanel`, `NSPanel` mit `.nonactivatingPanel`, Ebene
+      `.popUpMenu`, Material `.menu`, Ecken 14, Haarlinie) mit SwiftUI darin, kein NSMenu. Ein NSMenu hält einen
+      Schalter und eine Taste „Trennen“ in einer Zeile nur als eigene Ansicht, und solche Zeilen bekommen von ihm
+      weder Return noch die Markierung; vor allem zeichnet ein NSMenu nur, solange es auf dem Bildschirm offen ist,
+      es gäbe also kein Bild zum Prüfen. Was ein Menü tut, macht das Panel nach: es öffnet beim Drücken auf das Symbol
+      (nicht beim Loslassen), die linke Kante unter dem Symbol, oben 5 pt unter der Menüleiste, ganz auf dem Display
+      des Symbols (`MenuPanel.origin`, getestet mit rechtem Rand und einem zweiten Display links unten); es schließt
+      bei einem Klick in ein anderes Programm (globaler Monitor), in ein anderes Fenster von Remotey (lokaler Monitor),
+      bei Escape, wenn es die Tastatur verliert und beim Wechsel des Space; es nimmt die Tastatur, ohne Remotey zum
+      aktiven Programm zu machen; ↑ und ↓ markieren die Zeilen, Return und Leertaste lösen aus, ⌘, und ⌘Q gehen wie
+      angeschrieben. Es steht auf allen Spaces und über Vollbildprogrammen. Jedes Öffnen baut die Ansicht neu, damit
+      keine Zeile von vorher markiert bleibt. Das Symbol ist hervorgehoben, solange das Panel offen ist.
+    - Entscheidung SwiftUI in AppKit: `main.swift` und `AppDelegate` bleiben AppKit; Menüinhalt, Assistent und
+      Einstellungen sind SwiftUI in `NSHostingView`/`NSHostingController`. Ein `Form` mit `.grouped` ist die
+      Darstellung der Systemeinstellungen mit den Systemfarben, Schaltern und Abständen, ohne sie nachzubauen; das
+      Fenster der Einstellungen ist ein `NSTabViewController` mit `.toolbar` und `toolbarStyle = .preference`, wie
+      Mac-Apps es haben. So entsteht das native Bild mit dem wenigsten Code (Ansichten, Modelle, Wörter und
+      Verdrahtung zusammen rund 2400 Zeilen).
+      Vorher geprüft: `cacheDisplay` zeichnet `NSHostingView` samt Form, Schaltern und Tasten außerhalb des
+      Bildschirms; ohne das hätte es keine Bilder gegeben.
+    - Ein Wert für alle drei: `MacState` (Zustand des Servers und Fakten der Checkliste, rein, getestet: Symbol,
+      Statuszeilen, Untertitel der Geräte mit heute/gestern/Datum, Adresse, ob gekoppelt werden kann), `MacModel`
+      (der Wert, die Uhr und die Tasten als Closures; eine Taste, die eine Datei nicht schreiben kann, setzt
+      `problem`, das `AppDelegate` als Alert zeigt, als Blatt am Fenster, aus dem sie kam), `AssistantFlow` (Schritte
+      und Code, getestet). Die Ansichten lesen nur diese, darum zeichnen die Bilder ohne Server und ohne Tailscale.
+      Alle Wörter stehen in `Texts.swift` (auch die des Face-ID-Fensters), die der Checkliste weiter in `Setup.swift`.
+    - Menü: Kopf „Remotey“ mit dem Schalter (an = Fernsteuerung, aus = Pause, mit einem Satz darunter); wer
+      verbunden ist (Name, „Verbunden · Live-Bild an“, mit dem alten Token „Web-Zugang“, „Trennen“); Status für
+      Bedienungshilfen, Bildschirmaufnahme und Tailscale. Tailscale, HTTPS und Freigabe sind eine Zeile: die erste, die
+      nicht grün ist, spricht für alle („HTTPS im Tailnet aus“, „Nicht im Tailnet freigegeben“, „Funnel ist an“); grün
+      steht der Name des Macs im Tailnet darunter. Eine Zeile, die nicht grün ist, führt zu ihrer Abhilfe: die
+      Erlaubnisse zu ihrer Taste (fragen, dann die Einstellungen), Tailscale zum Assistenten. Grüne Zeilen sind nicht
+      klickbar. Belegte Ports und ein nicht gespeicherter Token stehen als rote Zeilen oben. Dann „iPhone
+      hinzufügen …“, „Mit Face ID entsperren …“ (mit „Eingerichtet“ oder „Aus“), „Einstellungen …“ ⌘, und „Remotey
+      beenden“ ⌘Q. VoiceOver: jede Zeile ein Element, klickbare als Taste mit Aktion, der Zustand als Wert.
+    - Symbol in der Menüleiste (`StatusSymbol`, Vorlagebild, also in der Farbe der Leiste, auch bei erhöhtem
+      Kontrast): Zeiger; mit Strahlen, solange ein Telefon verbunden ist; durchgestrichen bei Pause; mit einem kleinen
+      Ausrufezeichen, ausgestanzt, wenn die Ports zu sind oder eine Pflichtzeile der Checkliste (Bedienungshilfen,
+      Tailscale, HTTPS, Freigabe) nicht grün ist. Eine Zeile, die noch prüft, warnt nicht. VoiceOver und Tooltip sagen
+      den Zustand. Damit das Symbol der Bedienungshilfe folgt, während nichts zusieht, liest `refreshLocal()` (neu im
+      Assistenten, getestet) die billigen Proben alle 5 s, und Tailscale wird alle 60 s im Hintergrund gefragt.
+    - Assistent: vier Schritte, Punkte unten. „Remotey einrichten“ mit den fünf Zeilen der Checkliste (Zustand, Satz,
+      eine Taste) und „Beim Anmelden starten“; „Weiter“ erst, wenn Freigabe und Ports stehen. „iPhone hinzufügen“ mit
+      QR-Code, den sechs Ziffern darunter, und der Checkliste daneben mit „Der Code gilt noch 4:38 Minuten“, jede
+      Sekunde neu; abgelaufen oder zu oft falsch geraten: „Neuer Code“. Ist ein Telefon gekoppelt, geht es von selbst
+      zu „Bewege den Finger“; die erste Bewegung dieses Telefons macht den Schritt grün („Es funktioniert“). Dafür sagt
+      der Server jetzt die erste Bewegung jeder Sitzung mit ihrem Gerät (`firstMove`, getestet; `hasMoved` gilt nur
+      einmal je Mac). „Zum Home-Bildschirm“: drei Schritte mit den Symbolen von iOS im Satz, dazu wieder sechs
+      Ziffern, weil eine App vom Home-Bildschirm Safaris Cookie vielleicht nicht hat; der Schritt wird grün, sobald
+      eine Sitzung eines Geräts mit `standalone` kommt. Der Assistent öffnet sich beim ersten Start und wenn eine
+      Pflichtzeile nicht grün ist (`launchCheck`), sonst über „iPhone hinzufügen …“ (dann gleich beim Code, wenn
+      nichts fehlt) und „Einrichtung öffnen …“. Ein Angebot lebt nur, solange sein Schritt zu sehen ist; Zurück,
+      Fertig und das Schließen des Fensters schließen es.
+    - Anmeldeobjekt beim ersten Start: der Assistent schaltet es ein, das Kästchen steht also angehakt da, und wer es
+      nicht will, nimmt den Haken weg. Danach zeigt das Kästchen, was ist, und schaltet sofort; „braucht Erlaubnis“
+      erklärt sich, ohne Bundle ist es aus und sagt warum.
+    - Einstellungen: Allgemein (Anmeldeobjekt, Fernsteuerung, Adresse im Tailnet, Zustand der Ports, Einrichtung
+      öffnen), iPhones (Geräte mit „Verbunden seit 14:31 · Live-Bild an“ oder „Zuletzt gestern, 21:07“, ⓘ für Name,
+      Kopplung, zuletzt verbunden und Login, dort umbenennen; „Widerrufen …“; „Web-Zugang ohne Gerätebindung“ mit
+      einem Satz, was er ist und wann er aus soll; „Alle iPhones trennen …“), Sicherheit (Face ID einrichten oder
+      entfernen, Tailscale, HTTPS und Freigabe mit Zustand und Taste, wer zugelassen ist, „Freigabe entfernen …“),
+      Berechtigungen (beide mit Zustand und Abhilfe). Fragen vorher, mit dem, was geschieht: Widerrufen, Alle trennen,
+      Web-Zugang aus (nur wenn ein Gerät ihn gerade nutzt, mit der Zahl), Face ID entfernen, Freigabe entfernen.
+    - Aufgeräumt: `AppDelegate.tailscaleStatus()` lief im Hauptthread und ist weg; den Namen gibt `MacState.hostname`
+      aus dem Assistenten, den Besitzer setzt jeder Blick des Assistenten auf Tailscale. Das alte Menü, das
+      Kopplungsfenster und die Alerts für Token und Anmeldeobjekt sind weg; „Link kopieren“ gibt es nicht mehr (der
+      Code und die Ziffern reichen). Die Abfrage der Bedienungshilfen beim Start ist weg: gefragt wird nur über die
+      Taste. Der Weg „Neustart nötig“ der Bildschirmaufnahme ist weg (`needsRestart`, `Action.restart`): seit Runde 19
+      liest der Server die Erlaubnis wie die Checkliste und startet das Live-Bild ohne Neustart, die Zeile sagt also
+      grün, sobald die Fenstertitel die Erlaubnis zeigen. Ein Hauptmenü ohne Menüleiste gibt ⌘C/⌘V/⌘A (auch im
+      Passwortfeld des Face-ID-Fensters), ⌘W und ⌘, in den Fenstern. Das Logo aus docs/logo.svg ist als Zeichnung
+      im Code das Symbol des Programms (in Alerts) und das Zeichen des Assistenten. `REMOTEY_HEADLESS` läuft wie
+      vorher: `pairing-e2e.mjs` grün.
+    - Ein Fehler, den ein Test fand: öffnet der Assistent einen Code, meldet der Server das Angebot, der Mac sagt es
+      dem Assistenten, und der öffnete, wenn der Code gerade auf Tailscale wartete, einen zweiten. Gezeigt hätte er
+      dann den Code, den der Server schon ersetzt hatte. Ohne die Korrektur scheitert der Test, mit ihr nicht.
+    - Bilder: `scripts/mac-pictures.sh DIR` zeichnet Menü (verbunden, Probleme, Pause), die Symbole, die vier Schritte
+      des Assistenten, die vier Bereiche der Einstellungen und das Face-ID-Fenster in hell und dunkel, mit erfundenen
+      Daten („iPhone 17 Pro“, „iPad Air“, `macbook.example-tailnet.ts.net`, `jane@example.com`), außerhalb des
+      Bildschirms (`InterfacePicturesTests`; ohne `REMOTEY_PICTURES` zeichnen sie nur, das prüft das Layout jedes
+      Zustands). `--before 23b8eae DIR` zeichnet den alten Stand in einem Worktree, der danach wieder geht: das
+      Kopplungsfenster mit dem Code von `showPairing`, Zeile für Zeile nachgebaut, weil die Methode es auf den
+      Bildschirm stellte; das echte Face-ID-Fenster (nur `content` wird dafür sichtbar gemacht); das alte NSMenu
+      nachgezeichnet, mit seinen Einträgen für einen Mac, der lauscht und die Bedienungshilfen hat, in Menüschrift und
+      22 pt je Zeile, weil ein NSMenu außerhalb des Bildschirms nicht zeichnet. Grenzen beider Bilder: ein Fenster,
+      das nie auf dem Bildschirm war, ist nie das aktive, Ampeln und Schalter sind darum grau; das Material des Panels
+      hat nichts hinter sich und ist als Farbe gemalt, über einem Verlauf wie in den Mockups; gezeichnet auf macOS 27,
+      also mit dessen Ecken und Toolbar.
+    - Abweichungen von den Mockups: Akzent ist die Systemfarbe des Nutzers statt Orange (Markierung, Kreis des
+      Geräts, Standardtaste), wie Apples Programme es halten; Orange bleibt dem Telefon. Das Panel ist 320 statt 300 pt
+      breit: „Mit Face ID entsperren …“ und „Eingerichtet“ passen in 13 pt sonst nicht in eine Zeile. Tailscale hat
+      das Netz-Symbol statt WLAN, das an WLAN denken ließe. Das Symbol zeigt einen Zeiger mit Strahlen statt eines
+      grünen Punkts: Symbole in der Menüleiste sind einfarbig. Der Assistent hat vier Punkte statt fünf (vier Schritte) und
+      die Ziffern unter dem Code; „Zurück“ fehlt im ersten Schritt. In den Einstellungen fehlt „Face ID eingerichtet“
+      beim Gerät: Face ID gilt für den Mac, der Server weiß nicht, welches Telefon den Passkey hat. Sicherheit und
+      Berechtigungen hat das Mockup nicht, sie folgen dem Muster der iPhones. Die Toolbar zeichnet macOS 27 mit Rahmen.
+    - Prüfungen: `swift test` 285 Tests (vorher 257; einer zum Neustart entfiel, neu: `MacStateTests`,
+      `AssistantFlowTests`, `InterfacePicturesTests`, `refreshLocal`, `firstMove`), alle grün;
+      `node scripts/pairing-e2e.mjs` grün (19 Bewegungen, 129 Punkte). Die Bilder liegen neben den Mockups und
+      wurden mit ihnen verglichen; nach dem ersten Vergleich korrigiert: eine umgebrochene Zeile im Menü, die Strahlen
+      des Logos, ein Hinweis, der die Punkte überdeckte, Höhe der Schritte.
+
+19. Glas über dem Mac (Analyse mit Mockups, Schritt zwei von zwei; Mockups 1 bis 11 der Analyse). Verifier v18, Basis =
+    4b85a83 mit v17, beide in derselben Chromium-Version.
+    - Gerüst: das Bildelement deckt das ganze Telefon, Ränder des Displays eingeschlossen; alles andere schwebt darüber.
+      Hochkant oben links der Mac-Knopf (Zustand als Zeichen und Wort, Name, Menü), oben rechts die Ansicht-Kapsel
+      (−, Anzeige mit Menü, +), unten die Maustasten (‹ › Klick Rechtsklick) und die Leiste (Auf dem Mac schreiben,
+      Apps, Steuerung). Quer stehen dieselben Knöpfe in den beiden Seitenrändern, die am iPhone ohnehin frei sind:
+      Mac, ‹ ›, Rechtsklick, Klick auf der einen Seite, Ansicht, Schreiben, Apps, Steuerung auf der anderen;
+      „Maustasten rechts“ tauscht die Seiten. `remote.js` hängt die Knöpfe beim Drehen um (`arrange`), damit die
+      Reihenfolge für Tastatur und VoiceOver der sichtbaren folgt.
+    - Ränder für den Mac: die Ansichtsanfrage trägt `inset`, gemessen an den Zonen der Bedienelemente (hochkant oben
+      und unten, quer links und rechts; beim Tippen oben und die Tippleiste). Blätter, Menüs und die Tour zählen nicht:
+      sie kommen und gehen, und eine neue Anfrage hieße ein neuer Strom. Geprüft, wo die Seite mit der Breite des
+      Bildes rechnet: Zoom (`clientWidth / width`), Vorschau beim Zoomen, Zeiger voraus und Anzeige rechnen mit dem
+      ganzen Element, wie der Kopf das gesendete Bild beschreibt; nichts davon musste sich ändern. Gemessen (T20):
+      Bildelement immer so groß wie das Telefon, `inset` hochkant [48, 0, 116, 0], quer [0, 64, 0, 64]; Apps,
+      Steuerung, Einstellungen und beide Menüs öffnen und schließen ohne neue Anfrage und ohne Größenänderung.
+    - Unverdeckter Anteil (T1, neu gemessen als Fläche zwischen den Rändern, die die Seite dem Mac meldet; vorher die
+      Fläche des Display-Elements, über dessen oberem Rand die Chips lagen): hochkant 70/74/81 → 71/75/83 %
+      (Höhe 71,1/75,4/82,8 %), quer 73/77/83 → 77/81/87 %. Alle 13 Hauptaktionen erreichbar (neu gezählt: Steuerung).
+      Live-Bild beim Tippen unverdeckt 208/88/166/86 → 227/107/180/100 px, weil die obere Reihe beim Tippen weicht,
+      wenn weniger als 420 px zu sehen sind (`cramped`), und die Tippleiste aus zwei Zeilen zu 44 px besteht.
+    - Glas und seine Kosten, nicht gemessen: Unschärfe über einem Bild, das sich 60-mal je Sekunde ändert, wird jedes
+      Bild neu gerechnet, und auf einem iPhone hat das niemand gemessen. Deshalb: Unschärfe nur auf den Kapseln, die
+      stillstehen (gemessen: 23/19/13 % der Fläche hochkant bei 320/375/440 px, quer 17/14/9 %, keine davon animiert);
+      Blätter, Menüs, Karten und die Tour bewegen sich und haben ein fast deckendes Material ohne Unschärfe; die
+      unsichtbare Tippleiste hat keine. „Durchsichtige Flächen“ in den Einstellungen schaltet die Unschärfe ganz ab,
+      ebenso „Transparenz reduzieren“ und „Kontrast erhöhen“ am Telefon (T20: 0 unscharfe Elemente in allen drei Fällen).
+      Wer am iPhone ruckelndes Bild bemerkt, schaltet sie dort ab; gemessen werden sollte es mit dem Messwert im Mac-Knopf.
+    - Designsystem umgesetzt: konzentrische Radien (Blatt 47 unten, 38 oben, Gruppen 22/31, Tasten 12, Knöpfe als
+      Kapsel), ein Akzent für „gewählt oder Hauptaktion“ (eingepasste Ansicht, gerasteter Modifier, Schalter an,
+      Entsperren auf gesperrtem Mac), Bewegung, die abbremst und nicht überschwingt (die Feder des Segmentschalters
+      ist weg), Symbole selbst gezeichnet in einem Stil (24er Raster, Strich 1,8, rund), weil die Lizenz der SF Symbols
+      Webseiten nicht deckt. Hell und Dunkel folgen dem Telefon; die Bühne hinter dem Bild bleibt schwarz, ohne Bild
+      ist der Grund hell oder dunkel. Erhöhter Kontrast: deckende Flächen, sichtbare Kanten, volle Schriftfarbe.
+    - Ohne Live-Bild (Mockup 2): eine ruhige Fläche im unverdeckten Teil, ein Hinweis bis zur ersten Bewegung (gemerkt),
+      ein Ring, wo ein Klick ankam. Oben rechts steht dann „Live-Bild“ statt der Ansicht-Kapsel.
+    - Schreiben (Mockup 3): esc tab | ⌘ ⌥ ⌃ ⇧ | ← ↓ ↑ → in einer Kapsel, ein gerasteter Modifier als Kreis im Akzent,
+      darunter Feld und ✓. Unter 360 px zwei Zeilen. „Folgt Text“ ist ein Schreibmarken-Zeichen in der Anzeige.
+    - Blätter (Mockups 4 bis 7): Apps als Raster wie im Dock (Fläche und Punkt für die App vorn, Zahl als helle Marke),
+      Fenster als gruppierte Liste mit Haken rechts und dem Satz, dass sich vorher nichts bewegt; Steuerung mit
+      Medien (Transport-Karte, Kacheln Stumm, leiser|lauter, Mac sperren) und Tasten (5 Spalten, Modifier mit Namen
+      wie auf der Tastatur des Landes: cmd/alt/ctrl auf deutschen, command/option/control auf US-Tastaturen, Pfeile als
+      umgedrehtes T, App-Zoom als eigene Zeile A− | 100 % | A+); kleinste Taste 34 → 48 px (T8). Einstellungen als
+      eigenes Blatt mit Gruppen: Zeiger (Schieber, Zurücksetzen), Live-Bild (Fenster einpassen, An iPhone anpassen,
+      Bildrate und Verzögerung), Bedienung (Maustasten rechts, Durchsichtige Flächen), Hilfe (Gesten-Tour), am Ende der
+      Name, unter dem der Mac dieses iPhone gekoppelt hat. Nicht modal: Bewegen und Scrollen auf dem Bild darüber gehen
+      weiter (T6 misst die nächste Bewegung bei offenem Blatt: 2,0-fach). Jedes Blatt ist nach seiner Schließtaste in
+      unter 200 ms weg (T7: 199 → 179 ms; T20 für alle drei), ein Tipp aufs Bild oder Wischen nach unten schließen es.
+    - Zustände: gesperrt (Mockup 8) wird der Schreib-Knopf zur Hauptaktion im Akzent, „Mit Face ID entsperren“ oder
+      „Mac entsperren“, und der Mac-Knopf sagt „Gesperrt“ mit Schloss. Erster Start (Mockup 9) mit Feld für die sechs
+      Ziffern; Fehler (Mockup 10) in den Formen der Zustandsmaschine, dazu „pausiert“ und „getrennt“; die Gesten-Tour
+      (Mockup 9b, `tour.js`): sechs Schritte, ohne Live-Bild fünf, jeder erledigt, sobald `touchpad.js` die Geste
+      erkennt (die Gesten gehen weiter an den Mac), überspringbar, einmal von selbst, sonst aus dem Mac-Menü und den
+      Einstellungen. `touchpad.js` ist unverändert; die Tour hört an seinen Ausgängen mit.
+    - Kopplung je Gerät (`pairing.js`, Node-Tests): Code aus dem Link, sechs Ziffern im Feld (Einfügen mit Leer- oder
+      Bindestrich, `one-time-code`, sofort bei sechs Ziffern), alter Token einmal zum Gerät, danach nur noch Tickets;
+      ein Agent ohne `/pair` und `/session` bekommt den Token wie bisher. Der Fragment-Teil verlässt die Adresse, sobald
+      er seine Arbeit getan hat; nur der Token eines alten Agenten bleibt dort, weil der Home-Bildschirm ihn sonst
+      verliert. Worte für falsch oder abgelaufen (der Mac unterscheidet sie nicht), keine offene Kopplung und zu viele
+      Versuche. `denied` mit `revoked` vergisst das Gerät und führt zum Feld; mit `ticket` wird einmal neu versucht.
+      `mac` setzt Bedienungshilfen und Pause sofort (Zustand `paused` in `connection.js`), eine erteilte
+      Bildschirmaufnahme holt das Live-Bild zurück. Der Verifier spielt den Mac mit diesen Wegen (T19, T20).
+    - Bewusst gegen frühere Entscheidungen, mit den Kosten in Tipps:
+      Die Anzeige öffnet das Ansicht-Menü, statt Einpassen zu schalten (Runde 12): Einpassen an oder aus 1 → 2 Tipps,
+      dafür auffindbar; Zange und − / + beenden es weiter mit einer Geste.
+      „An iPhone anpassen“ ins Ansicht-Menü (Runde 13, Rasttaste im Kopf des Apps-Blatts): 2 → 2 Tipps.
+      Displays ins Ansicht-Menü (Runde 12, Karte im Apps-Blatt): 2 → 2 Tipps; Apps in Sicht bei 320 px 9 → 12.
+      Der Messwert verlässt das Bild (Runden 6, 7): eingeschaltet steht er statt des Namens im Mac-Knopf, immer im
+      Mac-Menü (1 Tipp); die Einstellung dazu liegt im Einstellungsblatt (3 Tipps wie vorher in der Schublade).
+      Live-Bild aus 1 → 2 Tipps (Mac-Knopf, Live-Bild), an weiter 1 Tipp (der Knopf steht dann oben rechts).
+      Mac sperren als eigene Kachel (Runde 14, unter Stumm): 2 Tipps über Steuerung oder über den Mac-Knopf.
+      Zustand in Grün und Rot, mit Zeichen und Wort; die Zeigermarke ist neutral (Runde 6, eine Signalfarbe).
+      Blätter liegen über der Leiste und den Maustasten (die Schublade ließ das Dock frei): wie in den Mockups; das
+      Blatt ist mit einem Tipp aufs Bild weg. „Tippen, dann ziehen“ bleibt verworfen; die Tour lehrt drei Finger
+      und „Klick halten“.
+    - Wo der Bau von den Mockups abweicht, und warum:
+      Quer (Mockup 11) stehen Mac-Knopf und Ansicht-Kapsel in den Seitenleisten statt über dem Bild: darüber lägen sie
+      auf der Menüleiste des Macs (links Apple- und App-Menü) oder kosteten einen oberen Rand von 52 px, und der
+      Anteil fiele unter 73/77/83 %. Im Seitenrand zeigt der Mac-Knopf nur das Zeichen; der Name steht im Menü.
+      Blätter und Menüs sind nicht aus Glas, sondern aus fast deckendem Material: sie bewegen sich über dem Bild.
+      Kein eigener Schlüssel-Knopf zum Passwortfeld im gesperrten Zustand (Mockup 8): ein Weg zum Entsperren, über
+      dieselbe Taste; nach abgelehntem Face ID öffnet der nächste Tipp das Feld.
+      Die Zeile „Mit Face ID entsperren · Ein“ der Einstellungen fehlt: die Seite weiß nur bei gesperrtem Mac, ob ein
+      Passkey eingerichtet ist; eingerichtet wird am Mac.
+      Schalter im Akzent statt in Grün: Grün heißt hier „verbunden“. Die Schrittnummern des ersten Starts sind neutral,
+      der Akzent bleibt bei Hauptaktionen. Der Menüpunkt im ersten Start heißt, wie er am Mac heute heißt.
+    - Nebenbei gefunden und behoben: `Awake` rief `setTimeout` als eigene Methode auf, was Browser mit „Illegal
+      invocation“ ablehnen; `touched()` warf, bevor es den Wake Lock erbat, und der Bildschirm blieb nie wach (seit
+      Runde 18, Fundament). Test in `connection.test.mjs`, der mit dem alten Code scheitert. Der Verifier sammelt jetzt
+      die Ausnahmen der Seite (`page.errors`).
+    - Verifier v18: Aufgaben auf das neue Layout umgestellt (siehe Kopf von `ui-verify.mjs`), neu T19 Kopplung,
+      T20 Glas, Ränder und der Zustand des Macs, T21 Tour, T22 Seiten quer; `--gallery=DIR` legt alle Bildschirme hell
+      und dunkel mit einem erfundenen Mac-Bild ab, `--docs=DIR` die Bilder des README. 27 von 27 Prüfungen bestanden.
+      Zeiger und Scrollen gleich (schnell 250 px bei 60 Hz 768 → 779, Streuung).
+
+21. Nach den Reviews (zwei Leser, die den Stand nicht gebaut hatten: einer für den Agenten, einer für die Seite; dazu
+    ein Lauf von Ende zu Ende durch die echte Seite). Kein Weg an der Anmeldung vorbei gefunden. Behoben:
+    - Seite, ein Telefon blieb ausgesperrt: jede Antwort auf `/session` außer 200 und 404 galt als „nicht gekoppelt“.
+      Startet der Agent neu, antwortet der Proxy davor mit einem eigenen Fehler; die Seite vergaß das Gerät und blieb
+      auf dem ersten Start stehen, obwohl der Cookie galt. Jetzt entkoppelt nur 401, alles andere ist ein Versuch, der
+      scheiterte (`pairing.js`, Test mit 502, 503, 500, 403).
+    - Seite, ein Gerät je Start: eine Home-Screen-App von vorher trägt den Token in ihrer Startadresse und löste ihn
+      bei jedem Kaltstart ein („iPhone 2“, „iPhone 3“ …). Jetzt fragt die Seite zuerst nach einem Ticket und löst den
+      Token nur ein, wenn der Mac das Telefon nicht kennt. Zwei Verbindungen, die zugleich fragen, teilen sich eine
+      Antwort (Test: drei Starts, ein Gerät; zwei Fragen zugleich, ein Gerät).
+    - „Trennen“ am Mac tat nichts: die Seite war binnen einer Sekunde zurück. Der Mac sagt vor dem Schließen `bye`,
+      die Seite bleibt weg, bis ihr Nutzer wieder verbindet.
+    - Seite, die Einstellungen ließen sich kaum scrollen: jede Taste nahm den Finger schon beim Berühren, und die
+      Reihen der Schieber setzten ihren Wert, wo der Finger landete. Ein Wisch, der auf einem Schalter begann, legte
+      ihn um, einer auf einer Reihe verstellte das Zeigertempo, und die Liste stand. Jetzt wirken Tasten in der Liste
+      auf einen Tipp, und bei einer Reihe entscheidet der erste Weg des Fingers: seitwärts gleitet der Wert, auf und
+      ab scrollt die Liste. Ein Tipp auf die Spur setzt weiter den Wert. Verifier v20 (T6): Wisch von Reihe, Spur und
+      Schalter scrollt 76, 55 und 85 px und setzt nichts; vorher hatte er die Liste mit `scrollTop` gestellt und nichts
+      davon gesehen.
+    - Seite, der erste Start deckt die Seite zu, aber was darunter lag, blieb für VoiceOver erreichbar: es ist jetzt
+      `inert`, der erste Start ein Dialog. Der Hinweis zur Bildschirmaufnahme verlangt keinen Neustart mehr.
+    - Die ersten Läufe der CI (macOS 26.7, Xcode 26.6, Swift 6.3.3; hier Swift 6.4.2). Der Build brach an einer Zeile
+      von main ab: 6.3 wandelt in `ScreenView.viewport` kein `CGFloat` still in das `Double` des Rückgabetyps, 6.4 tat
+      es. Danach liefen dort Build, 293 Swift-Tests, die Node-Tests und der Lauf von Ende zu Ende; drei Aufgaben des
+      Verifiers (T9, T12, T20) nicht. Der Runner hat „Transparenz reduzieren“ gesetzt, also zeichnete die Seite zu
+      Recht kein Glas, und er ist langsam: die Antwort des falschen Macs nach 400 ms war da, bevor die Aufgabe maß,
+      und die Seite fragte die Ansicht noch einmal an, nachdem die Aufgabe schon gezählt hatte. Verifier v21: die
+      Wünsche der Maschine bleiben draußen (Transparenz, Bewegung, Kontrast sind gesetzt, was die Aufgabe setzt),
+      die langsame Antwort braucht 1,5 s, T20 zählt erst, wenn die Anfragen ruhen. `--slow=N` gibt der Seite einen
+      Bruchteil des Prozessors; mit `--slow=4` bestehen hier 27 von 27, wie ohne.
+      Der Lauf danach scheiterte an anderen Aufgaben (T8, T13, T20) aus einem Grund: die Seite misst ihren Bildtakt
+      und fragt die Ansicht neu an, wenn er sich ändert. Der Runner zeichnet mal mit 60, mal mit 30 Bildern, also kam
+      mitten in einer Aufgabe eine Anfrage mehr (in T13 mit `fps: 30` statt 60). Verifier v22: der Bildtakt der Seite
+      ist auf jeder Maschine 60 je Sekunde; was eine Aufgabe selbst stoppt, läuft weiter mit der Uhr der Maschine.
+      Und ein Swift-Test las `mac`, sobald `ok` da war; die Nachricht kommt als eigene danach und fehlte dort einmal.
+      Im vierten Lauf bestanden Verifier und Kopplung; ein Swift-Test wartete 2 s vergeblich auf das Pong des
+      Sockets (`URLSession.sendPing`). Hier nicht nachzustellen, auch nicht in 22 Läufen unter Last; die Ursache
+      ist nicht belegt. Der Test fragt jetzt den Herzschlag des Agenten (`ping`, `pong`) und liest vorbei, was
+      sonst kommt; bleibt die Antwort aus, nennt er, was stattdessen kam.
+      Im fünften Lauf bestanden die Swift-Tests; T7 maß 207 ms bis das Blatt weg war, bei 8 statt 11 Bildern
+      auf dem Weg (hier 180 ms). Die Grenze von 200 ms gilt für 60 Bilder je Sekunde. Verifier v23: T7 misst den
+      Bildabstand der Maschine und rechnet ihr zweimal an, was er länger ist als bei 60 (Tipp und Start je ein
+      Bild später); hier bleibt die Grenze 200.
+    - Agent, ein zweites Entsperren nahm dem ersten die Rotation: `Server.unlock` notierte das neue Siegel, bevor der
+      Sperrbildschirm den zweiten Versuch abwies, und die Absage löschte es. Der Mac ging auf, das Salt blieb, die
+      Zählung der Absagen auch. Jetzt wird ein zweiter Versuch abgewiesen, bevor etwas notiert ist (Test mit zwei
+      Verbindungen; ohne die Änderung schlägt er fehl).
+    - Agent, Passwort im Protokoll: unter `REMOTEY_STATS` schrieb der Agent den Anfang einer ignorierten Nachricht
+      nach stderr, also auch ein Passwort mit mehr als 256 Zeichen. Jetzt nur ihre Art.
+    - `Origin` und `Host` müssen denselben Host nennen, wo beide stehen. Vorher ging jeder Name unter `ts.net` durch,
+      und einen solchen veröffentlicht jeder über Funnel: im Browser des Macs geöffnet, hätte die Seite die Plätze für
+      unangemeldete Verbindungen füllen und das Telefon aussperren können. Runde 18 ließ das offen, damit das eigene
+      Telefon nie abgewiesen wird; die Regel hängt jetzt daran, dass `serve` `Host` weiterreicht, wie das Telefon ihn
+      sandte (`r.Out.Host = r.In.Host`, gelesen in `serve.go`, nicht gegen ein laufendes `serve` geprüft).
+    - Ein Login, das `serve` nennt und das sich nicht lesen lässt, ist nicht das des Besitzers (vorher: durchgelassen).
+      Ein Login aus ASCII, das wie ein kodiertes Wort aussieht, gilt als das, was dasteht: Go kodiert nur, was nicht
+      ASCII ist.
+    - Der alte Token gilt nur auf einem Mac, der ihn vor diesem Start schon hatte. Auf einem frischen ist er aus: kein
+      Telefon hält ihn, und jeder Prozess des Nutzers kann die Datei lesen.
+    - Nicht geändert: ein Angebot zum Einrichten von Face ID geht weiter an jede angemeldete Verbindung. Es auf Geräte
+      zu beschränken hülfe nicht, solange der Token gilt: wer ihn liest, macht sich damit zum Gerät. Und der zweite
+      PRF-Wert lässt sich am Mac nicht prüfen (er ist nicht signiert); liefert ein Authenticator einen falschen,
+      scheitert das nächste Entsperren, und Face ID wird neu eingerichtet.
+21. Durchsicht der Oberfläche am Mac (frischer Blick auf Runde 20: alle Bilder hell und dunkel neben den Mockups 20
+    bis 22 und neben macOS selbst; Maßstab: so, wie Apple das WLAN-Menü und einen Bereich der Systemeinstellungen
+    ausliefert). Verhalten unverändert; nur wie es aussieht und sich liest.
+    - Entscheidung Akzent: Remoteys Orange (`Accent`, `.systemOrange`, also #ff9500 hell und #ff9f0a dunkel, dieselben
+      Werte wie `--c-accent` der Seite), solange der Nutzer in den Systemeinstellungen „Mehrfarbig“ lässt; wählt er
+      eine Farbe, gilt seine. Das ist die Regel, nach der macOS den Akzent einer App behandelt, die einen eigenen
+      nennt (`NSAccentColorName`): er gilt nur bei „Mehrfarbig“. Ein Asset-Katalog dafür bräuchte `actool` im Build,
+      darum steht die Regel im Code (`AppleAccentColor` fehlt bei „Mehrfarbig“). Gründe: Symbol der App, Seite am
+      Telefon und Mockups sind orange; Runde 20 hatte den Systemakzent gewählt, damit trug derselbe Zustand am Mac
+      Blau und am Telefon Orange. Gilt überall, wo macOS den Akzent einer App nähme: Kreis des verbundenen Geräts,
+      Markierung im Menü, Standardtaste im Assistenten und im Face-ID-Fenster, Schalter (`.tint`), die Symbole der
+      Schritte im Assistenten und das Face-ID-Zeichen. Die Markierung im Menü ist eine Stufe dunkler (#db6e00): Weiß
+      auf dem hellen Orange hätte 2,2 : 1, so 3,4 : 1 (getestet ≥ 3 : 1); macOS dunkelt seine Akzente für
+      Markierungen ebenso ab.
+    - Folge davon: „braucht dich“ war ein oranger Kreis mit Ausrufezeichen und hätte wie der Akzent gelesen. Jetzt
+      das Warnzeichen des Systems (gelbes Dreieck, mehrfarbig), im Menü, im Assistenten und in den Einstellungen;
+      auf der Markierung weiß. Rot bleibt für Fehler, Grün für erledigt.
+    - Menü: eine rechte Kante für Schalter, „Trennen“, Haken, „Eingerichtet“/„Aus“ und Kurzbefehle, 16 pt vom Rand
+      des Panels. Vorher stand „Trennen“ 7 pt davor (das Polster seiner Hover-Fläche) und die Haken 3 pt (mittig in
+      einem 16 pt breiten Rahmen); der Schalter hatte 2 pt weniger Rand als die Zeilen. Eine linke Spalte von 24 pt für
+      Symbole und den Kreis des Geräts: vorher stand die Mitte des Kreises 3 pt neben der Mitte der Symbole und der
+      Name des Geräts 6 pt rechts von den anderen Titeln. Symbole 13 statt 14 pt, wie in Menüs. Markierung
+      konzentrisch zum Panel (Radius 14 − 6 = 8 statt 7). Pausiert ist der Kreis des Geräts grau: es steuert nichts.
+    - Assistent: der Bereich über den Tasten hat in jedem Schritt dieselbe Höhe (480 pt), und Logo, Titel, Satz und
+      Inhalt stehen als ein Block in seiner Mitte, 24 pt zwischen Satz und Inhalt. Vorher hatte nur der Inhalt eine
+      Mindesthöhe und stand in deren Mitte: zwischen Satz und QR-Code lagen rund 60 pt Leere, und das Fenster
+      wechselte zwischen den Schritten die Höhe (Satz mit einer oder zwei Zeilen). QR-Karte und Liste daneben teilen
+      ihre Oberkante. Der QR-Code war im Bild unscharf (ein Bitmap mit einem Pixel je Modul, hochskaliert: das
+      Zeichnen außerhalb des Bildschirms beachtet `.interpolation(.none)` nicht); jetzt zeichnet `QRCodeView` jedes
+      Modul als Rechteck, scharf in jeder Größe (`QRCode.modules`, getestet mit den Suchmustern in drei Ecken).
+      „Weiter“ und „Fertig“ als Hauptaktion (`.borderedProminent` im Akzent). Das Kästchen „Beim Anmelden starten“
+      steht unter den Zeichen der Liste statt 4 pt neben ihrer Kante. Im letzten Schritt wiederholte die Zeile den
+      Titel („Zum Home-Bildschirm“ zweimal) und brach den Code um: jetzt „Warte auf die App …“, darunter „Fragt sie
+      nach einem Code: 482 913“. Die Bildkarten der Schritte haben eine sichtbare Kante auch dunkel.
+    - Einstellungen: alle Symbole der Zeilen in einer Größe und Spalte (`RowSymbol`, 16 pt in 24 pt; vorher 17, 20
+      und die Systemgröße), dieselben wie im Menü (Bildschirmaufnahme `display` statt
+      `rectangle.dashed.badge.record`); „Zugelassen“ bekam ein Symbol, damit sein Titel mit den anderen fluchtet.
+      Das Face-ID-Zeichen ist grau wie die anderen statt grün (der Zustand steht darunter in Worten). Zustände
+      17 statt 20 pt, die Größe eines Schalterknopfs. ⓘ grau statt im Akzent. „Remotey: Bereit auf Port …“ heißt
+      jetzt „Status“: Remotey hieß die Zeile im Fenster von Remotey.
+    - Face-ID-Fenster: der Satz unter dem Titel hatte fünf zentrierte Zeilen, jetzt vier („Das iPhone bekommt einen
+      Passkey, mit dem das Passwort dieses Macs verschlüsselt abgelegt wird. Wer das iPhone entsperren kann, kann
+      dann auch den Mac entsperren.“; die Aussage, dass entsperren kann, wer das iPhone entsperren kann, bleibt).
+      Zeichen und „Weiter“ im Akzent.
+    - Geprüft und gelassen: Die Toolbar der Einstellungen zeichnet im Bild jedes Fach als Kasten. Das kommt nicht
+      aus Remotey: eine leere `NSToolbar` mit `.preference` und `isBordered = false` an jedem Eintrag zeichnet
+      außerhalb des Bildschirms auf macOS 27 dieselben Kästen (Versuch im Test, danach entfernt); Glas braucht den
+      Compositor. Remotey nutzt die Toolbar, die AppKit für Einstellungsfenster vorsieht, und ändert daran nichts.
+      Ebenso grau bleiben im Bild Schalter, Standardtasten und Ampeln: ein Fenster, das nie auf dem Bildschirm war,
+      ist nicht das aktive. Versucht: `isKeyWindow`, `isMainWindow` und `NSApp.isActive` beim Zeichnen auf „ja“
+      gestellt; macOS 27 zeichnet sie trotzdem inaktiv, der Versuch ist wieder weg. Am Bildschirm ungeprüft (die
+      Regel dieser Runde: nichts auf den Bildschirm des Nutzers), also: ob Schalter und „Weiter“ dort orange sind und
+      wie die Toolbar aussieht. Der Schalter „Web-Zugang“ steht oben in seiner Zeile statt in ihrer Mitte: so legt
+      `Form` mit `.grouped` ihn an; gelassen, weil es die Form des Systems ist. Leerraum über dem Logo in Schritten
+      mit kurzem Satz (bis 60 pt): Folge der festen Fensterhöhe, die besser ist als ein springendes Fenster.
+    - Prüfungen: `swift test` 288 Tests (vorher 285; neu `InterfaceLookTests`: Akzent folgt der Wahl des Nutzers,
+      Kontrast der Markierung, Ausrichtung des QR-Codes), alle grün. Bilder: `scripts/mac-pictures.sh` mit Orange
+      wie bei „Mehrfarbig“, unabhängig von diesem Mac.
+21. Zweiter Blick auf „Glas über dem Mac“ (Durchsicht der Galerie gegen die Mockups 07 bis 19, hell und dunkel, 320/375/
+    393/440 px, hochkant und quer, Deutsch und Englisch) und `bye`. Verifier v19.
+    - Blatt über der Leiste: die unteren Ecken des Blatts (47) sind runder als Leiste und Maustasten darunter, deren
+      Ecken schauten heraus (hell unten links die Schreib-Kapsel, rechts der runde Steuerung-Knopf). Hochkant treten
+      Maustasten und Leiste bei offenem Blatt zurück (Deckkraft 0 in 120 ms, unsichtbar für Tipps), und blenden wieder
+      ein, während das Blatt geht. Der Rand für den Mac (`inset`) bleibt gleich: gemessen wird die Zone, nicht ihr Bild.
+    - Blätter und Menüs deckend statt 98,5/99 %: über Text im Bild zeichnete sich dessen Schrift im Kopf des Blatts ab.
+      Hell bekommt der Rand des Blatts eine etwas kräftigere Linie, über einem weißen Fenster verschwand er sonst.
+    - Gefüllte Symbole waren hohl: `svg .solid` erreicht die Kopien in `<use>` nicht, Transport, Stumm und Lautstärke
+      waren Umrisse statt der gefüllten Formen der Mockups. Jetzt als Attribute am Pfad.
+    - Einstellungen: die Namen der Schieber standen grau, weil `.name` auch die Klasse der App-Namen ist.
+    - Maustasten: „Rechtsklick“ stieß an das runde Ende der Kapsel (bei 320 px fast, englisch bei 375 px auch). Klick und
+      Rechtsklick gleich breit (vorher 1,3 : 1), das letzte Wort 8 px vom Bogen.
+    - Quer: „Rechts-klick“ brach mit Bindestrich in der 56 pt schmalen Säule, englisch „Right-click“ ebenso. Beide Tasten
+      zeigen dort eine Maus mit gefüllter linker oder rechter Taste (Name für VoiceOver wie bisher); breiter darf die
+      Säule nicht werden, sonst fällt der Bildanteil unter 77/81/87 %. Der Mac-Knopf war nur ein Punkt: jetzt ein Mac
+      mit dem Zustand als Abzeichen an der Ecke. Die Schreib-Taste zeigte in der Säule „S…“ (Regel unten).
+    - Tasten (Mockup 6): Modifier und Pfeile sind zwei Gruppen, mit einer Spalte von 0,3 Tasten dazwischen; die
+      Leertaste reicht darüber und ist breiter, ihr Zeichen (vorher ␣ aus der Schrift, unter der Mitte) ist gezeichnet.
+      App-Zoom wie in den Mockups: kleines A−, großes A+, „App-Zoom · 100 %“. Bei 320 px fällt die Spalte weg (zwei
+      Abstände trennen die Gruppen), sonst passt „command“ nicht: kleinste Taste 48 pt (T8).
+    - Medien: die äußeren Kacheln liegen in den unteren Ecken des Blatts und haben dort dessen Radius weniger den Rand
+      (31 statt 22).
+    - Erster Start: sechs leere Flächen ohne Hinweis, wo die Eingabe beginnt. Jetzt hat jede leere Zelle einen kurzen
+      Strich, mit Fokus die nächste den Ring und eine blinkende Schreibmarke (ruhig bei reduzierter Bewegung); nach einem
+      falschen Code ist auch sie rot umrandet.
+    - Menüpunkt: erster Start, „keine Kopplung offen“ und „getrennt“ nannten den alten Namen „iPhone koppeln (QR‑Code)…“.
+      Jetzt „iPhone hinzufügen …“ wie im Menü, englisch mit dem deutschen Namen; mit festen Leerzeichen, damit „…“ nicht
+      allein in die nächste Zeile fällt. „Mit Face ID entsperren …“ nennt die Seite nirgends als Menüpunkt.
+    - Hinweise: ohne Live-Bild schien der Hinweis des Trackpads durch den Text eines Hinweises; er weicht jetzt.
+      „Live‑Bild“ bricht in Fließtexten nicht mehr am Bindestrich (geschützter Bindestrich).
+    - „Auf dem Mac schreiben“ kürzte englisch schon bei 375 px auf „Type“, obwohl „Type on the Mac“ passt: die Grenze gilt
+      je Sprache (214 pt deutsch, 186 pt englisch, wo „Unlock with Face ID“ die längsten Worte sind).
+    - Displays im Ansicht-Menü: Karte mittig, Namen bis drei Zeilen („Built-in Retina…“ war abgeschnitten).
+    - `bye`: „Trennen“ im Menü des Macs beendete eine Sitzung, die Seite verband sich sofort neu. Der Mac sagt jetzt
+      `{"t":"bye"}` vor dem Schließen; `connection.js` kennt dafür den Zustand `ended`, der wie `denied` und `unpaired` nur
+      auf Wunsch verlassen wird (`HELD`): kein Versuch von selbst, nicht beim Zurückkehren in Sicht, nicht bei
+      zurückkehrendem Netz; „Wieder verbinden“ oder die neu geöffnete Seite verbindet. Ein ruhiger Hinweis: Symbol, „Am Mac
+      getrennt“, ein Satz, ein Knopf; der Mac-Knopf zeigt einen leeren Kreis und „Getrennt“, nicht Rot. Zwei Node-Tests;
+      der falsche Mac des Verifiers sagt es (`__bye`), T16 prüft Hinweis, keine Versuche nach `visibilitychange` und
+      `online`, und die Verbindung auf den Knopf.
+    - Geprüft und gelassen: Kopf des Mac-Menüs zeigt im Verifier „0 fps · – ms“ (der falsche Mac misst nichts); die
+      nummerierten Schritte des ersten Starts bleiben neutral (Runde 19); das Ansicht-Menü behält seine Haken-Spalte
+      auch für Punkte ohne Haken, wie die Menüs von iOS.
+    - Verifier v19: alle Aufgaben bestanden, T1 unverändert 71/75/83 % hochkant, 77/81/87 % quer, 13 von 13
+      Hauptaktionen; T7 Blatt nach 183 ms weg; kleinste Taste 48 pt; T17 ohne abgeschnittene Worte. Node: 121 Tests (zwei neue).
+      Bilder des README neu.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -614,3 +1354,89 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   als 300 ms von Anfang an (kostet einen Schritt auf die Hälfte, wie der Stillstand im Relay-Modell).
 - Runde 17: nur in Chromium und in Tests. Ob „Auto“ allein am iPhone wieder so läuft wie vor Runde 16, ist dort nicht
   geprüft; der Zeiger nimmt denselben Weg wie vorher (der Ort aus der Meldung des Macs).
+- Runde 18: am Mac des Nutzers wurde keine Erlaubnis umgeschaltet und nichts an Tailscale geändert. Dass die
+  Prüfung über Fenstertitel einer Erlaubnis im laufenden Prozess ohne Neustart folgt, ist gefolgert (zwei Prozesse,
+  einer mit, einer ohne Erlaubnis) und gelesen, nicht an einem Schalter gemessen; ebenso, dass Preflight seine erste
+  Antwort behält. macOS 14 bis 26 nicht geprüft, auch nicht, dass `CGWindowListCopyWindowInfo` dort nie fragt.
+  Die Links in die Einstellungen wurden nicht geöffnet. Freigeben, Entfernen, Anmelden und `up` liefen nie gegen das
+  echte Werkzeug: Wortlaut und Warten nach dem Zustimmungslink stammen aus dem Gedächtnis an Tailscales Quelltext,
+  geprüft nur an erfundenen Ausgaben; ob das Entfernen des letzten Pfads auch `AllowFunnel` löscht, ist offen (die
+  Zeile bleibt rot, bis der nächste Blick es zeigt). Tailscale.app ist hier nicht installiert: der Pfad ihres
+  Werkzeugs, seine Meldungen ohne laufende App und ob der Mac mit ihr seinen eigenen Namen erreicht, sind ungeprüft;
+  der Weg `answered` des Selbsttests lief nie echt. Die Grenze 1.52 ist aus dem Gedächtnis.
+- Runde 18: nichts davon lief am echten Sperrbildschirm oder am iPhone (der Mac des Nutzers wurde nicht gesperrt).
+  Offen: ob das Anmeldefenster Sonderzeichen jetzt richtig bekommt (Code, Flags und Text stimmen in den Ereignissen
+  überein, gelesen wird es dort nicht); ob 25 ms reichen, damit ein Block im Feld angekommen ist, bevor wieder
+  gefragt wird; ob Safari auf iOS für `second` einen Wert gibt (in Runde 15 nannte es `second` ohne Wert, als nur
+  `first` gefragt war) und ob es der Wert für dieses Salt ist. Gibt Safari keinen, wird nicht rotiert, und das
+  Geheimnis bleibt so fest wie vorher. Welche Fehler OpenDirectory für ein falsches Passwort wirklich meldet, ist
+  nur aus dem Header (`kODErrorCredentialsInvalid`), nicht gemessen: ein Versuch mit falschem Passwort zählte als
+  fehlgeschlagene Anmeldung. Die Ränder unter den Bedienelementen sind nur gerechnet; die Seite sendet `inset` noch
+  nicht, Bild, Kopf und schwarze Flächen liefen nicht am Mac.
+- Runde 18: der CI-Lauf selbst. `macos-26` als Image, ob ein gehosteter Mac einen Hardware-Encoder hat, ob er eine
+  Anzeige und den Finder zeigt, und `npx playwright@1.64.0 install --only-shell chromium` dort sind nicht gelaufen;
+  der Lead beobachtet den ersten Lauf. Node 24 ist hier nicht installiert, der Aufruf mit Dateinamen lief nur auf
+  Node 26. Die Signale sind nicht am laufenden Agenten geprüft (er durfte nicht starten), ebenso wenig das
+  Zurückgeben des Rahmens nach einem Absturz, das Menü und das gedimmte Symbol: der Weg über `NSApp.terminate` und
+  `ShapedFrame.restore` ist nur gelesen, `ShapedFrame` nur in seinen reinen Teilen getestet. Der Rückzug des
+  Neuaufbaus bei schlafendem Display ist nur als `Backoff` getestet, nicht mit einem echten Display;
+  `screensDidWakeNotification` als Auslöser ist aus der Dokumentation, nicht gemessen. Das erzwungene
+  Schlüsselbild ist am Encoder getestet, nicht im Strom zu einem Telefon. Tailscale: gelesen ist der Quelltext von
+  main, nicht der der installierten Version, und kein echter Handshake durch `tailscale serve` wurde mitgeschnitten.
+- Runde 18: nur in Chromium und Node, kein iPhone. Nicht geprüft: ob Safari `-apple-system-body` auf der Startseite
+  wirklich mit Dynamic Type skaliert und das Layout bei größter erlaubter Schrift hält; Container-Abfragen (Safari 16+);
+  ob iOS `online`, `navigator.onLine` und die HEAD-Anfrage bei ausgeschaltetem Tailscale so liefert wie angenommen; ob
+  `tailscale serve` bei gestopptem Agenten wirklich 502 sendet (aus der Aufgabe übernommen, nicht gemessen); die
+  Gegenstelle zu `ping`, `idr` und `have` (der Mac-Teil entstand parallel). Ein älterer Agent beantwortet `ping` nicht:
+  ohne laufenden Strom trennt die Seite dann alle 15 s und verbindet neu. Die Freigabe des Wake Locks und das
+  Schlüsselbild nach einem echten Dekoderfehler in WebKit sind nur in Tests gelaufen. Englische Texte von mir, nicht
+  von einem Muttersprachler gegengelesen.
+- Runde 19: kein iPhone, kein `tailscale serve` (nicht verändert, nichts hindurch geschickt). Gelesen ist der
+  Quelltext von main, nicht der installierten Version; ob Tailscale den Login eines Telefons wirklich so schreibt,
+  wie `tailscale status` den Besitzer nennt, und ob `Set-Cookie` und ein über HTTP/2 geteilter `Cookie` den Proxy
+  unverändert passieren, ist nicht gemessen. Safari nicht geprüft: ob es einen `HttpOnly`/`SameSite=Strict`-Cookie
+  aus der Antwort auf ein fetch hält, ob eine Web-App vom Home-Bildschirm ihn mitbekommt oder einen eigenen Speicher
+  hat (dafür gibt es die sechs Ziffern), ob ITP die 400 Tage kürzt und welches `Origin` Safari bei `POST` mit
+  `no-referrer` sendet. Dass ScreenCaptureKit nach einer Erlaubnis ohne Neustart aufnimmt, ist nicht gemessen (die
+  Erlaubnis wurde nicht umgeschaltet); der Server sagt jetzt `screen: true`, sobald die Fenstertitel es zeigen.
+  `Setup` empfiehlt in diesem Fall weiter einen Neustart (`needsRestart`, nicht geändert). Das Menü mit Fenster,
+  Ziffern und Owner-Abfrage lief nie (die App durfte nicht starten), nur der Server dahinter in Tests und ohne
+  Oberfläche. Ob der Agent ohne Oberfläche auf einem gehosteten Mac startet, zeigt der erste CI-Lauf.
+- Runde 20: die App lief nicht mit Oberfläche (sie durfte nicht starten), kein Fenster, kein Panel und kein Alert war
+  je auf dem Bildschirm. Geprüft sind die Werte darunter und Bilder außerhalb des Bildschirms. Offen und beim ersten
+  Start zu prüfen: dass das Panel beim Klick aufgeht, unter dem Symbol auf jedem Display steht, bei ausgeblendeter
+  Menüleiste (die Leiste kann sich hinter dem offenen Panel wieder verstecken, ein System-Menü hält sie), über einem
+  Vollbildprogramm und auf jedem Space; dass es bei einem Klick daneben, Escape, ⌘Tab und Space-Wechsel schließt und
+  ein zweiter Klick aufs Symbol es schließt statt neu öffnet; dass ↑/↓/Return ohne vorherigen Klick gehen (die
+  Tastatur geht an die `NSHostingView`, gefolgert, nicht gesehen) und ⌘, und ⌘Q im Panel; der erste Klick auf eine
+  Zeile; VoiceOver im Panel, im Assistenten und in den Einstellungen; das echte Material, der Schatten mit runden
+  Ecken, erhöhter Kontrast und reduzierte Transparenz; Schalter und Standardtasten in ihrer aktiven Farbe (die Bilder
+  zeigen sie grau); das Symbol in der echten Menüleiste und sein Tooltip.
+- Runde 20: am echten Mac nicht gelaufen sind das selbstständige Öffnen des Assistenten beim ersten Start und bei
+  einer roten Pflichtzeile, das Anmeldeobjekt, das der erste Start einschaltet (und die Mitteilung von macOS dazu),
+  das Wechseln der Bereiche der Einstellungen mit ihrer Höhe, das Blatt zum Umbenennen, die Rückfragen als Blätter,
+  ⌘C/⌘V im Passwortfeld über das neue Hauptmenü, und die Alerts bei einer Datei, die sich nicht schreiben lässt.
+- Runde 20: Koppeln aus dem Assistenten mit einem echten iPhone ist offen, und es hängt an der Seite: sie koppelt
+  nach Runde 19 noch nicht aus `#p=<code>` und schickt `standalone` noch nicht. Bis sie es tut, führt der QR-Code
+  zu einer Seite, die nicht koppelt, und „Zum Home-Bildschirm“ wird nie von selbst grün. Die erste Bewegung je
+  Sitzung ist am Server getestet, nicht mit einem Telefon. „Trennen“ im Menü schließt die Verbindung, die Seite
+  verbindet sich aber sofort wieder (Runde 18): es trennt nur für einen Augenblick.
+- Runde 20: dass ScreenCaptureKit nach einer frischen Erlaubnis ohne Neustart aufnimmt, ist weiter nicht gemessen;
+  die Zeile ist jetzt in diesem Fall grün. Was das Telefon zeigt, wenn es dann doch nicht aufnimmt, ist nicht
+  geprüft. Die Bilder sind auf macOS 27 gezeichnet; wie Panel, Formulare und Toolbar auf macOS 14 bis 26 aussehen, ist
+  nicht gesehen (gebaut ist gegen macOS 14 als Ziel). Was die Blicke alle 5 s und 60 s an Energie kosten, ist nicht
+  gemessen.
+- Runde 19: kein iPhone, nur Chromium mit Touch-Emulation, ohne echte Safe Areas, ohne Tastatur und ohne Dynamic Type.
+  Nicht gemessen: was die Unschärfe über dem laufenden Bild auf einem iPhone kostet (Bildrate, Akku, Wärme), ob die
+  Kapseln in den Ecken eines echten Displays quer ganz zu sehen sind, ob `prefers-reduced-transparency` in Safari
+  ankommt (sonst gilt nur die Einstellung), ob iOS den Code aus der Mitteilung für `one-time-code` anbietet und ob eine
+  Web-App vom Home-Bildschirm wirklich ohne das Cookie von Safari startet (die Seite ist dafür gebaut, belegt ist es
+  nicht). Die Kopplung je Gerät lief nur gegen den Mac des Verifiers; der Agent mit `/pair`, `/session`, Tickets und
+  `mac` entstand gleichzeitig und wurde nicht angesprochen. `inset` ist am echten Mac nicht gelaufen: dass die
+  Menüleiste an der Unterkante der oberen Knöpfe beginnt, ist aus dem Vertrag, nicht gesehen. Die Bilder der Galerie
+  zeigen ein gezeichnetes Mac-Bild. Englische Texte von mir, nicht gegengelesen. Das README beschreibt noch die alte
+  Oberfläche (Dock, Schublade, „Auto“ auf der Anzeige) und darf hier nicht geändert werden; seine Bilder sind neu.
+- Runde 21: nichts davon lief gegen ein laufendes `tailscale serve` oder auf einem iPhone. Hängt `serve` entgegen dem
+  gelesenen Code einen anderen `Host` an, weist die neue Regel das eigene Telefon ab: die Seite lädt, die Verbindung
+  kommt nicht zustande. Das ist das Erste, was am echten Gerät zu prüfen ist. Dass der Proxy bei ruhendem Agenten
+  mit 502 antwortet, ist weiter nicht gemessen; die Seite verlässt sich nicht mehr auf die Zahl.

@@ -41,11 +41,20 @@ final class WireTests: XCTestCase {
         func object(_ text: String) throws -> [String: Any] {
             try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
         }
-        let accepted = try object(Wire.accepted(accessibility: true, page: "abc"))
+        let accepted = try object(Wire.accepted(accessibility: true, page: "abc", mac: #"Yannicks "Mac""#, device: "iPhone"))
         XCTAssertEqual(accepted["t"] as? String, "ok")
         XCTAssertEqual(accepted["ax"] as? Bool, true)
         XCTAssertEqual(accepted["page"] as? String, "abc")
-        XCTAssertEqual(try object(Wire.denied)["t"] as? String, "denied")
+        XCTAssertEqual(accepted["name"] as? String, #"Yannicks "Mac""#, "a name with quotes stays a string")
+        XCTAssertEqual(accepted["device"] as? String, "iPhone")
+        let byToken = try object(Wire.accepted(accessibility: false, page: "abc", mac: "Mac", device: nil))
+        XCTAssertTrue(byToken["device"] is NSNull, "null, not missing, with the old token")
+        XCTAssertEqual(try object(Wire.denied(.revoked)) as NSDictionary, ["t": "denied", "why": "revoked"])
+        XCTAssertEqual(try object(Wire.denied(.ticket)) as NSDictionary, ["t": "denied", "why": "ticket"])
+        XCTAssertEqual(try object(Wire.denied(.token)) as NSDictionary, ["t": "denied", "why": "token"])
+        XCTAssertEqual(try object(Wire.mac(accessibility: true, screen: false, paused: true)) as NSDictionary,
+                       ["t": "mac", "ax": true, "screen": false, "paused": true])
+        XCTAssertEqual(try object(Wire.viewPaused) as NSDictionary, ["t": "view", "ok": false, "why": "paused"])
         XCTAssertEqual(try object(Wire.viewRefused)["ok"] as? Bool, false)
         XCTAssertEqual(try object(Wire.lock(true)) as NSDictionary, ["t": "lock", "on": true])
         XCTAssertEqual(try object(Wire.lock(false))["on"] as? Bool, false)
@@ -67,9 +76,10 @@ final class WireTests: XCTestCase {
         }
         let key = FaceUnlock.Key(passkey: Passkey(id: Data([251, 255]), publicKey: Data([1]), origin: "https://mac.example.ts.net:8443"),
                                  salt: Data([1, 2]), sealed: Data([9]))
-        let locked = try object(Wire.lock(true, passkey: (key, Data([3, 4]))))
-        XCTAssertEqual(locked as NSDictionary, ["t": "lock", "on": true, "key": ["id": "-_8", "salt": "AQI", "challenge": "AwQ"]])
-        XCTAssertEqual(try object(Wire.lock(false, passkey: (key, Data([3, 4])))) as NSDictionary, ["t": "lock", "on": false],
+        let ask = FaceUnlock.Ask(challenge: Data([3, 4]), next: Data([7]))
+        let locked = try object(Wire.lock(true, passkey: (key, ask)))
+        XCTAssertEqual(locked as NSDictionary, ["t": "lock", "on": true, "key": ["id": "-_8", "salt": "AQI", "next": "Bw", "challenge": "AwQ"]])
+        XCTAssertEqual(try object(Wire.lock(false, passkey: (key, ask))) as NSDictionary, ["t": "lock", "on": false],
                        "an open Mac asks for no passkey")
         XCTAssertEqual(try object(Wire.passkeyRefused) as NSDictionary, ["t": "unlock", "ok": false, "why": "key"])
         let offer = FaceUnlock.Offer(challenge: Data([5]), salt: Data([6]))
@@ -81,11 +91,17 @@ final class WireTests: XCTestCase {
 
     func testThePasskeysMessagesOfThePage() throws {
         func command(_ json: String) throws -> Wire.Command { try Wire.command(from: Data(json.utf8)) }
-        guard case .unlockWithPasskey(let answer, let secret) = try command(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#) else {
+        guard case .unlockWithPasskey(let answer, let secret, let next) =
+            try command(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ","next":"Bg"}"#) else {
             return XCTFail("not an unlock by passkey")
         }
         XCTAssertEqual(answer, Passkey.Answer(authenticator: Data([1, 2]), client: Data([3]), signature: Data([4])))
         XCTAssertEqual(secret, Data([5]))
+        XCTAssertEqual(next, Data([6]))
+        for (json, why) in [(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#, "from a page that asks for one secret"),
+                            (#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ","next":"!"}"#, "a second secret that is none")] {
+            guard case .unlockWithPasskey(_, Data([5]), nil) = try command(json) else { return XCTFail(why) }
+        }
         guard case .unlock("geheim") = try command(#"{"t":"unlock","s":"geheim","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#) else {
             return XCTFail("a typed password counts as one")
         }
@@ -147,12 +163,20 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(Data(base64Encoded: try XCTUnwrap(message["png"] as? String)), png)
     }
 
+    private func message(_ text: String) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+    }
+
     private func command(_ json: String) throws -> Wire.Command {
         try Wire.command(from: Data(json.utf8))
     }
 
     func testCommandsOfThePage() throws {
-        guard case .auth(token: "abc") = try command(#"{"t":"auth","token":"abc"}"#) else { return XCTFail("auth") }
+        guard case .auth(.token("abc")) = try command(#"{"t":"auth","token":"abc"}"#) else { return XCTFail("auth") }
+        guard case .auth(.ticket("t1", standalone: true)) = try command(#"{"t":"auth","ticket":"t1","standalone":true}"#) else { return XCTFail("ticket") }
+        guard case .auth(.ticket("t1", standalone: false)) = try command(#"{"t":"auth","ticket":"t1"}"#) else { return XCTFail("ticket in a tab") }
+        guard case .auth(.ticket("t1", standalone: false)) = try command(#"{"t":"auth","ticket":"t1","token":"abc"}"#) else { return XCTFail("a ticket first") }
+        guard case .ignored = try command(#"{"t":"auth"}"#) else { return XCTFail("auth without either") }
         guard case .move(dx: 3.5, dy: -2, sequence: 7) = try command(#"{"t":"m","dx":3.5,"dy":-2,"q":7}"#) else { return XCTFail("move") }
         guard case .move(dx: 1, dy: 1, sequence: nil) = try command(#"{"t":"m","dx":1,"dy":1}"#) else { return XCTFail("move without a number") }
         guard case .scroll(dx: 0, dy: 12) = try command(#"{"t":"s","dx":0,"dy":12}"#) else { return XCTFail("scroll") }
@@ -197,10 +221,29 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(try shaped(#""fit":"window","shape":9"#)?.shape, 2, "at twice its size at most, as a fitted window")
         XCTAssertEqual(try shaped(#""fit":"window","shape":0"#)?.shape, 0.05)
         XCTAssertNil(try shaped(#""shape":0.6"#)?.shape, "only a window the view is fitted to")
-        for off in [#"{"t":"view","on":false}"#, #"{"t":"view","on":true,"w":390,"h":844}"#,
-                    on.replacingOccurrences(of: "390", with: "5")] {
+        XCTAssertEqual(try shaped(#""inset":[60,0,120,8.5]"#)?.inset, ScreenView.Inset(top: 60, right: 0, bottom: 120, left: 8.5))
+        XCTAssertEqual(try shaped(#""v":4"#)?.inset, .zero, "a page that sends none")
+        for odd in [#""inset":[60,0,120]"#, #""inset":[]"#, #""inset":[1,2,3,4,5]"#] {
+            XCTAssertEqual(try shaped(odd)?.inset, .zero, odd)
+        }
+        XCTAssertEqual(try shaped(#""inset":[-60,0,9000,0]"#)?.inset, ScreenView.Inset(top: 0, right: 0, bottom: 794, left: 0), "bounded")
+        for off in [#"{"t":"view","on":false}"#, #"{"t":"view"}"#] {
             guard case .view(nil) = try command(off) else { return XCTFail(off) }
         }
+        // Before, these switched the view off. A request to switch it on that the agent cannot follow is refused.
+        for malformed in [#"{"t":"view","on":true,"w":390,"h":844}"#, on.replacingOccurrences(of: "390", with: "5"),
+                          on.replacingOccurrences(of: #""fps":120"#, with: #""fps":"120""#)] {
+            guard case .ignored = try command(malformed) else { return XCTFail(malformed) }
+        }
+    }
+
+    /// What the log of ignored messages names: never what a message carries, such as a password too long to take.
+    func testTheKindOfAMessageForTheLog() throws {
+        let long = #"{"t":"unlock","s":"\#(String(repeating: "x", count: 300))"}"#
+        guard case .ignored = try command(long) else { return XCTFail("taken") }
+        XCTAssertEqual(Wire.kind(of: Data(long.utf8)), "unlock")
+        XCTAssertEqual(Wire.kind(of: Data(#"{"s":"secret"}"#.utf8)), "?")
+        XCTAssertEqual(Wire.kind(of: Data("secret".utf8)), "?")
     }
 
     func testWhatTheAgentDoesNotActOn() throws {
@@ -212,6 +255,46 @@ final class WireTests: XCTestCase {
             guard case .ignored = try command(json) else { return XCTFail(json) }
         }
         XCTAssertThrowsError(try command("not json"))
-        XCTAssertThrowsError(try command(#"{"dx":1}"#), "a message names its kind")
+        XCTAssertThrowsError(try command("[1,2]"), "a message is an object")
+        for nameless in [#"{"dx":1}"#, #"{"t":7}"#, #"{"t":null,"dx":1}"#] {
+            guard case .ignored = try command(nameless) else { return XCTFail(nameless) }
+        }
+    }
+
+    /// Before, one field of the wrong type made the whole message fail to decode, and the agent hung up.
+    func testAFieldOfTheWrongTypeCostsOnlyTheMessageThatNeedsIt() throws {
+        guard case .move(dx: 3, dy: 4, sequence: nil) = try command(#"{"t":"m","dx":3,"dy":4,"q":"seven"}"#) else {
+            return XCTFail("a move with a number that is none is still a move")
+        }
+        guard case .move(dx: 1, dy: 2, sequence: 5) = try command(#"{"t":"m","dx":1,"dy":2,"q":5,"n":1.5,"mods":"cmd"}"#) else {
+            return XCTFail("fields a move does not read")
+        }
+        for json in [#"{"t":"m","dx":"3","dy":4}"#, #"{"t":"shown","n":1.5}"#, #"{"t":"shown","n":-1}"#,
+                     #"{"t":"key","k":"w","mods":"cmd","n":1}"#, #"{"t":"b","b":"left","d":"yes"}"#, #"{"t":"auth","token":42}"#] {
+            guard case .ignored = try command(json) else { return XCTFail(json) }
+        }
+    }
+
+    func testHeartbeatKeyFramesAndTheIconsThePageHas() throws {
+        guard case .ping = try command(#"{"t":"ping"}"#) else { return XCTFail("ping") }
+        XCTAssertEqual(try message(Wire.pong)["t"] as? String, "pong")
+        guard case .keyFrame = try command(#"{"t":"idr"}"#) else { return XCTFail("idr") }
+        guard case .apps(have: nil) = try command(#"{"t":"apps"}"#) else { return XCTFail("apps without a word of the icons") }
+        guard case .apps(have: let have?) = try command(#"{"t":"apps","have":["com.apple.finder","pid-12"]}"#) else {
+            return XCTFail("apps with icons")
+        }
+        XCTAssertEqual(have, ["com.apple.finder", "pid-12"])
+        let many = (0..<300).map { #""app\#($0)""# }.joined(separator: ",")
+        guard case .apps(have: let capped?) = try command(#"{"t":"apps","have":[\#(many)]}"#) else { return XCTFail("many") }
+        XCTAssertEqual(capped.count, 256)
+        guard case .apps(have: nil) = try command(#"{"t":"apps","have":"all"}"#) else { return XCTFail("a list that is none") }
+    }
+
+    func testARefusedViewSaysWhy() throws {
+        XCTAssertEqual(try message(Wire.viewRefused)["why"] as? String, "permission")
+        let taken = try message(Wire.viewTaken)
+        XCTAssertEqual(taken["t"] as? String, "view")
+        XCTAssertEqual(taken["ok"] as? Bool, false)
+        XCTAssertEqual(taken["why"] as? String, "taken")
     }
 }

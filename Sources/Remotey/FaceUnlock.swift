@@ -7,6 +7,10 @@ import Foundation
 /// then. The password is encrypted with a key made from that secret, so what lies on the Mac opens nothing
 /// by itself: the file needs no secrecy and lies beside the token. To unlock, the phone signs a fresh
 /// challenge, which proves that the secret was not recorded earlier, and sends the secret along.
+///
+/// The secret is the same for the same salt, so a secret recorded once would open the file for good. So
+/// every unlock asks the passkey for a second secret too, for a fresh salt, and once the Mac has taken the
+/// password it is sealed anew under that one: a recorded secret opens the file only until the next unlock.
 /// Main thread only.
 final class FaceUnlock {
     /// What is kept on the Mac.
@@ -24,6 +28,21 @@ final class FaceUnlock {
     struct Offer: Equatable {
         let challenge: Data
         let salt: Data
+    }
+
+    /// What a locked Mac gives a phone for one try: the challenge its passkey signs, and the salt for the
+    /// secret the password is sealed under after that try.
+    struct Ask: Equatable {
+        let challenge: Data
+        let next: Data
+    }
+
+    /// The password sealed under the passkey's secret for a new salt, kept once the Mac has taken it.
+    struct Rotation: Equatable {
+        /// The salt it replaces. A key that changed meanwhile (enrolled anew, removed) is not touched.
+        let from: Data
+        let salt: Data
+        let sealed: Data
     }
 
     /// A password the Mac refuses this often in a row is no longer its password: the key is removed.
@@ -87,6 +106,18 @@ final class FaceUnlock {
         return Self.open(key.sealed, secret: secret, salt: key.salt)
     }
 
+    func ask() -> Ask { Ask(challenge: Passkey.challenge(), next: Passkey.challenge()) }
+
+    /// `password`, as `password(for:challenge:secret:)` opened it with `secret`, sealed under `next`, the
+    /// passkey's secret for `salt`. Nil if there is nothing to seal it under: the phone gave no second secret
+    /// (an older page, a browser without it), or one that cannot be the passkey's for another salt. Then the
+    /// key stays as it is, which unlocks as before, instead of a seal that no passkey can open again.
+    func rotation(of password: String, secret: Data, to salt: Data, next: Data?) -> Rotation? {
+        guard let key, let next, next != secret, salt != key.salt,
+              let sealed = Self.seal(password, secret: next, salt: salt) else { return nil }
+        return Rotation(from: key.salt, salt: salt, sealed: sealed)
+    }
+
     /// The Mac did not take the password. True if that was once too often and the key is gone.
     @discardableResult
     func refused() -> Bool {
@@ -101,12 +132,20 @@ final class FaceUnlock {
         return false
     }
 
-    /// The Mac took the password.
-    func opened() {
-        guard var key, key.refusals > 0 else { return }
+    /// The Mac took the password. With `rotation` from that try, the password is kept under its salt from now
+    /// on. Kept only once it is on disk: until then the file and the salt the Mac names are the old ones,
+    /// which the passkey still opens.
+    func opened(rotating rotation: Rotation? = nil) {
+        guard var key else { return }
+        let refused = key.refusals > 0
         key.refusals = 0
-        self.key = key
-        save(key)
+        if let rotation, rotation.from == key.salt {
+            key.salt = rotation.salt
+            key.sealed = rotation.sealed
+        } else if !refused {
+            return
+        }
+        if save(key) { self.key = key }
     }
 
     // MARK: The seal
@@ -134,7 +173,8 @@ final class FaceUnlock {
         let fm = FileManager.default
         try? fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
                                 attributes: [.posixPermissions: 0o700])
-        guard fm.createFile(atPath: file.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return false }
+        // Written whole beside the file and then moved over it: a crash halfway leaves the old key, not none.
+        do { try data.write(to: file, options: .atomic) } catch { return false }
         try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         return true
     }
