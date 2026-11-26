@@ -23,7 +23,8 @@ final class LockScreen {
     private let patience: (field: TimeInterval, answer: TimeInterval)
     private var observers: [NSObjectProtocol] = []
     private var noted = -TimeInterval.infinity
-    private var unlocking = false
+    /// A password is on its way into the lock screen. One at a time.
+    private(set) var unlocking = false
 
     /// `session` says whether the session is locked, `field` how many characters the lock screen's password
     /// field holds (nil unless that field has the keyboard), `wake` powers the display on. `patience` is how

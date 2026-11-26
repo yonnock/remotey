@@ -167,6 +167,11 @@ enum Wire {
 
     private struct NotAnObject: Error {}
 
+    /// What a message calls itself, for a log that must not hold what the message carries.
+    static func kind(of data: Data) -> String {
+        ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["t"] as? String ?? "?"
+    }
+
     /// The fields of a message. One of the wrong type counts as missing, so it costs only a message of a kind
     /// that needs it, not the connection; so does a kind that is not a string.
     private static func fields(from data: Data) throws -> Fields {

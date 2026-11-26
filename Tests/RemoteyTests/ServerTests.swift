@@ -244,9 +244,10 @@ final class ServerTests: XCTestCase {
 
     /// A web page in the Mac's browser opened sockets to the loopback port before, and filled the pending slots.
     func testASocketFromAnotherPageIsRefusedAtTheHandshake() async throws {
-        func outcome(origin: String) async -> String {
+        func outcome(origin: String, host: String? = nil) async -> String {
             var request = URLRequest(url: URL(string: "ws://127.0.0.1:\(wsPort)/ws")!)
             request.setValue(origin, forHTTPHeaderField: "Origin")
+            if let host { request.setValue(host, forHTTPHeaderField: "Host") } // as `tailscale serve` hands it on
             let socket = URLSession.shared.webSocketTask(with: request)
             socket.resume()
             defer { socket.cancel(with: .goingAway, reason: nil) }
@@ -258,8 +259,11 @@ final class ServerTests: XCTestCase {
                 return "refused"
             }
         }
-        let own = await outcome(origin: "https://mac.example.ts.net:8443")
+        let own = await outcome(origin: "https://mac.example.ts.net:8443", host: "mac.example.ts.net:8443")
         XCTAssertEqual(own, "ok", "the page behind tailscale serve")
+        // Anyone can publish a page under a `ts.net` name through Funnel; in the Mac's browser it asks loopback.
+        let published = await outcome(origin: "https://evil.example.ts.net")
+        XCTAssertEqual(published, "refused", "a page of another host, whatever its name ends in")
         let development = await outcome(origin: "http://127.0.0.1:\(httpPort)")
         XCTAssertEqual(development, "ok", "the page of a development build")
         let other = await outcome(origin: "https://evil.example.com")

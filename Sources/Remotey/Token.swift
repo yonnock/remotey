@@ -14,17 +14,18 @@ enum Token {
 
     /// The saved token, or a new one if there is none. A new one that could not be saved works until the agent
     /// quits; `failure` says why it was not saved.
-    static func load(from file: URL = fileURL) -> (token: String, failure: WriteFailure?) {
+    /// `fresh`: there was none, so no phone was ever paired with it.
+    static func load(from file: URL = fileURL) -> (token: String, failure: WriteFailure?, fresh: Bool) {
         if let existing = try? String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines), existing.count >= 32 {
-            return (existing, nil)
+            return (existing, nil, false)
         }
         let token = make()
         do {
             try save(token, to: file)
-            return (token, nil)
+            return (token, nil, true)
         } catch {
-            return (token, error as? WriteFailure ?? WriteFailure(description: "\(error)"))
+            return (token, error as? WriteFailure ?? WriteFailure(description: "\(error)"), true)
         }
     }
 

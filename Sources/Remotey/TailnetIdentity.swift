@@ -15,12 +15,14 @@ enum TailnetIdentity {
     static let tagged = "tagged-devices"
 
     /// A request through Funnel is refused: the agent is for the tailnet only. One through `serve` from a person
-    /// other than the Mac's owner is refused. Everything else is let in: a request without the field, an owner
-    /// that is not known, a login that cannot be read. Where a fact is not known, the rule lets the owner's own
-    /// phone in rather than keep it out.
+    /// other than the Mac's owner is refused, and so is one whose login cannot be read: `serve` wrote it, so it
+    /// names somebody, and the owner's own is always readable. Let in: a request without the field, and any
+    /// while the owner is not known. Where a fact is not known, the rule lets the owner's own phone in rather
+    /// than keep it out.
     static func allows(_ fields: HeaderFields, owner: String?) -> Bool {
         if fields["Tailscale-Funnel-Request"] != nil { return false }
-        guard let owner, !owner.isEmpty, owner != tagged, let login = login(fields) else { return true }
+        guard let owner, !owner.isEmpty, owner != tagged, fields["Tailscale-User-Login"] != nil else { return true }
+        guard let login = login(fields) else { return false }
         return login.caseInsensitiveCompare(owner) == .orderedSame
     }
 
@@ -38,6 +40,12 @@ enum TailnetIdentity {
     /// `=?utf-8?q?…?=` separated by a space, `_` for a space and `=XX` for a byte. Nil for a word it cannot read.
     static func decode(_ value: String) -> String? {
         guard value.hasPrefix("=?") else { return value }
+        guard let text = decodeWords(value) else { return nil }
+        // Go encodes only what is not ASCII. A plain login that happens to look like an encoded word is itself.
+        return text.utf8.allSatisfy { $0 < 0x80 } ? value : text
+    }
+
+    private static func decodeWords(_ value: String) -> String? {
         var bytes: [UInt8] = []
         for word in value.split(separator: " ") {
             let parts = word.split(separator: "?", omittingEmptySubsequences: false)

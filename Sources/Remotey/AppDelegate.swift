@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var server: Server = {
         let loaded = Token.load()
         tokenProblem = loaded.failure.map { Texts.Problem.tokenNotSaved("\($0)") }
-        return Server(token: loaded.token, input: input)
+        return Server(token: loaded.token, input: input, devices: Devices(tokenFromBefore: !loaded.fresh))
     }()
     /// The token in use is not the one in the file, or there is none: the menu says so.
     private var tokenProblem: String?

@@ -74,11 +74,22 @@ enum Origins {
     /// `Origin` of a `POST` to the pairing routes. `null` passes here: by the Fetch standard a browser may send it
     /// for its own page's request where a referrer policy hides the origin, and the routes take only
     /// `application/json`, which no other page can send without a CORS preflight that the agent never answers.
-    static func allowsPost(origin: String?) -> Bool {
-        origin == "null" || allows(origin: origin)
+    static func allowsPost(_ fields: HeaderFields) -> Bool {
+        fields["Origin"] == "null" || (allows(origin: fields["Origin"]) && sameHost(fields))
     }
 
+    /// A WebSocket handshake, or a request to the page's port.
     static func allows(_ fields: HeaderFields) -> Bool {
-        allows(host: fields["Host"]) && allows(origin: fields["Origin"])
+        allows(host: fields["Host"]) && allows(origin: fields["Origin"]) && sameHost(fields)
+    }
+
+    /// The page asks the host it was loaded from: its socket and its routes are on its own name. So `Origin` and
+    /// `Host` name one host, whatever the ports. Without this any page under a `ts.net` name passed, and anyone
+    /// can publish one through Funnel: opened in the Mac's browser it could fill the places for connections that
+    /// have not authenticated and keep the phone out. A request that lacks one of the two is a program's.
+    static func sameHost(_ fields: HeaderFields) -> Bool {
+        guard let origin = fields["Origin"], let host = fields["Host"] else { return true }
+        guard let asked = URL(string: origin)?.host else { return false }
+        return bare(asked) == bare(host)
     }
 }

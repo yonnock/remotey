@@ -20,7 +20,9 @@ final class FaceUnlockServerTests: XCTestCase {
     override func setUp() async throws {
         let port = Self.nextPort
         Self.nextPort += 2
-        lock = LockScreen(session: { [unowned self] in sessionLocked }, field: { 0 }, wake: {}, patience: (field: 0.4, answer: 0.2))
+        // The test with a second phone needs the lock screen to think for a while.
+        let answer: TimeInterval = name.contains("WhileAnotherTypes") ? 5 : 0.2
+        lock = LockScreen(session: { [unowned self] in sessionLocked }, field: { 0 }, wake: {}, patience: (field: 0.4, answer: answer))
         let input = Input { [unowned self] event in
             events.append(event)
             guard opensAtReturn, event.type == .keyDown, event.getIntegerValueField(.keyboardEventKeycode) == kVK_Return else { return }
@@ -154,6 +156,42 @@ final class FaceUnlockServerTests: XCTestCase {
         XCTAssertEqual(plain as NSDictionary, ["t": "lock", "on": true])
         XCTAssertFalse(server.unlocksWithFaceID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// A second phone, or the same one on a new connection, asks while the first one's password is in the lock
+    /// screen. It is turned away and takes nothing from the try that types: once the Mac opens, that try's
+    /// password is sealed anew and its refusals are forgotten.
+    func testAnUnlockWhileAnotherTypesLeavesThatTryItsRotation() async throws {
+        let first = try await enrolAndLock()
+        let port = Self.nextPort - 2
+        let other = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port + 1)/ws")!)
+        other.resume()
+        defer { other.cancel(with: .goingAway, reason: nil) }
+        func heard() async throws -> [String: Any] {
+            guard case .string(let text) = try await other.receive() else { return [:] }
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        }
+        try await other.send(.string(#"{"t":"auth","token":"\#(token)"}"#))
+        var theirs = try await heard()
+        while theirs["t"] as? String != "lock" { theirs = try await heard() }
+        let second = try ask(in: theirs)
+
+        try await socket.send(.string(answer(first)))
+        let typed = await eventually { self.keysDown.last == kVK_Return }
+        XCTAssertTrue(typed)
+        // The lock screen has the password and has not answered. The other phone asks now.
+        try await other.send(.string(answer(second)))
+        let refused = try await heard()
+        XCTAssertEqual(refused as NSDictionary, ["t": "unlock", "ok": false, "why": "field"])
+        XCTAssertEqual(keysDown.count, 3, "nothing more was typed")
+        // The Mac takes the first phone's password.
+        sessionLocked = false
+        lock.note(false)
+        let opened = try await next()
+        XCTAssertEqual(opened as NSDictionary, ["t": "lock", "on": false])
+        let again = try await lockAgain()
+        XCTAssertEqual(again.salt, first.next, "sealed under the secret for the salt the first try named next")
+        XCTAssertEqual(FaceUnlock(file: file).key?.refusals, 0)
     }
 
     func testAMacThatOpensForThePasswordForgetsAnEarlierRefusal() async throws {

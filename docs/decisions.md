@@ -1131,6 +1131,39 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       und dunkel mit einem erfundenen Mac-Bild ab, `--docs=DIR` die Bilder des README. 27 von 27 Prüfungen bestanden.
       Zeiger und Scrollen gleich (schnell 250 px bei 60 Hz 768 → 779, Streuung).
 
+21. Nach den Reviews (zwei Leser, die den Stand nicht gebaut hatten: einer für den Agenten, einer für die Seite; dazu
+    ein Lauf von Ende zu Ende durch die echte Seite). Kein Weg an der Anmeldung vorbei gefunden. Behoben:
+    - Seite, ein Telefon blieb ausgesperrt: jede Antwort auf `/session` außer 200 und 404 galt als „nicht gekoppelt“.
+      Startet der Agent neu, antwortet der Proxy davor mit einem eigenen Fehler; die Seite vergaß das Gerät und blieb
+      auf dem ersten Start stehen, obwohl der Cookie galt. Jetzt entkoppelt nur 401, alles andere ist ein Versuch, der
+      scheiterte (`pairing.js`, Test mit 502, 503, 500, 403).
+    - Seite, ein Gerät je Start: eine Home-Screen-App von vorher trägt den Token in ihrer Startadresse und löste ihn
+      bei jedem Kaltstart ein („iPhone 2“, „iPhone 3“ …). Jetzt fragt die Seite zuerst nach einem Ticket und löst den
+      Token nur ein, wenn der Mac das Telefon nicht kennt. Zwei Verbindungen, die zugleich fragen, teilen sich eine
+      Antwort (Test: drei Starts, ein Gerät; zwei Fragen zugleich, ein Gerät).
+    - „Trennen“ am Mac tat nichts: die Seite war binnen einer Sekunde zurück. Der Mac sagt vor dem Schließen `bye`,
+      die Seite bleibt weg, bis ihr Nutzer wieder verbindet.
+    - Agent, ein zweites Entsperren nahm dem ersten die Rotation: `Server.unlock` notierte das neue Siegel, bevor der
+      Sperrbildschirm den zweiten Versuch abwies, und die Absage löschte es. Der Mac ging auf, das Salt blieb, die
+      Zählung der Absagen auch. Jetzt wird ein zweiter Versuch abgewiesen, bevor etwas notiert ist (Test mit zwei
+      Verbindungen; ohne die Änderung schlägt er fehl).
+    - Agent, Passwort im Protokoll: unter `REMOTEY_STATS` schrieb der Agent den Anfang einer ignorierten Nachricht
+      nach stderr, also auch ein Passwort mit mehr als 256 Zeichen. Jetzt nur ihre Art.
+    - `Origin` und `Host` müssen denselben Host nennen, wo beide stehen. Vorher ging jeder Name unter `ts.net` durch,
+      und einen solchen veröffentlicht jeder über Funnel: im Browser des Macs geöffnet, hätte die Seite die Plätze für
+      unangemeldete Verbindungen füllen und das Telefon aussperren können. Runde 18 ließ das offen, damit das eigene
+      Telefon nie abgewiesen wird; die Regel hängt jetzt daran, dass `serve` `Host` weiterreicht, wie das Telefon ihn
+      sandte (`r.Out.Host = r.In.Host`, gelesen in `serve.go`, nicht gegen ein laufendes `serve` geprüft).
+    - Ein Login, das `serve` nennt und das sich nicht lesen lässt, ist nicht das des Besitzers (vorher: durchgelassen).
+      Ein Login aus ASCII, das wie ein kodiertes Wort aussieht, gilt als das, was dasteht: Go kodiert nur, was nicht
+      ASCII ist.
+    - Der alte Token gilt nur auf einem Mac, der ihn vor diesem Start schon hatte. Auf einem frischen ist er aus: kein
+      Telefon hält ihn, und jeder Prozess des Nutzers kann die Datei lesen.
+    - Nicht geändert: ein Angebot zum Einrichten von Face ID geht weiter an jede angemeldete Verbindung. Es auf Geräte
+      zu beschränken hülfe nicht, solange der Token gilt: wer ihn liest, macht sich damit zum Gerät. Und der zweite
+      PRF-Wert lässt sich am Mac nicht prüfen (er ist nicht signiert); liefert ein Authenticator einen falschen,
+      scheitert das nächste Entsperren, und Face ID wird neu eingerichtet.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -1267,3 +1300,7 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   Menüleiste an der Unterkante der oberen Knöpfe beginnt, ist aus dem Vertrag, nicht gesehen. Die Bilder der Galerie
   zeigen ein gezeichnetes Mac-Bild. Englische Texte von mir, nicht gegengelesen. Das README beschreibt noch die alte
   Oberfläche (Dock, Schublade, „Auto“ auf der Anzeige) und darf hier nicht geändert werden; seine Bilder sind neu.
+- Runde 21: nichts davon lief gegen ein laufendes `tailscale serve` oder auf einem iPhone. Hängt `serve` entgegen dem
+  gelesenen Code einen anderen `Host` an, weist die neue Regel das eigene Telefon ab: die Seite lädt, die Verbindung
+  kommt nicht zustande. Das ist das Erste, was am echten Gerät zu prüfen ist. Dass der Proxy bei ruhendem Agenten
+  mit 502 antwortet, ist weiter nicht gemessen; die Seite verlässt sich nicht mehr auf die Zahl.

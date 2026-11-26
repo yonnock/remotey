@@ -52,8 +52,20 @@ final class TailnetIdentityTests: XCTestCase {
         XCTAssertTrue(TailnetIdentity.allows(fields([("Tailscale-User-Login", "guest@example.com")]), owner: nil), "owner not known yet")
         XCTAssertTrue(TailnetIdentity.allows(fields([("Tailscale-User-Login", "guest@example.com")]), owner: TailnetIdentity.tagged),
                       "a tagged Mac has no person as its owner")
-        XCTAssertTrue(TailnetIdentity.allows(fields([("Tailscale-User-Login", "=?utf-8?q?broken")]), owner: "owner@example.com"),
-                      "a login that cannot be read")
+        XCTAssertTrue(TailnetIdentity.allows(fields([("Tailscale-User-Login", "=?utf-8?q?broken")]), owner: nil),
+                      "a login that cannot be read, while the owner is not known")
+    }
+
+    /// `serve` wrote the login, so it names somebody. The owner's own can always be read.
+    func testALoginThatCannotBeReadIsNotTheOwners() {
+        let owner = "owner@example.com"
+        XCTAssertFalse(TailnetIdentity.allows(fields([("Tailscale-User-Login", "=?utf-8?q?broken")]), owner: owner))
+        XCTAssertFalse(TailnetIdentity.allows(fields([("Tailscale-User-Login", "=?utf-8?q?bad=Z?=")]), owner: owner))
+        // Go encodes only what is not ASCII: a login spelled like an encoded word is that spelling, not what it decodes to.
+        let disguised = "=?utf-8?q?owner=40example.com?="
+        XCTAssertEqual(TailnetIdentity.decode(disguised), disguised)
+        XCTAssertFalse(TailnetIdentity.allows(fields([("Tailscale-User-Login", disguised)]), owner: owner))
+        XCTAssertTrue(TailnetIdentity.allows(fields([("Tailscale-User-Login", "=?utf-8?q?j=C3=BCrgen@example.com?=")]), owner: "jürgen@example.com"))
     }
 
     func testFunnelIsRefused() {

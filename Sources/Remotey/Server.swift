@@ -315,6 +315,13 @@ final class Server {
     /// Types `password` into the lock screen. A refusal goes to the page, followed by the state of the lock,
     /// which carries the next challenge for the passkey.
     private func unlock(with password: String, sealed: Bool, rotation: FaceUnlock.Rotation? = nil, for client: Client) {
+        // One password at a time. Said before anything is noted for this try: what is noted belongs to the
+        // try that types, and a second one would take the new seal and the count of refusals from it.
+        guard !lock.unlocking else {
+            send(client, Wire.unlockFailed(.field))
+            if sealed { send(client, lockState(for: client)) }
+            return
+        }
         if viewer === client { screen.followText(true) } // the view shows the field the password goes into
         if sealed {
             typesSealedPassword = true
@@ -674,7 +681,7 @@ final class Server {
         case ("POST", "/pair"), ("POST", "/session"):
             // A page in the Mac's browser names itself. It cannot send JSON either without asking first
             // (a CORS preflight), which the agent never answers, so `Origin: null` is no way in.
-            guard Origins.allowsPost(origin: fields["Origin"]), Self.isJSON(fields["Content-Type"]) else {
+            guard Origins.allowsPost(fields), Self.isJSON(fields["Content-Type"]) else {
                 return .json("403 Forbidden", ["ok": false, "why": "origin"])
             }
             return request.path == "/pair" ? pair(request) : session(request)
@@ -823,8 +830,9 @@ final class Server {
             client.heard = ProcessInfo.processInfo.systemUptime
             if client.authed {
                 // A field the agent does not know how to read costs this message, not the connection.
+                // Only its kind: a password too long to take is ignored too, and belongs in no log.
                 if case .ignored = command, ScreenView.statsOn {
-                    FileHandle.standardError.write(Data("ignored: \(String(decoding: data.prefix(200), as: UTF8.self))\n".utf8))
+                    FileHandle.standardError.write(Data("ignored: \(Wire.kind(of: data).prefix(32))\n".utf8))
                 }
                 self.handle(command, from: client)
             } else if case .auth(let credential) = command {

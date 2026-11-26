@@ -19,8 +19,8 @@ struct Device: Codable, Equatable, Identifiable {
 }
 
 /// Who may connect: the paired phones, and two switches that go with them. Whether the old shared token still
-/// opens the socket (on for a Mac that has no file yet, so a phone paired the old way keeps working after the
-/// update), and whether remote control is paused. One 0600 file beside the token, written whole, so the file
+/// opens the socket (on for a Mac that has a token from before but no file yet, so a phone paired the old way
+/// keeps working after the update; off on a Mac that never had one), and whether remote control is paused. One 0600 file beside the token, written whole, so the file
 /// alone opens nothing: it has no key, only hashes.
 final class Devices {
     private struct Saved: Codable {
@@ -57,14 +57,18 @@ final class Devices {
     var moved: Bool { saved.moved }
 
     /// A file that is there but cannot be read keeps the old token out: it may be one in which the user
-    /// switched the token off. The phones pair again.
-    init(file: URL = Devices.file(), now: @escaping () -> Date = Date.init) {
+    /// switched the token off. The phones pair again. `tokenFromBefore`: this Mac had the shared token before
+    /// this start, so a phone may hold it. A Mac that never had one takes none: every process that runs as the
+    /// user can read the token's file, and nothing is gained by a key that no phone has. That is saved at once,
+    /// since the next start finds the token this one made.
+    init(file: URL = Devices.file(), now: @escaping () -> Date = Date.init, tokenFromBefore: Bool = true) {
         self.file = file
         self.now = now
         if let data = try? Data(contentsOf: file) {
             saved = (try? JSONDecoder.devices.decode(Saved.self, from: data)) ?? Saved(token: false)
         } else {
-            saved = Saved()
+            saved = Saved(token: tokenFromBefore)
+            if !tokenFromBefore { try? save(saved) }
         }
     }
 

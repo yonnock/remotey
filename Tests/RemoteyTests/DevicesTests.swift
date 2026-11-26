@@ -45,6 +45,15 @@ final class DevicesTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["devices"], "nothing written on the way")
     }
 
+    /// Every process that runs as the user can read the token's file. A Mac that never had a token has no phone
+    /// that holds it, so it takes none, and still takes none at the next start, when the file is there.
+    func testAMacThatNeverHadTheSharedTokenTakesNone() throws {
+        XCTAssertFalse(Devices(file: file, tokenFromBefore: false).acceptsToken)
+        XCTAssertFalse(Devices(file: file, tokenFromBefore: true).acceptsToken, "saved at once")
+        try? FileManager.default.removeItem(at: file)
+        XCTAssertTrue(Devices(file: file, tokenFromBefore: true).acceptsToken, "a Mac from before: its phone keeps working")
+    }
+
     func testDevicesAndSwitchesOutliveARestart() throws {
         let devices = Devices(file: file)
         XCTAssertTrue(devices.acceptsToken, "on at first: the phone paired the old way keeps working")

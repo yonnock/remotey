@@ -237,6 +237,15 @@ final class WireTests: XCTestCase {
         }
     }
 
+    /// What the log of ignored messages names: never what a message carries, such as a password too long to take.
+    func testTheKindOfAMessageForTheLog() throws {
+        let long = #"{"t":"unlock","s":"\#(String(repeating: "x", count: 300))"}"#
+        guard case .ignored = try command(long) else { return XCTFail("taken") }
+        XCTAssertEqual(Wire.kind(of: Data(long.utf8)), "unlock")
+        XCTAssertEqual(Wire.kind(of: Data(#"{"s":"secret"}"#.utf8)), "?")
+        XCTAssertEqual(Wire.kind(of: Data("secret".utf8)), "?")
+    }
+
     func testWhatTheAgentDoesNotActOn() throws {
         for json in [#"{"t":"noop"}"#, #"{"t":"m","dx":6000,"dy":0}"#, #"{"t":"m","dx":1}"#, #"{"t":"auth"}"#,
                      #"{"t":"shown","n":-1}"#, #"{"t":"key","k":"w"}"#, #"{"t":"focus","win":7}"#, #"{"t":"focus","pid":0}"#,
