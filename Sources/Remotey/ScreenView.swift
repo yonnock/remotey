@@ -748,7 +748,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         let size = region(request, fitting: displays)
         let all = displays.reduce(CGRect.null) { $0.union($1) }
         let home = displays.first { $0.contains(cursor) } ?? all
-        let near = displays.filter { $0 != home }.compactMap { other -> (bounds: CGRect, share: Double)? in
+        let near = displays.filter { $0 != home }.compactMap { other -> (bounds: CGRect, share: CGFloat)? in
             // 1 at the other display, 0 where the centred region would only just touch it.
             let dx = max(other.minX - cursor.x, cursor.x - other.maxX, 0) / (size.width / 2)
             let dy = max(other.minY - cursor.y, cursor.y - other.maxY, 0) / (size.height / 2)
