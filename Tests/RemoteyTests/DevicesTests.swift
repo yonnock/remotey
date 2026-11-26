@@ -2,10 +2,19 @@ import XCTest
 @testable import Remotey
 
 extension Devices {
+    /// Where `temporary` keeps its stores in this run of the tests.
+    private static let temporaries = FileManager.default.temporaryDirectory
+        .appendingPathComponent("remotey-devices-\(ProcessInfo.processInfo.processIdentifier)")
+
     /// A store in a folder of its own, so no test reads or writes the agent's.
     static func temporary(now: @escaping () -> Date = Date.init) -> Devices {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("remotey-devices-\(UUID().uuidString)")
+        let folder = temporaries.appendingPathComponent(UUID().uuidString)
         return Devices(file: folder.appendingPathComponent("devices"), now: now)
+    }
+
+    /// For the class `tearDown` of a suite that used `temporary`.
+    static func removeTemporaries() {
+        try? FileManager.default.removeItem(at: temporaries)
     }
 }
 

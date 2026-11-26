@@ -28,6 +28,11 @@ final class ServerTests: XCTestCase {
         server = nil
     }
 
+    override class func tearDown() {
+        Devices.removeTemporaries()
+        super.tearDown()
+    }
+
     /// A TCP connection that sends nothing; `closed` is fulfilled once the server hangs up.
     private func idle(port: UInt16, closed: XCTestExpectation? = nil) -> NWConnection {
         let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)

@@ -46,6 +46,11 @@ final class FaceUnlockServerTests: XCTestCase {
         try? FileManager.default.removeItem(at: file)
     }
 
+    override class func tearDown() {
+        Devices.removeTemporaries()
+        super.tearDown()
+    }
+
     private func next() async throws -> [String: Any] {
         guard case .string(let text) = try await socket.receive() else { return [:] }
         return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])

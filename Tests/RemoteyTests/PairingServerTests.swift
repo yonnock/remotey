@@ -86,6 +86,11 @@ final class PairingServerTests: XCTestCase {
         server?.stop()
     }
 
+    override class func tearDown() {
+        Devices.removeTemporaries()
+        super.tearDown()
+    }
+
     // MARK: Helpers
 
     /// A request as the page's `fetch` sends it: its own origin, JSON.

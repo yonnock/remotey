@@ -99,6 +99,11 @@ final class ServerSessionTests: XCTestCase {
         server?.stop()
     }
 
+    override class func tearDown() {
+        Devices.removeTemporaries()
+        super.tearDown()
+    }
+
     private func phone(authenticated: Bool = true) async throws -> SocketPhone {
         let phone = SocketPhone(port: port + 1)
         phones.append(phone)
