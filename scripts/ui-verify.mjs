@@ -49,7 +49,10 @@ import { extname, join, resolve } from 'node:path';
 //     tile beside the mute key (T10). The fake Mac pairs per device: `/pair`, `/session` and tickets (T19), and says
 //     `mac` (T20). New: T19 pairing, T20 glass, insets and the Mac's state, T21 the gesture tour, T22 sideways sides.
 //     --gallery=DIR saves every screen, dark and light, with a drawn Mac desktop as the picture.
-export const VERIFIER_VERSION = 18;
+// 19: the fake Mac can end a session (`__bye`: `bye`, then the socket closes); T16 checks that the page stays
+//     disconnected through coming back into sight and the network's return, and connects again on the notice's button.
+//     The gallery adds the screen for it (`ended-*`).
+export const VERIFIER_VERSION = 19;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -199,6 +202,8 @@ const harness = `(() => {
     }
     close() { this.readyState = 3; }
   };
+  // "Trennen" in the Mac's menu: the Mac says \`bye\` and closes the connection right after.
+  window.__bye = () => { const s = window.__socket; s.onmessage?.({ data: JSON.stringify({ t: 'bye' }) }); s.readyState = 3; s.onclose?.(); };
   window.__probe = 200;
   const realFetch = window.fetch.bind(window);
   window.fetch = (url, options) => (options?.method === 'HEAD'
@@ -1559,6 +1564,19 @@ await task('T16', async () => {
   await page.evaluate(`(window.__sockets.length = 0, window.__socket.onclose())`); await sleep(100);
   out.blip = { ...(await look(page)), sockets: (await sockets(page)).length };
   await page.close();
+  // Ended at the Mac ("Trennen", v19): the Mac says `bye` and closes. No try by itself, also not when the page comes
+  // back into sight or the network returns; the notice's one button connects again.
+  page = await openPage(...PHONES.small);
+  await page.evaluate(`(window.__sockets.length = 0, window.__bye())`); await sleep(300);
+  out.ended = await look(page);
+  await page.shot('ended');
+  await page.evaluate(`(document.dispatchEvent(new Event('visibilitychange')), dispatchEvent(new Event('online')))`);
+  await sleep(1500);
+  out.ended.tries = (await sockets(page)).length;
+  out.ended.still = (await look(page)).notice?.kind;
+  await page.tap('#noticeAct'); await sleep(300);
+  out.ended.after = { ...(await look(page)), sockets: (await sockets(page)).length };
+  await page.close();
   // The key refused: no more tries; the button shows how to pair again, and back.
   page = await openPage(...PHONES.small);
   await page.evaluate(`(window.__mac = 'deny', window.__socket.onclose())`); await sleep(300);
@@ -1599,6 +1617,9 @@ await task('T16', async () => {
       && n(out.offline).title === 'iPhone offline' && out.offline.status === 'Offline'
       && out.online.sockets === 1 && out.online.status === 'Verbunden' && !out.online.notice
       && out.blip.sockets === 1 && !out.blip.notice && out.blip.status === 'Verbunden'
+      && n(out.ended).kind === 'ended' && n(out.ended).title === 'Am Mac getrennt' && n(out.ended).button === 'Wieder verbinden'
+      && n(out.ended).symbols.join() === 'ended' && out.ended.symbol === 'off' && out.ended.status === 'Getrennt'
+      && out.ended.tries === 0 && out.ended.still === 'ended' && out.ended.after.sockets === 1 && out.ended.after.status === 'Verbunden' && !out.ended.after.notice
       && n(out.denied).title === 'Kopplung ungültig' && n(out.denied).button === 'So geht’s' && out.denied.status === 'Nicht gekoppelt'
       && out.denied.steps.welcome && !out.denied.back.welcome && out.denied.tries === 0
       && n(out.permission).kind === 'permission' && n(out.permission).title === 'Live-Bild nicht erlaubt' && out.permission.view === 'false' && out.permission.status === 'Verbunden'
@@ -2069,9 +2090,9 @@ if (gallery) await task('gallery', async () => {
     await page.close();
     // 10 · failures.
     for (const [name, script] of [['unreachable', `window.__mac = 'down', window.__probe = null`], ['stopped', `window.__mac = 'down', window.__probe = 502`],
-      ['no-access', `window.__mac = 'noax'`], ['denied', `window.__mac = 'deny'`], ['revoked', `window.__mac = 'revoked'`]]) {
+      ['no-access', `window.__mac = 'noax'`], ['denied', `window.__mac = 'deny'`], ['revoked', `window.__mac = 'revoked'`], ['ended', `window.__bye()`]]) {
       page = await open();
-      await page.evaluate(`(${script}, window.__socket.onclose())`); await sleep(700);
+      await page.evaluate(`(${script}, window.__socket.onclose?.())`); await sleep(700);
       await keep(page, `${name}-${scheme}`);
       await page.close();
     }

@@ -12,7 +12,7 @@
   --c-bg: #000;                         /* the page where no picture is */
   --c-stage: #000;                      /* behind the live view, in either scheme */
   --c-pad: #1c1c1e;                     /* the trackpad without a picture (systemGray6) */
-  --c-material: rgb(30 30 33 / .985);    /* sheets, menus, cards: they move, so no blur under them */
+  --c-material: rgb(30 30 33);          /* sheets, menus, cards: they move, so no blur under them, and nothing shows through */
   --c-cell: #2c2c2e;                    /* a group or tile on a sheet */
   --c-fill: rgb(120 120 128 / .32); --c-fill-2: rgb(120 120 128 / .44); /* round buttons on a sheet, tracks, pressed */
   --c-separator: rgb(84 84 88 / .55);
@@ -62,7 +62,7 @@
     --c-accent: #ff9500; --c-on-accent: #1d1100;
     --c-ok: #28b14c; --c-bad: #e5342b; --c-warn: #c69200;
     --c-bg: #f2f2f7; --c-pad: #e4e4ea;
-    --c-material: rgb(246 246 249 / .99); --c-cell: #fff;
+    --c-material: rgb(246 246 249); --c-cell: #fff;
     --c-fill: rgb(120 120 128 / .14); --c-fill-2: rgb(120 120 128 / .24);
     --c-separator: rgb(60 60 67 / .22);
     --c-label: #000; --c-label-2: rgb(60 60 67 / .66); --c-label-3: rgb(60 60 67 / .38);
@@ -70,7 +70,7 @@
     --glass: rgb(250 250 252 / .7); --glass-solid: #f6f6f8; --glass-ink: #101114;
     --glass-edge: inset 0 0 0 .5px rgb(255 255 255 / .75), 0 0 0 .5px rgb(0 0 0 / .08), 0 4px 14px rgb(0 0 0 / .16);
     --glass-div: rgb(0 0 0 / .1); --glass-press: rgb(0 0 0 / .08);
-    --shadow: 0 12px 40px rgb(0 0 0 / .18), 0 0 0 .5px rgb(0 0 0 / .06);
+    --shadow: 0 12px 40px rgb(0 0 0 / .2), 0 0 0 .5px rgb(0 0 0 / .12);
   }
 }
 /* Increased contrast: opaque surfaces, clear edges, full-strength secondary words. */
@@ -133,7 +133,7 @@ body.view #screen { background: var(--c-stage); }
 body.view #surface { display: none; }
 #hint { margin: 0; max-width: 300px; color: var(--c-label-3); font-size: var(--t-footnote); line-height: 1.4; text-align: center;
   text-wrap: balance; transition: opacity .4s ease-out; }
-body.moved #hint { opacity: 0; }
+body.moved #hint, body:has(#notice:not([hidden])) #hint { opacity: 0; }
 /* Where a click landed, without a picture to answer it: a ring that grows and fades. */
 #ring { position: absolute; left: 0; top: 0; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%;
   border: 2px solid var(--c-label); opacity: 0; pointer-events: none; }
@@ -147,6 +147,10 @@ body.moved #hint { opacity: 0; }
 #zoneTop { top: var(--edge-top); left: var(--edge-left); right: var(--edge-right); height: var(--top-h); align-items: center; justify-content: space-between; }
 #zoneBottom { bottom: var(--edge-bottom); left: var(--edge-left); right: var(--edge-right); flex-direction: column; }
 #zoneMouse, #zoneTools { display: none; }
+/* Under an open sheet the bar and the mouse keys step back: the sheet's corners are rounder than theirs, and they
+   would peek out beside them. They fade in as the sheet leaves. */
+#zoneBottom { transition: opacity var(--quick), visibility 0s; }
+body:is(.apps, .drawer, .prefs) #zoneBottom { opacity: 0; visibility: hidden; transition: opacity .12s ease-out, visibility 0s linear .12s; }
 .glass { background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: var(--glass-edge);
   color: var(--glass-ink); }
 .capsule { border-radius: var(--r-pill); }
@@ -167,11 +171,13 @@ body.moved #hint { opacity: 0; }
 #macBtn .bad { width: 16px; height: 16px; color: var(--c-bad); stroke-width: 2; }
 #macBtn .shut, #macBtn .held { width: 15px; height: 15px; stroke-width: 2; }
 #macBtn[data-state=ok] .ok, #macBtn[data-state=wait] .wait, #macBtn[data-state=bad] .bad,
-#macBtn[data-state=shut] .shut, #macBtn[data-state=held] .held { display: block; }
+#macBtn[data-state=shut] .shut, #macBtn[data-state=held] .held, #macBtn[data-state=off] .off { display: block; }
+#macBtn .off { width: 10px; height: 10px; stroke: var(--glass-ink); stroke-width: 1.6; opacity: .6; }
 #macBtn .words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #macState:not(:empty)::before { content: ' · '; }
 #macBtn.meter #macName { font-variant-numeric: tabular-nums; }
 #macBtn .more { width: 13px; height: 13px; stroke-width: 2.4; opacity: .55; }
+#macBtn .mac { display: none; }
 @keyframes turn { to { transform: rotate(1turn); } }
 
 /* The view capsule: − and + around the readout. The readout's segment is tinted while the view is fitted. */
@@ -200,12 +206,13 @@ body:not(.up) #zoom, body:not(.up) #liveBtn { display: none; }
 #mouse { height: var(--bottom-h); display: flex; overflow: hidden; font-size: var(--t-body); font-weight: 600; }
 #mouse > * + * { border-left: .5px solid var(--glass-div); }
 #mouse .click { flex: 1; min-width: 0; white-space: nowrap; }
-#mouse [data-hold] { flex: 1.3; }
+/* The capsule's round end takes room from the last word: it stands a little off the curve, as an inset would. */
+#mouse .click:last-child { padding-right: 8px; }
+.click .glyph { display: none; }
 .side { flex: none; display: flex; }
 .side button { width: 50px; display: grid; place-items: center; }
 .side button + button { border-left: .5px solid var(--glass-div); }
 .side svg { width: 21px; height: 21px; stroke-width: 2.1; }
-.click .narrow { display: none; }
 #mouse button.pressed, .col .click.pressed, .col .side button.pressed { background: var(--glass-press); }
 /* The bar: the key that writes on the Mac, as wide as it can be, and two round keys. */
 #bar { height: var(--bottom-h); display: flex; gap: var(--s-2); }
@@ -213,7 +220,9 @@ body:not(.up) #zoom, body:not(.up) #liveBtn { display: none; }
   container-type: inline-size; transition: background-color var(--quick), color var(--quick); }
 .slot span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .62; }
 .slot .short { display: none; }
-@container (max-width: 214px) { .slot .long { display: none; } .slot .short { display: inline; } }
+/* The long words where they fit: "Auf dem Mac schreiben" needs 214 pt, "Unlock with Face ID" 186. */
+@container (max-width: 214px) { :lang(de) .slot .long { display: none; } :lang(de) .slot .short { display: inline; } }
+@container (max-width: 186px) { :lang(en) .slot .long { display: none; } :lang(en) .slot .short { display: inline; } }
 .slot svg { width: 22px; height: 22px; opacity: .62; }
 .slot .shut, .slot .face { display: none; }
 .slot.pressed { background: color-mix(in srgb, var(--glass), var(--glass-ink) 12%); }
@@ -240,8 +249,13 @@ body.wide.swap #zoneMouse { left: auto; right: max(var(--s-2), calc(var(--safe-r
 body.wide.swap #zoneTools { right: auto; left: max(var(--s-2), calc(var(--safe-left) - var(--col-w) - 4px)); }
 .col #macBtn { width: var(--col-w); height: var(--tap); padding: 0; justify-content: center; flex: none; }
 .col #macBtn .words, .col #macBtn .more { display: none; }
-.col #macBtn .state { width: 18px; height: 18px; }
-.col #macBtn .ok { width: 12px; height: 12px; }
+.col #macBtn .mac { display: block; width: 24px; height: 24px; }
+/* The state as a badge on the Mac's corner, on a ring of the button's own colour. */
+.col #macBtn .state { position: absolute; left: calc(50% + 5px); top: 7px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--glass-solid); }
+.col #macBtn .ok { width: 8px; height: 8px; }
+.col #macBtn .wait, .col #macBtn .off { width: 10px; height: 10px; }
+.col #macBtn .bad, .col #macBtn .shut, .col #macBtn .held { width: 12px; height: 12px; }
 .col #liveBtn { width: var(--col-w); height: var(--tap); padding: 0; justify-content: center; flex: none; }
 .col #liveBtn .long { display: none; }
 .col #zoom { flex-direction: column-reverse; width: var(--col-w); height: auto; padding: 3px; flex: none; }
@@ -252,14 +266,12 @@ body.wide.swap #zoneTools { right: auto; left: max(var(--s-2), calc(var(--safe-l
 .col .side { flex-direction: column; border-radius: var(--r-pill); overflow: hidden; flex: none; }
 .col .side button { width: var(--col-w); height: var(--tap); }
 .col .side button + button { border-left: 0; border-top: .5px solid var(--glass-div); }
-.col .click { flex: 1; min-height: 56px; width: var(--col-w); border-radius: var(--r-pill); font-size: var(--t-footnote); font-weight: 600;
-  line-height: 1.15; padding: 0 4px; white-space: normal; hyphens: manual; }
-.col [data-hold] { flex: 1.35; }
-.col .click .long { display: none; }
-.col .click .narrow { display: inline; }
+.col .click { flex: 1; min-height: 56px; width: var(--col-w); border-radius: var(--r-pill); display: grid; place-items: center; padding: 0; }
+.col .click span { display: none; }
+.col .click .glyph { display: block; width: 28px; height: 28px; stroke-width: 1.7; }
 .col .round, .col .slot { width: var(--col-w); height: var(--tap); border-radius: var(--r-pill); flex: none; }
 .col .slot { padding: 0; justify-content: center; }
-.col .slot span { display: none; }
+#zoneMouse .slot span, #zoneTools .slot span { display: none; }
 .col .spacer { flex: 1; min-height: 0; }
 /* Out of the capsule, each mouse key is a piece of glass of its own. */
 .col .side, .col .click { background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -298,13 +310,13 @@ body.wide #viewMenu:has(.displays:not([hidden])) > :not(.displays) { grid-column
 body.wide #viewMenu .displays { grid-column: 2; grid-row: 1 / span 6; padding-top: 6px; border-left: .5px solid var(--c-separator); align-self: stretch; }
 body.wide #viewMenu .displays hr { display: none; }
 /* The displays as they are arranged, the pointer's one with a light frame. */
-#displays { --map-h: 104px; position: relative; margin: 0 16px 10px; width: min(calc(100% - 32px), calc(var(--ratio, 2) * var(--map-h)));
+#displays { --map-h: 104px; position: relative; margin: 0 auto 10px; width: min(calc(100% - 32px), calc(var(--ratio, 2) * var(--map-h)));
   aspect-ratio: var(--ratio, 2); }
 .display { position: absolute; padding: 2px; }
 .display > span { width: 100%; height: 100%; display: grid; place-items: center; padding: 0 var(--s-1); overflow: hidden;
   border-radius: 7px; background: var(--c-fill); color: var(--c-label-2); font-size: var(--t-caption); font-weight: 600;
   line-height: 1.15; text-align: center; }
-.display > span > span { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.display > span > span { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .display.here > span { color: var(--c-label); box-shadow: inset 0 0 0 1.5px var(--c-label); }
 .display.pressed > span, .display:active > span { background: var(--c-fill-2); }
 .display:disabled > span { opacity: .5; }
@@ -375,6 +387,9 @@ body.wide .sheet { left: 50%; right: auto; width: min(440px, calc(100% - 2 * var
 .tile { min-width: 0; min-height: var(--tap); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
   border-radius: var(--r-tile); background: var(--c-cell); font-size: var(--t-footnote); font-weight: 500; }
 .tile svg { width: 24px; height: 24px; }
+/* The outer tiles sit in the sheet's lower corners: their radius there is the sheet's less the padding. */
+.tiles > :first-child { border-bottom-left-radius: var(--r-card); }
+.tiles > :last-child { border-bottom-right-radius: var(--r-card); }
 .tile span { max-width: 100%; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile.pressed, .rocker button.pressed { background: var(--c-fill-2); }
 .rocker { flex-direction: row; gap: 0; overflow: hidden; }
@@ -385,8 +400,11 @@ body.wide .sheet { left: 50%; right: auto; width: min(440px, calc(100% - 2 * var
 .tile[data-act=lock].on { background: var(--c-accent); color: var(--c-on-accent); }
 /* Keys, 56 × 48 where the phone is wide enough: named in words lowercase as on Apple's keyboards, modifiers with
    their names, the arrows as an inverted T, and the app's zoom as a row of its own. */
-.keys { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(4, 48px); gap: var(--s-2);
-  grid-template-areas: "esc tab space back ret" "cmd alt . up ." "ctrl shift left down right" "zoom zoom zoom zoom zoom"; }
+.keys { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, .3fr) repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(4, 48px); gap: var(--s-2);
+  grid-template-areas: "esc tab space space back ret" "cmd alt . . up ." "ctrl shift . left down right" "zoom zoom zoom zoom zoom zoom"; }
+/* The modifiers and the arrows are two groups: a little air between them, and the space bar wider across it. */
+.cap svg { width: 24px; height: 24px; stroke-width: 1.9; }
 .cap { min-width: 0; border-radius: var(--r-key); background: var(--c-cell); display: grid; place-items: center; font-size: var(--t-title-3);
   line-height: 1; transition: background-color .08s; }
 .cap.pressed { background: var(--c-fill-2); }
@@ -404,8 +422,12 @@ body.wide .sheet { left: 50%; right: auto; width: min(440px, calc(100% - 2 * var
 .appzoom { grid-area: zoom; display: flex; border-radius: var(--r-pill); background: var(--c-cell); overflow: hidden; }
 .appzoom .cap { flex: 1; display: flex; align-items: center; justify-content: center; border-radius: 0; background: none;
   font-size: var(--t-body); font-weight: 500; }
-.appzoom .cap:nth-child(2) { flex: 1.5; display: flex; gap: 6px; color: var(--c-label-2); font-size: var(--t-subhead); }
+.appzoom .cap:nth-child(2) { flex: 1.5; display: flex; gap: 4px; color: var(--c-label-2); font-size: var(--t-subhead); }
 .appzoom .cap:nth-child(2) small { font-size: var(--t-subhead); }
+.appzoom .cap:nth-child(2) small::after { content: ' ·'; }
+/* A small A to zoom out, a large one to zoom in, as on the Mac's own zoom keys. */
+.appzoom [data-key="-"] { font-size: var(--t-subhead); }
+.appzoom [data-key="+"] { font-size: var(--t-title-3); }
 .appzoom .cap + .cap { border-left: .5px solid var(--c-separator); }
 .appzoom .cap.pressed { background: var(--c-fill-2); }
 .appzoom .sign { margin-left: 2px; font-size: .8em; }
@@ -475,7 +497,7 @@ body.wide #prefs { height: calc(100% - var(--edge-top) - var(--edge-bottom)); }
 /* A slider: name and value above, the track below. The finger sets the value where it touches the row and while
    it slides; the knob snaps from detent to detent, the filled part shows the value, the longer tick the default. */
 .setting { min-height: 0; display: grid; gap: 2px; padding: 11px var(--s-4) 6px; touch-action: none; }
-.setting .name { display: flex; justify-content: space-between; gap: var(--s-2); font-size: var(--t-body); white-space: nowrap; }
+.setting .name { max-width: none; padding: 0; color: var(--c-label); display: flex; justify-content: space-between; gap: var(--s-2); font-size: var(--t-body); white-space: nowrap; }
 .setting .name span { overflow: hidden; text-overflow: ellipsis; }
 .setting output { color: var(--c-label-2); font-variant-numeric: tabular-nums; }
 .slider { --inset: 14px; position: relative; height: 36px; margin: 0 -4px; touch-action: none; cursor: pointer; border-radius: 10px; }
@@ -559,7 +581,7 @@ body.wide #tour { left: 50%; right: auto; width: min(380px, calc(100% - 2 * var(
   pointer-events: none; background: var(--c-scrim); animation: page-in .2s ease-out; }
 #notice .card { width: min(100%, 320px); display: grid; justify-items: center; gap: var(--s-2); text-align: center; }
 #notice .sym { width: 48px; height: 48px; margin-bottom: var(--s-1); stroke: var(--c-label-2); stroke-width: 1.5; display: none; }
-#notice[data-kind=unreachable] [data-for=unreachable], #notice[data-kind=stopped] [data-for=stopped],
+#notice[data-kind=ended] [data-for=ended], #notice[data-kind=unreachable] [data-for=unreachable], #notice[data-kind=stopped] [data-for=stopped],
 #notice[data-kind=noAccess] [data-for=noAccess], #notice[data-kind=denied] [data-for=denied], #notice[data-kind=revoked] [data-for=revoked],
 #notice[data-kind=offline] [data-for=offline], #notice[data-kind=permission] [data-for=permission], #notice[data-kind=paused] [data-for=paused],
 #notice[data-kind=taken] [data-for=taken] { display: block; }
@@ -610,8 +632,13 @@ body.wide #tour { left: 50%; right: auto; width: min(380px, calc(100% - 2 * var(
 .cells { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--s-2); pointer-events: none; }
 .cells span { display: grid; place-items: center; border-radius: var(--r-key); background: var(--c-fill); font-size: var(--t-title-1);
   font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Where typing goes: an empty cell holds a short line, so six slabs read as six places for a digit; with the field
+   focused, the next cell has the accent's ring and a blinking caret instead. */
+.cells span:empty::before { content: ''; width: 14px; height: 2px; border-radius: 1px; background: var(--c-label-3); }
 .code:focus-within .cells span.now { box-shadow: inset 0 0 0 2px var(--c-accent); }
-.code.failed .cells span { box-shadow: inset 0 0 0 1.5px var(--c-bad); }
+.code:focus-within .cells span.now:empty::before { width: 2px; height: 28px; background: var(--c-accent); animation: caret 1.06s steps(1) infinite; }
+@keyframes caret { 50% { opacity: 0; } }
+.code.failed .cells span, .code.failed:focus-within .cells span.now { box-shadow: inset 0 0 0 1.5px var(--c-bad); }
 #code { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .011; border: 0; background: none; color: transparent;
   caret-color: transparent; font-size: 16px; letter-spacing: 40px; -webkit-user-select: text; user-select: text; }
 #pairSays { min-height: 1.4em; font-size: var(--t-footnote); }
@@ -630,7 +657,8 @@ body[data-link=unpaired] #hud { visibility: hidden; }
 @media (max-width: 359px) {
   #mouse { font-size: var(--t-subhead); }
   .side button { width: var(--tap); }
-  .keys { gap: 6px; }
+  /* The two groups keep apart by two gaps instead of a column of their own: "command" needs the width. */
+  .keys { gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 0 repeat(3, minmax(0, 1fr)); }
   .sheet { padding: 0 var(--s-3) var(--s-3); }
   /* The Mac's name keeps its room: the zoom keys a little narrower, the readout without its chevron. */
   #zoom .step { width: 34px; }
@@ -646,5 +674,6 @@ body[data-link=unpaired] #hud { visibility: hidden; }
   .page, #apps, #notice, #enrol, .menu, .menu.leaving, #tour { animation: none; }
   #ring.on { animation: ring-still .5s linear; }
   #macBtn .wait { animation: none; }
+  .code:focus-within .cells span.now:empty::before { animation: none; }
 }
 @keyframes ring-still { from { opacity: .9; } to { opacity: 0; } }

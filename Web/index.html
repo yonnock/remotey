@@ -42,12 +42,17 @@
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></symbol>
   <symbol id="i-warn" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.2M12 16.3v.01"/></symbol>
   <symbol id="i-pause" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/></symbol>
-  <symbol id="i-prev" viewBox="0 0 24 24"><path class="solid" d="M11.5 6.2v11.6L3 12zM21 6.2v11.6L12.5 12z"/></symbol>
-  <symbol id="i-next" viewBox="0 0 24 24"><path class="solid" d="M12.5 6.2v11.6L21 12zM3 6.2v11.6L11.5 12z"/></symbol>
-  <symbol id="i-play" viewBox="0 0 24 24"><path class="solid" d="M3 5.5v13l9-6.5zM14 5.5h2.6v13H14zM18.4 5.5H21v13h-2.6z"/></symbol>
-  <symbol id="i-mute" viewBox="0 0 24 24"><path class="solid" d="M3 9h3.8L12 4.5v15L6.8 15H3z"/><path d="M15.5 9.5l5 5M20.5 9.5l-5 5"/></symbol>
-  <symbol id="i-quieter" viewBox="0 0 24 24"><path class="solid" d="M3 9h3.8L12 4.5v15L6.8 15H3z"/><path d="M15.5 12h5"/></symbol>
-  <symbol id="i-louder" viewBox="0 0 24 24"><path class="solid" d="M3 9h3.8L12 4.5v15L6.8 15H3z"/><path d="M15.5 12h5M18 9.5v5"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path class="solid" fill="currentColor" stroke="none" d="M11.5 6.2v11.6L3 12zM21 6.2v11.6L12.5 12z"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path class="solid" fill="currentColor" stroke="none" d="M12.5 6.2v11.6L21 12zM3 6.2v11.6L11.5 12z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path class="solid" fill="currentColor" stroke="none" d="M3 5.5v13l9-6.5zM14 5.5h2.6v13H14zM18.4 5.5H21v13h-2.6z"/></symbol>
+  <symbol id="i-mute" viewBox="0 0 24 24"><path class="solid" fill="currentColor" stroke="none" d="M3 9h3.8L12 4.5v15L6.8 15H3z"/><path d="M15.5 9.5l5 5M20.5 9.5l-5 5"/></symbol>
+  <symbol id="i-quieter" viewBox="0 0 24 24"><path class="solid" fill="currentColor" stroke="none" d="M3 9h3.8L12 4.5v15L6.8 15H3z"/><path d="M15.5 12h5"/></symbol>
+  <symbol id="i-louder" viewBox="0 0 24 24"><path class="solid" fill="currentColor" stroke="none" d="M3 9h3.8L12 4.5v15L6.8 15H3z"/><path d="M15.5 12h5M18 9.5v5"/></symbol>
+  <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="4.5" y="5.5" width="15" height="10.5" rx="1.8"/><path d="M2.5 19h19"/></symbol>
+  <symbol id="i-space" viewBox="0 0 24 24"><path d="M5 10v4h14v-4"/></symbol>
+  <!-- A mouse with the button that is pressed filled: sideways, where "Rechtsklick" does not fit a 56 pt column. -->
+  <symbol id="i-mouse-left" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="6"/><path d="M6 10h12"/><path class="solid" fill="currentColor" stroke="none" d="M12 2.5V10H6V8.5a6 6 0 0 1 6-6z"/></symbol>
+  <symbol id="i-mouse-right" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="6"/><path d="M6 10h12"/><path class="solid" fill="currentColor" stroke="none" d="M12 2.5V10h6V8.5a6 6 0 0 0-6-6z"/></symbol>
   <symbol id="i-devices" viewBox="0 0 48 48"><rect x="5" y="10" width="27" height="19" rx="3"/><path d="M2 34h31"/><rect x="31.5" y="16" width="13" height="23" rx="3.5"/><path d="M36.5 35h3"/></symbol>
 </svg>
 <div id="app">
@@ -67,6 +72,7 @@
        thing to do about it. Touches pass through to the pad everywhere but on the button. -->
   <div id="notice" aria-live="polite" hidden>
     <div class="card">
+      <svg class="sym" data-for="ended" viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="6" width="10.5" height="7.5" rx="1.5"/><path d="M.8 16.5h12M14.4 11.5h.01M16.4 11.5h.01"/><rect x="18.3" y="7" width="4.7" height="9.5" rx="1.3"/></svg>
       <svg class="sym" data-for="unreachable" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 8.8a14 14 0 0 1 19 0M5.5 12.2a9.5 9.5 0 0 1 13 0M8.7 15.5a5 5 0 0 1 6.6 0M12 19.2h.01M3.5 3.5l17 17"/></svg>
       <svg class="sym" data-for="stopped" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11.5" rx="1.8"/><path d="M1.5 19.5h21M10 8l4 4.5M14 8l-4 4.5"/></svg>
       <svg class="sym" data-for="noAccess" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="7.2" r=".9"/><path d="M7.5 10h9M12 10v4.2l-2.6 3.8M12 14.2l2.6 3.8"/></svg>
@@ -105,12 +111,15 @@
     <div class="zone" id="zoneTop">
       <!-- The Mac: its state in a symbol and in words, its name, and a menu with what concerns the Mac. -->
       <button id="macBtn" class="glass capsule" data-act="mac" aria-haspopup="menu" aria-expanded="false">
+        <!-- Sideways the button is only as wide as a column: a Mac, with its state as a badge. -->
+        <svg class="mac" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-laptop"/></svg>
         <span class="state" aria-hidden="true">
           <svg class="ok" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4"/></svg>
           <svg class="wait" viewBox="0 0 12 12"><path d="M6 1.5a4.5 4.5 0 1 1-4.5 4.5"/></svg>
           <svg class="bad" viewBox="0 0 24 24"><use href="#i-warn"/></svg>
           <svg class="shut" viewBox="0 0 24 24"><use href="#i-lock"/></svg>
           <svg class="held" viewBox="0 0 24 24"><use href="#i-pause"/></svg>
+          <svg class="off" viewBox="0 0 12 12"><circle cx="6" cy="6" r="3.6"/></svg>
         </span>
         <span class="words"><span id="macName"></span><span id="macState"></span></span>
         <svg class="more" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-down"/></svg>
@@ -138,8 +147,8 @@
           <button data-click="back" data-label="mouse.back"><svg viewBox="0 0 24 24"><use href="#i-back"/></svg></button>
           <button data-click="forward" data-label="mouse.forward"><svg viewBox="0 0 24 24"><use href="#i-forward"/></svg></button>
         </div>
-        <button id="leftBtn" class="click" data-hold="left" data-label="mouse.leftLabel"><span data-text="mouse.left"></span></button>
-        <button id="rightBtn" class="click" data-click="right" data-label="mouse.right"><span class="long" data-text="mouse.right"></span><span class="narrow" data-text="mouse.rightNarrow"></span></button>
+        <button id="leftBtn" class="click" data-hold="left" data-label="mouse.leftLabel"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mouse-left"/></svg><span data-text="mouse.left"></span></button>
+        <button id="rightBtn" class="click" data-click="right" data-label="mouse.right"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mouse-right"/></svg><span data-text="mouse.right"></span></button>
       </div>
       <!-- The bar: write on the Mac (on a locked Mac: unlock it, the main action then), the apps, the controls. -->
       <div id="bar">
@@ -241,7 +250,7 @@
       <div class="page keys" data-page="keys" role="group" data-label="page.keys">
         <button class="cap word" data-key="escape" data-text="key.escape"></button>
         <button class="cap word" data-key="tab" data-text="key.tab"></button>
-        <button class="cap" data-key="space" data-label="key.space">␣</button>
+        <button class="cap" data-key="space" data-label="key.space"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-space"/></svg></button>
         <button class="cap" data-key="backspace" data-repeat data-label="key.backspace">⌫</button>
         <button class="cap" data-key="return" data-label="key.return">↵</button>
         <button class="cap mod" data-mod="cmd" data-label="key.cmd">⌘<small data-text="key.cmdName"></small></button>

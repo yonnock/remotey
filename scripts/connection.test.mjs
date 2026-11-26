@@ -272,3 +272,33 @@ test('the wake lock with the timers of a browser, which refuse to run as methods
     await awake.release();
   } finally { globalThis.setTimeout = real; }
 });
+
+test('a session ended at the Mac is not tried again by itself, only when the user asks', async () => {
+  const r = rig();
+  r.link.begin();
+  r.link.accepted(true);
+  r.link.ended();
+  assert.equal(r.link.state, 'ended');
+  assert.equal(r.link.up, false);
+  const opens = r.opens();
+  r.link.lost(); await r.settle(); // the socket closes right after `bye`
+  assert.equal(r.link.state, 'ended', 'the close that follows changes nothing');
+  r.link.begin(); // back in sight, or the network returns
+  await r.advance(120_000);
+  assert.equal(r.opens(), opens, 'no try behind the user\'s back');
+  assert.equal(r.link.state, 'ended');
+  r.link.begin({ ask: true });
+  assert.equal(r.link.state, 'connecting');
+  assert.equal(r.opens(), opens + 1);
+  r.link.accepted(true);
+  assert.equal(r.link.state, 'connected');
+});
+
+test('a try under way when the Mac ends the session does not report afterwards', async () => {
+  const r = rig({ status: null });
+  r.link.begin();
+  r.link.ended();
+  await r.advance(CONNECT_MS + 1000);
+  assert.equal(r.link.state, 'ended', 'the time limit of the try is gone with it');
+  assert.equal(r.timers.size, 0);
+});

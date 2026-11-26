@@ -1221,6 +1221,53 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
     - Prüfungen: `swift test` 288 Tests (vorher 285; neu `InterfaceLookTests`: Akzent folgt der Wahl des Nutzers,
       Kontrast der Markierung, Ausrichtung des QR-Codes), alle grün. Bilder: `scripts/mac-pictures.sh` mit Orange
       wie bei „Mehrfarbig“, unabhängig von diesem Mac.
+21. Zweiter Blick auf „Glas über dem Mac“ (Durchsicht der Galerie gegen die Mockups 07 bis 19, hell und dunkel, 320/375/
+    393/440 px, hochkant und quer, Deutsch und Englisch) und `bye`. Verifier v19.
+    - Blatt über der Leiste: die unteren Ecken des Blatts (47) sind runder als Leiste und Maustasten darunter, deren
+      Ecken schauten heraus (hell unten links die Schreib-Kapsel, rechts der runde Steuerung-Knopf). Hochkant treten
+      Maustasten und Leiste bei offenem Blatt zurück (Deckkraft 0 in 120 ms, unsichtbar für Tipps), und blenden wieder
+      ein, während das Blatt geht. Der Rand für den Mac (`inset`) bleibt gleich: gemessen wird die Zone, nicht ihr Bild.
+    - Blätter und Menüs deckend statt 98,5/99 %: über Text im Bild zeichnete sich dessen Schrift im Kopf des Blatts ab.
+      Hell bekommt der Rand des Blatts eine etwas kräftigere Linie, über einem weißen Fenster verschwand er sonst.
+    - Gefüllte Symbole waren hohl: `svg .solid` erreicht die Kopien in `<use>` nicht, Transport, Stumm und Lautstärke
+      waren Umrisse statt der gefüllten Formen der Mockups. Jetzt als Attribute am Pfad.
+    - Einstellungen: die Namen der Schieber standen grau, weil `.name` auch die Klasse der App-Namen ist.
+    - Maustasten: „Rechtsklick“ stieß an das runde Ende der Kapsel (bei 320 px fast, englisch bei 375 px auch). Klick und
+      Rechtsklick gleich breit (vorher 1,3 : 1), das letzte Wort 8 px vom Bogen.
+    - Quer: „Rechts-klick“ brach mit Bindestrich in der 56 pt schmalen Säule, englisch „Right-click“ ebenso. Beide Tasten
+      zeigen dort eine Maus mit gefüllter linker oder rechter Taste (Name für VoiceOver wie bisher); breiter darf die
+      Säule nicht werden, sonst fällt der Bildanteil unter 77/81/87 %. Der Mac-Knopf war nur ein Punkt: jetzt ein Mac
+      mit dem Zustand als Abzeichen an der Ecke. Die Schreib-Taste zeigte in der Säule „S…“ (Regel unten).
+    - Tasten (Mockup 6): Modifier und Pfeile sind zwei Gruppen, mit einer Spalte von 0,3 Tasten dazwischen; die
+      Leertaste reicht darüber und ist breiter, ihr Zeichen (vorher ␣ aus der Schrift, unter der Mitte) ist gezeichnet.
+      App-Zoom wie in den Mockups: kleines A−, großes A+, „App-Zoom · 100 %“. Bei 320 px fällt die Spalte weg (zwei
+      Abstände trennen die Gruppen), sonst passt „command“ nicht: kleinste Taste 48 pt (T8).
+    - Medien: die äußeren Kacheln liegen in den unteren Ecken des Blatts und haben dort dessen Radius weniger den Rand
+      (31 statt 22).
+    - Erster Start: sechs leere Flächen ohne Hinweis, wo die Eingabe beginnt. Jetzt hat jede leere Zelle einen kurzen
+      Strich, mit Fokus die nächste den Ring und eine blinkende Schreibmarke (ruhig bei reduzierter Bewegung); nach einem
+      falschen Code ist auch sie rot umrandet.
+    - Menüpunkt: erster Start, „keine Kopplung offen“ und „getrennt“ nannten den alten Namen „iPhone koppeln (QR‑Code)…“.
+      Jetzt „iPhone hinzufügen …“ wie im Menü, englisch mit dem deutschen Namen; mit festen Leerzeichen, damit „…“ nicht
+      allein in die nächste Zeile fällt. „Mit Face ID entsperren …“ nennt die Seite nirgends als Menüpunkt.
+    - Hinweise: ohne Live-Bild schien der Hinweis des Trackpads durch den Text eines Hinweises; er weicht jetzt.
+      „Live‑Bild“ bricht in Fließtexten nicht mehr am Bindestrich (geschützter Bindestrich).
+    - „Auf dem Mac schreiben“ kürzte englisch schon bei 375 px auf „Type“, obwohl „Type on the Mac“ passt: die Grenze gilt
+      je Sprache (214 pt deutsch, 186 pt englisch, wo „Unlock with Face ID“ die längsten Worte sind).
+    - Displays im Ansicht-Menü: Karte mittig, Namen bis drei Zeilen („Built-in Retina…“ war abgeschnitten).
+    - `bye`: „Trennen“ im Menü des Macs beendete eine Sitzung, die Seite verband sich sofort neu. Der Mac sagt jetzt
+      `{"t":"bye"}` vor dem Schließen; `connection.js` kennt dafür den Zustand `ended`, der wie `denied` und `unpaired` nur
+      auf Wunsch verlassen wird (`HELD`): kein Versuch von selbst, nicht beim Zurückkehren in Sicht, nicht bei
+      zurückkehrendem Netz; „Wieder verbinden“ oder die neu geöffnete Seite verbindet. Ein ruhiger Hinweis: Symbol, „Am Mac
+      getrennt“, ein Satz, ein Knopf; der Mac-Knopf zeigt einen leeren Kreis und „Getrennt“, nicht Rot. Zwei Node-Tests;
+      der falsche Mac des Verifiers sagt es (`__bye`), T16 prüft Hinweis, keine Versuche nach `visibilitychange` und
+      `online`, und die Verbindung auf den Knopf.
+    - Geprüft und gelassen: Kopf des Mac-Menüs zeigt im Verifier „0 fps · – ms“ (der falsche Mac misst nichts); die
+      nummerierten Schritte des ersten Starts bleiben neutral (Runde 19); das Ansicht-Menü behält seine Haken-Spalte
+      auch für Punkte ohne Haken, wie die Menüs von iOS.
+    - Verifier v19: alle Aufgaben bestanden, T1 unverändert 71/75/83 % hochkant, 77/81/87 % quer, 13 von 13
+      Hauptaktionen; T7 Blatt nach 183 ms weg; kleinste Taste 48 pt; T17 ohne abgeschnittene Worte. Node: 121 Tests (zwei neue).
+      Bilder des README neu.
 
 ## Not verified
 
