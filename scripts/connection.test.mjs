@@ -220,3 +220,42 @@ test('a phone without a wake lock, or one that refuses it, is no error', async (
   assert.equal(awake.held, false);
   await awake.release();
 });
+
+test('a phone the Mac does not know: no tries until asked, then it starts over', async () => {
+  const r = rig();
+  r.link.begin();
+  r.link.unpaired();
+  assert.equal(r.link.state, 'unpaired');
+  await r.advance(60_000);
+  assert.equal(r.opens(), 1, 'no try of its own after the Mac said it does not know the phone');
+  r.link.begin();
+  assert.equal(r.opens(), 1, 'back in sight is no reason to ask again');
+  r.link.begin({ ask: true });
+  assert.equal(r.link.state, 'connecting');
+  assert.equal(r.opens(), 2);
+});
+
+test('what the Mac says about itself: steering, a missing permission, a pause at the Mac', () => {
+  const r = rig();
+  r.link.mac({ ax: true, paused: false });
+  assert.equal(r.link.state, 'connecting', 'nothing to say before the Mac took the key');
+  r.link.begin();
+  r.link.accepted(true);
+  r.link.mac({ ax: false, paused: false });
+  assert.equal(r.link.state, 'noAccess');
+  r.link.mac({ ax: false, paused: true });
+  assert.equal(r.link.state, 'paused', 'a pause at the Mac counts before a missing permission');
+  assert.ok(r.link.up, 'a paused Mac is still connected');
+  r.link.mac({ ax: true, paused: false });
+  assert.equal(r.link.state, 'connected');
+});
+
+test('a paused Mac that drops the connection is tried again at once, as a connected one', () => {
+  const r = rig();
+  r.link.begin();
+  r.link.accepted(true);
+  r.link.mac({ ax: true, paused: true });
+  r.link.lost();
+  assert.equal(r.link.state, 'connecting');
+  assert.equal(r.opens(), 2);
+});
