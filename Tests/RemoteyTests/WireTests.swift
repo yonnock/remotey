@@ -41,11 +41,20 @@ final class WireTests: XCTestCase {
         func object(_ text: String) throws -> [String: Any] {
             try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
         }
-        let accepted = try object(Wire.accepted(accessibility: true, page: "abc"))
+        let accepted = try object(Wire.accepted(accessibility: true, page: "abc", mac: #"Yannicks "Mac""#, device: "iPhone"))
         XCTAssertEqual(accepted["t"] as? String, "ok")
         XCTAssertEqual(accepted["ax"] as? Bool, true)
         XCTAssertEqual(accepted["page"] as? String, "abc")
-        XCTAssertEqual(try object(Wire.denied)["t"] as? String, "denied")
+        XCTAssertEqual(accepted["name"] as? String, #"Yannicks "Mac""#, "a name with quotes stays a string")
+        XCTAssertEqual(accepted["device"] as? String, "iPhone")
+        let byToken = try object(Wire.accepted(accessibility: false, page: "abc", mac: "Mac", device: nil))
+        XCTAssertTrue(byToken["device"] is NSNull, "null, not missing, with the old token")
+        XCTAssertEqual(try object(Wire.denied(.revoked)) as NSDictionary, ["t": "denied", "why": "revoked"])
+        XCTAssertEqual(try object(Wire.denied(.ticket)) as NSDictionary, ["t": "denied", "why": "ticket"])
+        XCTAssertEqual(try object(Wire.denied(.token)) as NSDictionary, ["t": "denied", "why": "token"])
+        XCTAssertEqual(try object(Wire.mac(accessibility: true, screen: false, paused: true)) as NSDictionary,
+                       ["t": "mac", "ax": true, "screen": false, "paused": true])
+        XCTAssertEqual(try object(Wire.viewPaused) as NSDictionary, ["t": "view", "ok": false, "why": "paused"])
         XCTAssertEqual(try object(Wire.viewRefused)["ok"] as? Bool, false)
         XCTAssertEqual(try object(Wire.lock(true)) as NSDictionary, ["t": "lock", "on": true])
         XCTAssertEqual(try object(Wire.lock(false))["on"] as? Bool, false)
@@ -163,7 +172,11 @@ final class WireTests: XCTestCase {
     }
 
     func testCommandsOfThePage() throws {
-        guard case .auth(token: "abc") = try command(#"{"t":"auth","token":"abc"}"#) else { return XCTFail("auth") }
+        guard case .auth(.token("abc")) = try command(#"{"t":"auth","token":"abc"}"#) else { return XCTFail("auth") }
+        guard case .auth(.ticket("t1", standalone: true)) = try command(#"{"t":"auth","ticket":"t1","standalone":true}"#) else { return XCTFail("ticket") }
+        guard case .auth(.ticket("t1", standalone: false)) = try command(#"{"t":"auth","ticket":"t1"}"#) else { return XCTFail("ticket in a tab") }
+        guard case .auth(.ticket("t1", standalone: false)) = try command(#"{"t":"auth","ticket":"t1","token":"abc"}"#) else { return XCTFail("a ticket first") }
+        guard case .ignored = try command(#"{"t":"auth"}"#) else { return XCTFail("auth without either") }
         guard case .move(dx: 3.5, dy: -2, sequence: 7) = try command(#"{"t":"m","dx":3.5,"dy":-2,"q":7}"#) else { return XCTFail("move") }
         guard case .move(dx: 1, dy: 1, sequence: nil) = try command(#"{"t":"m","dx":1,"dy":1}"#) else { return XCTFail("move without a number") }
         guard case .scroll(dx: 0, dy: 12) = try command(#"{"t":"s","dx":0,"dy":12}"#) else { return XCTFail("scroll") }

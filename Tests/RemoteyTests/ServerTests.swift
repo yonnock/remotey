@@ -13,7 +13,7 @@ final class ServerTests: XCTestCase {
         (httpPort, wsPort) = (Self.nextPort, Self.nextPort + 1)
         Self.nextPort += 2
         server = Server(token: "test-token-test-token-test-token-test", input: Input(),
-                        port: httpPort, pendingTimeout: 0.5)
+                        port: httpPort, pendingTimeout: 0.5, devices: .temporary(), permissions: { (true, true) })
         try server.start()
         // Listeners come up asynchronously. NWConnection waits for them, URLSession would not.
         let probes = [idle(port: httpPort), idle(port: wsPort)]
@@ -73,13 +73,15 @@ final class ServerTests: XCTestCase {
         bad.resume()
         try await bad.send(.string(#"{"t":"auth","token":"wrong"}"#))
         let denied = text(try await bad.receive())
-        XCTAssertEqual(denied, #"{"t":"denied"}"#)
+        XCTAssertEqual(denied, #"{"t":"denied","why":"token"}"#)
 
         let good = URLSession.shared.webSocketTask(with: url)
         good.resume()
         try await good.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
         let ok = text(try await good.receive())
         XCTAssertTrue(ok.hasPrefix(#"{"t":"ok""#), ok)
+        let mac = text(try await good.receive())
+        XCTAssertTrue(mac.hasPrefix(#"{"t":"mac""#), mac)
         // Read, so that the pong below is not held up behind it.
         let lock = text(try await good.receive())
         XCTAssertTrue(lock.hasPrefix(#"{"t":"lock""#), lock)
@@ -107,6 +109,8 @@ final class ServerTests: XCTestCase {
         try await socket.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
         let ok = try await next()
         XCTAssertEqual(ok["t"] as? String, "ok")
+        let mac = try await next()
+        XCTAssertEqual(mac["t"] as? String, "mac")
         // Whether the Mac is locked follows at once, so the page knows what its field is for.
         let lock = try await next()
         XCTAssertEqual(lock["t"] as? String, "lock")
@@ -163,6 +167,7 @@ final class ServerTests: XCTestCase {
         }
         try await later.send(.string(#"{"t":"auth","token":"test-token-test-token-test-token-test"}"#))
         _ = try await nextLater() // ok
+        _ = try await nextLater() // mac
         _ = try await nextLater() // lock
         let have = try JSONSerialization.data(withJSONObject: Array(icons.subtracting([lacking])))
         try await later.send(.string(#"{"t":"apps","have":\#(String(decoding: have, as: UTF8.self))}"#))
@@ -184,7 +189,7 @@ final class ServerTests: XCTestCase {
     func testASecondServerOnTheSamePortsSaysItFailedAndTriesAgain() async throws {
         XCTAssertEqual(server.health, .listening)
         var heard: [Server.Health] = []
-        let second = Server(token: "test-token-test-token-test-token-test", input: Input(), port: httpPort,
+        let second = Server(token: "test-token-test-token-test-token-test", input: Input(), port: httpPort, devices: .temporary(),
                             timing: Server.Timing(retry: Backoff(first: 0.2, longest: 0.2)), screen: { _, _ in FakeScreen() })
         second.healthChanged = { heard.append($0) }
         try second.start()

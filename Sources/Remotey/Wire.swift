@@ -7,8 +7,16 @@ import Foundation
 /// routes what arrives.
 enum Wire {
     /// What the page says. A message is JSON; `t` names its kind, the other fields belong to one kind or another.
+    /// What opens the socket: the first message.
+    enum Credential: Equatable {
+        /// From `POST /session`, for a paired device. `standalone`: the page runs from the Home Screen.
+        case ticket(String, standalone: Bool)
+        /// The old shared token, while the Mac still takes it.
+        case token(String)
+    }
+
     enum Command {
-        case auth(token: String)
+        case auth(Credential)
         /// `sequence` numbers the move, so that the page can time it until a `LiveUpdate` includes it.
         case move(dx: Double, dy: Double, sequence: UInt32?)
         /// Part of a two-finger scroll; the first one after `scrollEnded` begins a new gesture.
@@ -58,6 +66,8 @@ enum Wire {
     private struct Fields: Decodable {
         let t: String
         var token: String?
+        var ticket: String?
+        var standalone: Bool?
         var dx: Double?
         var dy: Double?
         var b: String?
@@ -114,7 +124,8 @@ enum Wire {
             return data
         }
         let command: Command? = switch m.t {
-        case "auth": m.token.map { .auth(token: $0) }
+        // A ticket counts before a token: a page that sends both is a paired one.
+        case "auth": m.ticket.map { .auth(.ticket($0, standalone: m.standalone == true)) } ?? m.token.map { .auth(.token($0)) }
         case "m": delta.map { .move(dx: $0.dx, dy: $0.dy, sequence: m.q) }
         case "s": delta.map { .scroll(dx: $0.dx, dy: $0.dy) }
         case "se": .scrollEnded
@@ -180,12 +191,31 @@ enum Wire {
                                   fps: fps, fit: m.fit == "window", shape: m.shape, number: m.v ?? 0, inset: inset ?? .zero)
     }
 
-    /// The token was right. `page` is `Web.version`: a page that was loaded from an older agent reloads itself.
-    static func accepted(accessibility: Bool, page: String) -> String {
-        #"{"t":"ok","ax":\#(accessibility),"page":"\#(page)"}"#
+    /// The ticket or the token was right. `page` is `Web.version`: a page that was loaded from an older agent
+    /// reloads itself. `mac` is the Mac's name, `device` the name this phone paired under; nil with the old token.
+    static func accepted(accessibility: Bool, page: String, mac: String, device: String?) -> String {
+        #"{"t":"ok","ax":\#(accessibility),"page":\#(quoted(page)),"name":\#(quoted(mac)),"device":\#(device.map(quoted) ?? "null")}"#
     }
 
-    static let denied = #"{"t":"denied"}"#
+    enum Denial: String, Error {
+        /// The device was revoked at the Mac: it pairs again.
+        case revoked
+        /// Unknown, used or expired: the page asks for another.
+        case ticket
+        /// Not the token, or the Mac no longer takes the old token.
+        case token
+    }
+
+    static func denied(_ why: Denial) -> String { #"{"t":"denied","why":"\#(why.rawValue)"}"# }
+
+    /// What the Mac allows now: after `accepted`, and again whenever one of them changes. While `paused`, the
+    /// Mac takes no input and shows no live view, and every phone stays paired.
+    static func mac(accessibility: Bool, screen: Bool, paused: Bool) -> String {
+        #"{"t":"mac","ax":\#(accessibility),"screen":\#(screen),"paused":\#(paused)}"#
+    }
+
+    /// The live view is off while remote control is paused at the Mac.
+    static let viewPaused = #"{"t":"view","ok":false,"why":"paused"}"#
 
     /// The live view needs the Screen Recording permission.
     static let viewRefused = #"{"t":"view","ok":false,"why":"permission"}"#
@@ -259,6 +289,11 @@ enum Wire {
             let list: [Displays.Display]
         }
         return json(Message(list: list))
+    }
+
+    /// A string as JSON writes it, quotes and all.
+    private static func quoted(_ text: String) -> String {
+        String(decoding: (try? JSONEncoder().encode(text)) ?? Data(#""""#.utf8), as: UTF8.self)
     }
 
     /// For messages that carry text from outside the agent: names of apps and displays, titles of windows.

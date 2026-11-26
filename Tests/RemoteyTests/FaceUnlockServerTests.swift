@@ -27,7 +27,8 @@ final class FaceUnlockServerTests: XCTestCase {
             sessionLocked = false
             lock.note(false)
         }
-        server = Server(token: token, input: input, port: port, lock: lock, faceUnlock: FaceUnlock(file: file))
+        server = Server(token: token, input: input, port: port, lock: lock, faceUnlock: FaceUnlock(file: file),
+                        devices: .temporary(), permissions: { (true, true) })
         try server.start()
         try await Task.sleep(for: .milliseconds(100)) // the listeners come up asynchronously
         socket = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port + 1)/ws")!)
@@ -35,6 +36,8 @@ final class FaceUnlockServerTests: XCTestCase {
         try await socket.send(.string(#"{"t":"auth","token":"\#(token)"}"#))
         let ok = try await next()
         XCTAssertEqual(ok["t"] as? String, "ok")
+        let mac = try await next()
+        XCTAssertEqual(mac["t"] as? String, "mac")
     }
 
     override func tearDown() async throws {
