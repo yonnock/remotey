@@ -1161,6 +1161,11 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       Wünsche der Maschine bleiben draußen (Transparenz, Bewegung, Kontrast sind gesetzt, was die Aufgabe setzt),
       die langsame Antwort braucht 1,5 s, T20 zählt erst, wenn die Anfragen ruhen. `--slow=N` gibt der Seite einen
       Bruchteil des Prozessors; mit `--slow=4` bestehen hier 27 von 27, wie ohne.
+      Der Lauf danach scheiterte an anderen Aufgaben (T8, T13, T20) aus einem Grund: die Seite misst ihren Bildtakt
+      und fragt die Ansicht neu an, wenn er sich ändert. Der Runner zeichnet mal mit 60, mal mit 30 Bildern, also kam
+      mitten in einer Aufgabe eine Anfrage mehr (in T13 mit `fps: 30` statt 60). Verifier v22: der Bildtakt der Seite
+      ist auf jeder Maschine 60 je Sekunde; was eine Aufgabe selbst stoppt, läuft weiter mit der Uhr der Maschine.
+      Und ein Swift-Test las `mac`, sobald `ok` da war; die Nachricht kommt als eigene danach und fehlte dort einmal.
     - Agent, ein zweites Entsperren nahm dem ersten die Rotation: `Server.unlock` notierte das neue Siegel, bevor der
       Sperrbildschirm den zweiten Versuch abwies, und die Absage löschte es. Der Mac ging auf, das Salt blieb, die
       Zählung der Absagen auch. Jetzt wird ein zweiter Versuch abgewiesen, bevor etwas notiert ist (Test mit zwei

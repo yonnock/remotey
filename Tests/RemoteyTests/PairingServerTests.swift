@@ -140,6 +140,9 @@ final class PairingServerTests: XCTestCase {
         let ticket = try XCTUnwrap(answer.body["ticket"] as? String)
         let phone = await phone(#"{"t":"auth","ticket":"\#(ticket)","standalone":\#(standalone)}"#)
         XCTAssertEqual(phone.messages.first?["t"] as? String, "ok", "\(phone.messages)")
+        // `mac` follows `ok` as a message of its own: on a slow machine it is not there the moment `ok` is.
+        let told = await eventually { !phone.heard("mac").isEmpty }
+        XCTAssertTrue(told, "what the Mac allows follows the answer")
         return phone
     }
 

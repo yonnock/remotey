@@ -58,7 +58,9 @@ import { extname, join, resolve } from 'node:path';
 // 21: the machine's own wishes stay out (reduced transparency and motion, contrast: a CI runner has them set), the
 //     fake Mac's slow answer takes 1.5 s instead of 0.4 s, and T20 counts view requests once they have come to rest.
 //     --slow=N gives the page a fraction of the processor.
-export const VERIFIER_VERSION = 21;
+// 22: the page's frame clock is 60 a second on every machine: a runner that draws slower had the page measure 30 or
+//     55 and ask for the view again in the middle of T8, T13 and T20.
+export const VERIFIER_VERSION = 22;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -172,6 +174,12 @@ const ICON = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDw
 // Runs in the page before its own scripts.
 const harness = `(() => {
   const sent = window.__sent = [];
+  // The phone's frame clock: 60 a second, whatever this machine manages. The page measures it to ask the Mac for
+  // a frame rate, and asks again when it finds another: on a slow machine in the middle of a task, as one more
+  // view request nobody counted on. \`__frame\` is the machine's own clock, for what a task times itself.
+  const frame = window.__frame = window.requestAnimationFrame.bind(window);
+  let frames = 0;
+  window.requestAnimationFrame = (step) => frame(() => step(++frames * 1000 / 60));
   // The fake Mac. \`__mac\` says how it answers a new socket: 'up' (default), 'down' (the socket fails, as when
   // the Mac is out of reach or Remotey is not running), 'noax' (no Accessibility permission) or 'deny' (the key
   // is refused). \`__probe\` is what a request for the page's own origin gets: a status, or null for no answer.
@@ -829,9 +837,9 @@ await task('T7', async () => {
       const box = seen();
       frames.push({ at: t0 === null ? null : now - t0, h: box ? Math.round(box.b - box.t) : 0,
         overDock: box ? Math.max(0, Math.round(Math.min(box.b, dock.bottom) - Math.max(box.t, dock.top))) : 0 });
-      if (frames.length < 60) requestAnimationFrame(step);
+      if (frames.length < 60) window.__frame(step);
     };
-    requestAnimationFrame(step);
+    window.__frame(step);
   })()`);
   await open();
   await record();
