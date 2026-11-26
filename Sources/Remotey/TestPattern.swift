@@ -4,9 +4,11 @@ import CoreVideo
 
 /// Stands in for a display's capture while `REMOTEY_TEST_PATTERN` is set: a pattern that moves without
 /// pause, at the size and rate the capture would have. For measuring the stream with nothing shown on the
-/// Mac's screen; the pointer and the displays' arrangement stay real.
+/// Mac's screen; the pointer and the displays' arrangement stay real. Set to `rests`, the pattern moves for
+/// two seconds and holds still for two, as a screen does that someone reads: a capture sends nothing then.
 final class TestPattern {
     static let on = ProcessInfo.processInfo.environment["REMOTEY_TEST_PATTERN"] != nil
+    private static let rests = ProcessInfo.processInfo.environment["REMOTEY_TEST_PATTERN"] == "rests"
 
     /// Size in pixels and frames per second. Frame queue only, like the frames it makes.
     var size: (width: Int, height: Int, framesPerSecond: Int32) {
@@ -38,11 +40,12 @@ final class TestPattern {
 
     /// Squares and stripes, like the edges of text and windows, moving 150 pixels a second to the side and 100 down.
     private func tick() {
+        let time = ProcessInfo.processInfo.systemUptime - started
+        if Self.rests, time.truncatingRemainder(dividingBy: 4) >= 2 { return }
         let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
         var buffer: CVPixelBuffer?
         guard CVPixelBufferCreate(nil, size.width, size.height, kCVPixelFormatType_32BGRA, attributes, &buffer) == kCVReturnSuccess,
               let buffer else { return }
-        let time = ProcessInfo.processInfo.systemUptime - started
         let squares = CIFilter.checkerboardGenerator()
         squares.width = 14
         squares.color0 = .white

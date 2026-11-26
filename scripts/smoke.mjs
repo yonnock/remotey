@@ -4,7 +4,7 @@
 // --display also puts the pointer on another display and back to where it was, on a Mac with more than one.
 // Close Remotey on the phone first: the most recent viewer gets the live view, so an open phone takes it back.
 import { writeFileSync } from 'node:fs';
-import { H264, JPEG, POINTER, parseH264, parseUpdate } from '../Web/live-view.js';
+import { Ahead, H264, JPEG, POINTER, parseH264, parseUpdate } from '../Web/live-view.js';
 import { HTTP, fail, open, pointer, sleep, token } from './agent.mjs';
 
 const codec = process.argv.includes('--h264') ? 'h264' : 'jpeg';
@@ -73,7 +73,7 @@ if (hello.ax) {
 // fastest answer plus SLACK seconds (SendWindow.swift).
 const MAX_IN_FLIGHT = 2, SLACK = 0.2;
 let frames = 0, bytes = 0, acking = false, denied = false, held = [], expectKey = true, keyFrames = 0, cursors = 0;
-let apps = null, lists = 0, displays = null, fitted = 0, unfitted = 0, fitWidth = 0;
+let apps = null, lists = 0, displays = null, fitted = 0, unfitted = 0, fitWidth = 0, onUpdate = null, asked = 0;
 const icons = new Map();
 const shown = (n) => send({ t: 'shown', n });
 good.onMessage = (e) => {
@@ -92,7 +92,8 @@ good.onMessage = (e) => {
     return;
   }
   const update = parseUpdate(e.data);
-  if (!(update.width > 0)) fail('update without the width of the picture');
+  if (!(update.width > 0) || !(update.height > 0)) fail('update without the size of the view');
+  onUpdate?.(update);
   // The pointer moved inside the view: no picture, no answer expected.
   if (update.kind === POINTER) { if (update.picture.length) fail('pointer update with a picture'); return; }
   if (update.kind !== (codec === 'h264' ? H264 : JPEG)) fail(`agent sent a picture of kind ${update.kind} instead of ${codec}`);
@@ -105,7 +106,8 @@ good.onMessage = (e) => {
     if (capture) packets.push(Buffer.from(data));
   } else if (Buffer.from(update.picture.subarray(0, 2)).readUInt16BE() !== 0xffd8) fail('JPEG picture without its marker');
   frames++;
-  if (update.fitted) { fitted++; fitWidth = update.width; } else unfitted++;
+  // Only pictures cut for the newest request count: one of the request before may still be under way.
+  if (update.v === asked) { if (update.fitted) { fitted++; fitWidth = update.width; } else unfitted++; }
   bytes += e.data.byteLength;
   if (acking) shown(update.n); else held.push(update.n);
 };
@@ -221,7 +223,7 @@ if (denied) {
     // "Auto": the agent picks the region, the window in front, whole. With no such window (the Finder's desktop
     // in front) the pictures come as asked for by zoom, and say so.
     fitted = unfitted = 0;
-    send({ t: 'view', on: true, w: 390, h: 844, zoom: 1, dpr: 2, codec, fps, fit: 'window' });
+    send({ t: 'view', on: true, w: 390, h: 844, zoom: 1, dpr: 2, codec, fps, fit: 'window', v: ++asked });
     await stir();
     if (fitted + unfitted < 10) fail('stream stalled when asked to fit the window in front');
     if (fitted && unfitted > 2) fail(`${unfitted} pictures not fitted among ${fitted} fitted ones`);
@@ -230,10 +232,62 @@ if (denied) {
     console.log(fitted ? `ok   view: fitted to the window in front, ${Math.round(fitWidth)} points across (${(390 / fitWidth).toFixed(2)}x)`
       : 'ok   view: no window in front to fit, the view keeps its zoom');
     fitted = 0;
-    send({ t: 'view', on: true, w: 390, h: 844, zoom: 1, dpr: 2, codec, fps });
+    send({ t: 'view', on: true, w: 390, h: 844, zoom: 1, dpr: 2, codec, fps, v: ++asked });
     await stir();
     if (fitted) fail('pictures still fitted after the page took the zoom back');
     console.log('ok   view: back to the zoom set by hand');
+
+    // The pointer the page draws ahead of the Mac (`Ahead`): the place an update names and the moves it does not
+    // include yet lead to where the pointer ends up, whichever update that is. So the pointer on the page
+    // neither jumps back nor ahead when an answer arrives.
+    const ahead = Object.assign(new Ahead(), { displays: await places() });
+    const leads = [];
+    let last = null, number = 1000;
+    const place = (update) => [update.left + update.x * update.width, update.top + update.y * update.height];
+    const onMac = (update) => { const at = ahead.onMac(update); return at ? [at.x, at.y] : place(update); };
+    onUpdate = (update) => { last = update; leads.push({ q: update.q, sent: number, to: onMac(update) }); };
+    const settled = async () => { for (let i = 0; i < 40 && last?.q !== number; i++) await sleep(50); if (last?.q !== number) fail('no update names the last move sent'); };
+    const differ = (a, b) => Math.abs(a[0] - b[0]) > 0.51 || Math.abs(a[1] - b[1]) > 0.51;
+    send({ t: 'm', dx: 1, dy: 0, q: ++number }); // for an update that names where the pointer is
+    await settled();
+    const from = place(last);
+    // Whole points, as the page sends them, a few milliseconds apart: updates arrive while moves are under way,
+    // and each leads to where the moves sent by then take the pointer.
+    leads.length = 0;
+    const after = new Map([[number, from]]);
+    for (let i = 0; i < 120; i++) {
+      const [dx, dy] = [i % 2 ? 4 : 1, i % 3 ? -2 : 1], was = after.get(number);
+      ahead.moved(++number, dx, dy);
+      after.set(number, [was[0] + dx, was[1] + dy]);
+      send({ t: 'm', dx, dy, q: number });
+      if (i % 4 === 3) await sleep(3);
+    }
+    await settled();
+    const off = leads.find((lead) => differ(lead.to, after.get(lead.sent)));
+    if (off) fail(`an update that includes move ${off.q} of ${off.sent} sent leads to ${off.to} instead of ${after.get(off.sent)}`);
+    const stages = new Set(leads.map((lead) => lead.q)).size, under = leads.filter((lead) => lead.q !== lead.sent).length;
+    if (differ(place(last), after.get(number))) fail(`the pointer is at ${place(last)} instead of ${after.get(number)}`);
+    const [px, py] = pointer(), main = ahead.displays.find((d) => d.x === 0 && d.y === 0);
+    if (Math.abs(place(last)[0] - px) > 1 || (main && Math.abs(place(last)[1] - (main.h - py)) > 1)) fail(`the updates name ${place(last)}, the Mac has the pointer at ${px}, ${main.h - py}`);
+    // Against the edge of the desktop, all at once: the Mac holds the pointer there, and so does the page.
+    leads.length = 0;
+    for (let i = 0; i < 4; i++) { ahead.moved(++number, -5000, 0); send({ t: 'm', dx: -5000, dy: 0, q: number }); }
+    await settled();
+    const edge = place(last), wrong = leads.find((lead) => differ(lead.to, edge));
+    if (wrong) fail(`against the edge, an update that includes move ${wrong.q} leads to ${wrong.to} instead of ${edge}`);
+    // A move that leaves the pointer where it is, at the edge, is answered too: else the page would add it to
+    // the next place the Mac names, wherever the Mac's own mouse has put the pointer by then.
+    ahead.moved(++number, -5000, 0);
+    send({ t: 'm', dx: -5000, dy: 0, q: number });
+    await settled();
+    if (differ(place(last), edge)) fail(`pushed against the edge, the pointer went to ${place(last)}`);
+    const back = [Math.round(from[0] - 1 - edge[0]), Math.round(from[1] - edge[1])];
+    ahead.moved(++number, ...back);
+    send({ t: 'm', dx: back[0], dy: back[1], q: number });
+    await settled();
+    console.log(`ok   view: the pointer drawn ahead is where the Mac puts it (${stages} updates of 120 moves, ${under} with moves under way; `
+      + `held at the edge at ${edge.map(Math.round)}), and is back where it was`);
+    onUpdate = null;
   }
 }
 good.close();

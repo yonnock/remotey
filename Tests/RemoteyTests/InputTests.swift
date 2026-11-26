@@ -119,10 +119,22 @@ final class InputTests: XCTestCase {
         XCTAssertEqual(scrolls, ["5 1", "0 4"])
     }
 
-    /// Fractional moves add up, so a slow finger reaches the Mac in full.
+    /// Fractional moves add up, so a sender of fractions reaches the Mac in full.
     func testFractionsOfAPointAddUp() {
         for _ in 0..<10 { input.move(dx: 0.25, dy: 0) }
         let steps = events.filter { $0.type == .mouseMoved }.map { $0.getIntegerValueField(.mouseEventDeltaX) }
         XCTAssertEqual(steps.reduce(0, +), 2)
+    }
+
+    /// The page sends whole points and draws the pointer where they take it, before the Mac answers.
+    func testAMoveOfWholePointsIsMadeAsItIsWhateverRestAnEarlierSenderLeft() {
+        input.move(dx: 0.7, dy: 0.7)
+        input.move(dx: -3, dy: 2)
+        input.move(dx: 3, dy: -2)
+        let steps = events.filter { $0.type == .mouseMoved }
+            .map { [$0.getIntegerValueField(.mouseEventDeltaX), $0.getIntegerValueField(.mouseEventDeltaY)] }
+        XCTAssertEqual(steps, [[-3, 2], [3, -2]], "with the rest of 0.7 counted in, these were -2 and 2")
+        input.move(dx: 0.3, dy: 0.3)
+        XCTAssertEqual(events.filter { $0.type == .mouseMoved }.count, 3, "the rest is kept for the sender of fractions")
     }
 }

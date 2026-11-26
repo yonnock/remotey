@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { Cadence, H264, HEADER, JPEG, LiveView, Meter, POINTER, parseUpdate } from '../Web/live-view.js';
+import { Ahead, Cadence, H264, HEADER, JPEG, LiveView, Meter, POINTER, parseUpdate } from '../Web/live-view.js';
 
 function setup() {
   const outputs = [], chunks = [], drawn = [], shown = [], placed = [];
@@ -29,11 +29,12 @@ function setup() {
 }
 
 /** An update as the agent sends it (Sources/Remotey/Wire.swift), of a view that runs at 60 fps. */
-function update(kind, picture, n, { q = 0, x = 0.5, y = 0.25, fx = x, fy = y, v = 0, text = false, fitted = false, width = 780 } = {}) {
+function update(kind, picture, n, { q = 0, x = 0.5, y = 0.25, fx = x, fy = y, v = 0, text = false, fitted = false, width = 780,
+  height = width * 9 / 16, left = 0, top = 0 } = {}) {
   const buffer = new ArrayBuffer(HEADER + picture.length), head = new DataView(buffer);
   head.setUint8(0, kind); head.setUint8(1, 60); head.setUint8(2, +text | (fitted ? 2 : 0));
-  [x, y, fx, fy, width].forEach((value, i) => head.setFloat32(3 + 4 * i, value, true));
-  [q, v, n].forEach((value, i) => head.setUint32(23 + 4 * i, value, true));
+  [x, y, fx, fy, width, height, left, top].forEach((value, i) => head.setFloat32(3 + 4 * i, value, true));
+  [q, v, n].forEach((value, i) => head.setUint32(35 + 4 * i, value, true));
   new Uint8Array(buffer, HEADER).set(picture);
   return buffer;
 }
@@ -42,9 +43,10 @@ const packet = (n, key = true, level = 31, fields = {}) => update(H264, [66, 192
 const pointerOnly = (q, x, y, fields = {}) => update(POINTER, [], 0, { q, x, y, ...fields });
 
 test('reads every field of the header the agent writes', () => {
-  const meta = parseUpdate(update(JPEG, [0xff, 0xd8], 7, { q: 3, x: 0.5, y: 0.25, fx: 0.75, fy: 1.5, v: 9, text: true }));
+  const meta = parseUpdate(update(JPEG, [0xff, 0xd8], 7, { q: 3, x: 0.5, y: 0.25, fx: 0.75, fy: 1.5, v: 9, text: true,
+    width: 780, height: 1170, left: -1200, top: 300 }));
   assert.deepEqual({ ...meta, picture: [...meta.picture] }, { kind: JPEG, fps: 60, followsText: true, fitted: false, x: 0.5, y: 0.25,
-    fx: 0.75, fy: 1.5, width: 780, q: 3, v: 9, n: 7, picture: [0xff, 0xd8] });
+    fx: 0.75, fy: 1.5, width: 780, height: 1170, left: -1200, top: 300, q: 3, v: 9, n: 7, picture: [0xff, 0xd8] });
   // The flags are told apart: fitted to a window, with and without typed text in it.
   assert.deepEqual([parseUpdate(update(JPEG, [], 1, { fitted: true })), parseUpdate(update(JPEG, [], 1, { fitted: true, text: true }))]
     .map((m) => [m.fitted, m.followsText]), [[true, false], [true, true]]);
@@ -379,4 +381,122 @@ test('the page script parses', () => {
   const script = readFileSync(new URL('../Web/remote.js', import.meta.url), 'utf8');
   const check = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: script, encoding: 'utf8' });
   assert.equal(check.status, 0, check.stderr);
+});
+
+// ---- The pointer ahead of the Mac's answer.
+// A Mac with a display of 2000 x 1000 points and a smaller one to its right, set lower: the desktop is no rectangle.
+const DESK = [{ x: 0, y: 0, w: 2000, h: 1000 }, { x: 2000, y: 400, w: 1000, h: 600 }];
+/** An update whose view of 800 x 400 points has its left top at `left`, `top`, with the pointer at `at` on the Mac. */
+const seen = (at, q, { left = 600, top = 300 } = {}) => ({ x: (at.x - left) / 800, y: (at.y - top) / 400, width: 800, height: 400, left, top, q });
+/** Where `ahead` has the pointer on the Mac for `update`. */
+const onMac = (ahead, update) => {
+  const { x, y } = ahead.place(update);
+  return { x: update.left + x * update.width, y: update.top + y * update.height };
+};
+const ahead = () => Object.assign(new Ahead(), { displays: DESK });
+
+test('a move shows at once, and counts until an update includes it', () => {
+  const a = ahead();
+  a.moved(1, 30, -10);
+  a.moved(2, 12, 4);
+  assert.deepEqual(onMac(a, seen({ x: 1000, y: 500 }, 0)), { x: 1042, y: 494 }, 'both moves are under way');
+  assert.deepEqual(onMac(a, seen({ x: 1030, y: 490 }, 1)), { x: 1042, y: 494 }, 'the Mac has made the first: the pointer stays where it is drawn');
+  assert.deepEqual(onMac(a, seen({ x: 1042, y: 494 }, 2)), { x: 1042, y: 494 });
+  assert.deepEqual(a.moves, [], 'nothing is kept of a move the Mac has answered');
+});
+
+test('without a move under way the pointer is exactly where the update has it', () => {
+  const a = ahead(), update = seen({ x: 1000.3, y: 500.7 }, 4);
+  assert.deepEqual(a.place(update), { x: update.x, y: update.y });
+});
+
+test('the picture moved on: the moves under way are added to where the pointer is in the new one', () => {
+  const a = ahead();
+  a.moved(8, 100, 0);
+  // The view follows the pointer, so the same place on the Mac is elsewhere in the picture.
+  const first = a.place(seen({ x: 1000, y: 500 }, 7)), second = a.place(seen({ x: 1000, y: 500 }, 7, { left: 650 }));
+  assert.deepEqual([first.x, second.x], [0.625, 0.5625]);
+});
+
+test('a move stops at the edge of the display, where the Mac holds the pointer', () => {
+  const a = ahead();
+  a.moved(1, -5000, -5000);
+  assert.deepEqual(onMac(a, seen({ x: 300, y: 200 }, 0, { left: 0, top: 0 })), { x: 0, y: 0 });
+  // The far edges belong to the neighbour: the last point inside is one before them.
+  const b = ahead();
+  b.moved(1, 5000, 5000);
+  assert.deepEqual(onMac(b, seen({ x: 2600, y: 700 }, 0, { left: 2200, top: 600 })), { x: 2999, y: 999 });
+});
+
+test('the pointer crosses to a neighbouring display where one is, and stops where none is', () => {
+  const across = ahead();
+  across.moved(1, 300, 0);
+  assert.deepEqual(onMac(across, seen({ x: 1900, y: 500 }, 0, { left: 1500 })), { x: 2200, y: 500 });
+  // Above the smaller display there is nothing: the move ends at the edge of the display the pointer is on.
+  const held = ahead();
+  held.moved(1, 300, 0);
+  assert.deepEqual(onMac(held, seen({ x: 1900, y: 200 }, 0, { left: 1500, top: 0 })), { x: 1999, y: 200 });
+  // Each move is held on its own, as on the Mac: up against the edge, then along it.
+  const along = ahead();
+  along.moved(1, 0, -300);
+  along.moved(2, 50, 0);
+  assert.deepEqual(onMac(along, seen({ x: 2500, y: 500 }, 0, { left: 2000 })), { x: 2550, y: 400 });
+});
+
+test('move numbers wrap at 2^32', () => {
+  const a = ahead();
+  a.moved(0xffffffff, 10, 0);
+  a.moved(0, 10, 0);
+  assert.deepEqual(onMac(a, seen({ x: 1000, y: 500 }, 0xfffffffe)), { x: 1020, y: 500 });
+  assert.deepEqual(onMac(a, seen({ x: 1010, y: 500 }, 0xffffffff)), { x: 1020, y: 500 });
+  assert.deepEqual(onMac(a, seen({ x: 1020, y: 500 }, 0)), { x: 1020, y: 500 });
+});
+
+test('until the picture follows, a pointer that was in it waits at its edge', () => {
+  const a = ahead();
+  a.moved(1, 700, 0);
+  assert.deepEqual(a.place(seen({ x: 1000, y: 500 }, 0)), { x: 1, y: 0.5 });
+  // The view shows typed text and the pointer is elsewhere: it is not brought into the picture.
+  const outside = ahead();
+  outside.moved(1, 10, 0);
+  assert.equal(outside.place(seen({ x: 100, y: 500 }, 0)).x, (110 - 600) / 800);
+});
+
+test('without the list of displays the pointer waits for the Mac', () => {
+  const a = new Ahead(), update = seen({ x: 1000, y: 500 }, 0);
+  a.moved(1, 30, 0);
+  assert.deepEqual(a.place(update), { x: update.x, y: update.y });
+  a.displays = DESK;
+  assert.deepEqual(onMac(a, update), { x: 1030, y: 500 });
+});
+
+test('moves that no update names are dropped, the oldest first', () => {
+  const a = ahead();
+  for (let q = 1; q <= 600; q++) a.moved(q, 1, 0);
+  assert.equal(a.moves.length, 512);
+  assert.equal(a.moves[0].q, 89);
+});
+
+test('the live view draws the pointer where a move takes it before the Mac answers', async () => {
+  const s = setup();
+  try {
+    s.player.setDisplays([{ x: 0, y: 0, w: 1560, h: 878 }]);
+    // The picture shows 780 x 438.75 points on a display of 320 x 180: a point is 0.41 px.
+    s.player.receive(packet(1, true, 31, { q: 0, x: 0.5, y: 0.5, left: 100, top: 50 }));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    s.output(0, 1);
+    assert.equal(s.aim.style.transform, 'translate3d(160px,90px,0)');
+    s.player.moved(1, 78, 0);
+    assert.equal(s.aim.style.transform, 'translate3d(192px,90px,0)', 'a tenth of the picture further, with no answer yet');
+    s.player.receive(pointerOnly(1, 0.6, 0.5, { left: 100, top: 50 }));
+    await s.player.chain;
+    assert.equal(s.aim.style.transform, `translate3d(${320 * Math.fround(0.6)}px,90px,0)`, 'the answer leaves it there');
+    assert.deepEqual(s.player.ahead.moves, []);
+    // Hidden, the view gets no updates: a move sent meanwhile says nothing about the next picture.
+    s.player.moved(2, 78, 0);
+    s.player.show(false);
+    assert.deepEqual(s.player.ahead.moves, []);
+    s.player.moved(3, 78, 0);
+    assert.deepEqual(s.player.ahead.moves, [], 'nor does one sent while the view is hidden');
+  } finally { s.player.close(); }
 });

@@ -14,12 +14,21 @@ final class H264Encoder {
     let width: Int
     let height: Int
     let framesPerSecond: Int32
+    /// An average the encoder aims at, not a cap. It may change while the stream runs, without a key frame:
+    /// `LinkRate` fits it to what the link carries.
+    var bitsPerSecond: Double {
+        didSet {
+            guard bitsPerSecond != oldValue else { return }
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: Int(bitsPerSecond) as CFNumber)
+        }
+    }
     private let session: VTCompressionSession
 
-    init(width: Int, height: Int, framesPerSecond: Int32 = 60) throws {
+    init(width: Int, height: Int, framesPerSecond: Int32 = 60, bitsPerSecond: Double = LinkRate.most) throws {
         self.width = width
         self.height = height
         self.framesPerSecond = framesPerSecond
+        self.bitsPerSecond = bitsPerSecond
         var created: VTCompressionSession?
         try Self.check(VTCompressionSessionCreate(
             allocator: nil, width: Int32(width), height: Int32(height), codecType: kCMVideoCodecType_H264,
@@ -40,7 +49,7 @@ final class H264Encoder {
                 kVTCompressionPropertyKey_AllowFrameReordering: false,
                 kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_H264_Baseline_AutoLevel,
                 kVTCompressionPropertyKey_ExpectedFrameRate: framesPerSecond,
-                kVTCompressionPropertyKey_AverageBitRate: 4_000_000,
+                kVTCompressionPropertyKey_AverageBitRate: Int(bitsPerSecond),
                 // The link is reliable and every size gets its own encoder, so one key frame starts the
                 // stream and no later one interrupts it with a burst of data.
                 kVTCompressionPropertyKey_MaxKeyFrameInterval: Int32.max,

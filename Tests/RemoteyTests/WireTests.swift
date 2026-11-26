@@ -5,23 +5,24 @@ import XCTest
 final class WireTests: XCTestCase {
     func testLayoutOfAnUpdateWithAPicture() {
         let update = LiveUpdate(pointer: CGPoint(x: 0.5, y: 0.25), focus: CGPoint(x: 0.75, y: 1.5), followsText: true,
-                                fitted: false, request: 9, width: 614, framesPerSecond: 120, sequence: 0x0102_0304,
+                                fitted: false, request: 9, view: CGRect(x: -1200, y: 300, width: 614, height: 921), framesPerSecond: 120, sequence: 0x0102_0304,
                                 picture: (number: 7, content: .h264(Data([66, 192, 31, 1]))))
         let data = update.data
         func float(_ offset: Int) -> Float32 {
             Float32(bitPattern: data.subdata(in: offset..<offset + 4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }.littleEndian)
         }
         XCTAssertEqual(Array(data[0..<3]), [2, 120, 1])
-        XCTAssertEqual([float(3), float(7), float(11), float(15), float(19)], [0.5, 0.25, 0.75, 1.5, 614])
-        XCTAssertEqual(Array(data[23..<35]), [4, 3, 2, 1, 9, 0, 0, 0, 7, 0, 0, 0])
+        XCTAssertEqual([float(3), float(7), float(11), float(15)], [0.5, 0.25, 0.75, 1.5])
+        XCTAssertEqual([float(19), float(23), float(27), float(31)], [614, 921, -1200, 300], "the view: its size, then its place")
+        XCTAssertEqual(Array(data[35..<47]), [4, 3, 2, 1, 9, 0, 0, 0, 7, 0, 0, 0])
         XCTAssertEqual(Array(data[LiveUpdate.headerSize...]), [66, 192, 31, 1])
     }
 
     func testKinds() {
-        var update = LiveUpdate(pointer: .zero, focus: .zero, followsText: false, fitted: false, request: 0, width: 614,
+        var update = LiveUpdate(pointer: .zero, focus: .zero, followsText: false, fitted: false, request: 0, view: CGRect(x: 0, y: 0, width: 614, height: 0),
                                 framesPerSecond: 60, sequence: 1, picture: nil)
         XCTAssertEqual(Array(update.data), [0, 60, 0] + [UInt8](repeating: 0, count: 16) + [0, 0x80, 0x19, 0x44]
-                       + [1, 0, 0, 0] + [UInt8](repeating: 0, count: 8),
+                       + [UInt8](repeating: 0, count: 12) + [1, 0, 0, 0] + [UInt8](repeating: 0, count: 8),
                        "only the pointer moved: a header and nothing else")
         update.picture = (number: 1, content: .jpeg(Data([0xff, 0xd8])))
         XCTAssertEqual(update.data[0], 1)
@@ -29,7 +30,7 @@ final class WireTests: XCTestCase {
     }
 
     func testFlagsSayWhatTheViewIsCutAround() {
-        var update = LiveUpdate(pointer: .zero, focus: .zero, followsText: false, fitted: true, request: 0, width: 614,
+        var update = LiveUpdate(pointer: .zero, focus: .zero, followsText: false, fitted: true, request: 0, view: CGRect(x: 0, y: 0, width: 614, height: 0),
                                 framesPerSecond: 60, sequence: 1, picture: nil)
         XCTAssertEqual(update.data[2], 2, "fitted to the window in front")
         update.followsText = true

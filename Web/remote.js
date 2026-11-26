@@ -67,6 +67,7 @@ function connect() {
       sentView = '';
       fitted = 0;
       syncView();
+      send({ t: 'displays' }); // the pointer on the page stops at their edges as it does on the Mac
       if (viewOn) cadence.measure(); // low power mode may have changed it while the page was away
       if (sheet === 'apps') askApps(); // the Mac is back while the switcher is open
     } else if (m.t === 'lock') {
@@ -89,7 +90,7 @@ function connect() {
       switcher.picture(m.id, m.png);
     } else if (m.t === 'displays') {
       const list = readDisplays(m);
-      if (list) picker.update(list);
+      if (list) { picker.update(list); player.setDisplays(list); }
     } else if (m.t === 'denied') {
       denied = true;
       pad.textContent = 'Zugangsschlüssel ungültig. Am Mac neu koppeln und den QR-Code scannen.';
@@ -112,7 +113,12 @@ function connect() {
   };
 }
 // Nothing is queued: what cannot leave now is dropped, so nothing arrives late after a reconnect.
-function send(msg) { if (ready && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+// True if the message left.
+function send(msg) {
+  if (!ready || ws.readyState !== 1) return false;
+  ws.send(JSON.stringify(msg));
+  return true;
+}
 
 // iOS suspends sockets in the background without closing them, so reconnect on every return.
 let wakeLock = null;
@@ -206,10 +212,12 @@ const meter = new Meter();
 let moveNumber = 0, pinchFrom = 1, pinching = 0;
 const touchpad = new Touchpad({
   move(dx, dy) {
-    // The Mac returns the number with the first picture that shows the move, which times the round trip.
+    // The Mac returns the number with the first update that includes the move, which times the round trip.
+    // Until then the page shows the pointer where the move takes it.
     moveNumber = (moveNumber + 1) >>> 0;
-    send({ t: 'm', dx, dy, q: moveNumber });
-    if (viewOn && ready) meter.moved(moveNumber, performance.now());
+    if (!send({ t: 'm', dx, dy, q: moveNumber }) || !viewOn) return;
+    meter.moved(moveNumber, performance.now());
+    liveView.moved(moveNumber, dx, dy);
   },
   scroll: (dx, dy) => send({ t: 's', dx, dy }),
   scrollEnd: () => send({ t: 'se' }),

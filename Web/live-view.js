@@ -4,17 +4,80 @@ export const POINTER = 0, JPEG = 1, H264 = 2;
 // One binary message of the live view, little endian: Uint8 kind, Uint8 frames per second the view runs at,
 // Uint8 flags (1: the view follows the text caret, 2: it is fitted to the window in front, so its zoom is the
 // Mac's choice), Float32 pointer x and y and Float32 focus x and y (0...1 inside the picture; the focus is the
-// pointer, or the caret while the view follows the text), Float32 picture width in Mac points, Uint32
+// pointer, or the caret while the view follows the text), Float32 width and height of what the picture shows
+// and Float32 its left and top edge (Mac points, in the coordinates the `displays` message uses), Uint32
 // number of the last pointer move it includes, Uint32 number of the view request it was cut for, Uint32
 // picture number, then the picture. POINTER has none: pointer or focus moved inside the picture sent last.
-export const HEADER = 35;
+export const HEADER = 47;
 export function parseUpdate(buffer) {
   const head = new DataView(buffer), float = (at) => head.getFloat32(at, true);
   return { kind: head.getUint8(0), fps: head.getUint8(1), followsText: (head.getUint8(2) & 1) === 1,
     fitted: (head.getUint8(2) & 2) === 2,
-    x: float(3), y: float(7), fx: float(11), fy: float(15), width: float(19),
-    q: head.getUint32(23, true), v: head.getUint32(27, true), n: head.getUint32(31, true),
+    x: float(3), y: float(7), fx: float(11), fy: float(15), width: float(19), height: float(23), left: float(27), top: float(31),
+    q: head.getUint32(35, true), v: head.getUint32(39, true), n: head.getUint32(43, true),
     picture: new Uint8Array(buffer, HEADER) };
+}
+
+// The pointer ahead of the Mac's answer. A move takes the way to the Mac and back before an update shows
+// it: 30 ms at home, 100 to 400 ms over a relay. So the page adds the moves that are still under way to the
+// place the last update named, and the pointer follows the finger at once, whatever the link.
+//
+// It does what Input.swift does with a move of whole points, which is what the page sends: a target off every
+// display is held at the edge of the display the pointer is on. Every update names the last move its place
+// includes, so a move counts until an update has it. What the page cannot know, the Mac's own mouse or a
+// pointer the Mac put elsewhere, comes with the next update, and the moves under way are added to that.
+export class Ahead {
+  constructor() {
+    this.displays = null;
+    this.moves = [];
+  }
+
+  // A move with the number `q` left for the Mac, in whole Mac points.
+  moved(q, x, y) {
+    this.moves.push({ q, x, y });
+    // No update names them: another viewer has the live view. They say nothing about a later picture.
+    if (this.moves.length > 512) this.moves.shift();
+  }
+
+  clear() {
+    this.moves = [];
+  }
+
+  // Where the pointer is on the Mac once it has made the moves that `update` does not include, in Mac
+  // points. Null if that is where the update has it: no move is under way, or the Mac's displays are not
+  // known yet (the list is under way).
+  onMac(update) {
+    // Numbers wrap at 2^32.
+    while (this.moves.length && ((this.moves[0].q - update.q) | 0) <= 0) this.moves.shift();
+    if (!this.moves.length || !this.displays?.length || !(update.width > 0) || !(update.height > 0)) return null;
+    // The place came as a share of the view in 32-bit floats. On the Mac it is whole points, or a fraction
+    // the Mac's mouse left; a 16th of a point is finer than either and coarser than the floats' error.
+    const exact = (value) => Math.round(value * 16) / 16;
+    const on = (p) => this.displays.find((d) => p.x >= d.x && p.x < d.x + d.w && p.y >= d.y && p.y < d.y + d.h);
+    let at = { x: exact(update.left + update.x * update.width), y: exact(update.top + update.y * update.height) };
+    for (const move of this.moves) {
+      const to = { x: at.x + move.x, y: at.y + move.y };
+      if (!on(to)) {
+        const home = on(at) ?? this.displays.find((d) => d.x === 0 && d.y === 0) ?? this.displays[0];
+        to.x = Math.min(Math.max(to.x, home.x), home.x + home.w - 1);
+        to.y = Math.min(Math.max(to.y, home.y), home.y + home.h - 1);
+      }
+      at = to;
+    }
+    return at;
+  }
+
+  // The pointer's place in the picture of `update`, 0...1: where the update has it, and from there the moves
+  // it does not include.
+  place(update) {
+    const at = this.onMac(update);
+    if (!at) return { x: update.x, y: update.y };
+    const x = (at.x - update.left) / update.width, y = (at.y - update.top) / update.height;
+    // The picture follows the pointer one way to the Mac and back later. Until then a pointer that was in
+    // the picture waits at its edge, in sight.
+    const inside = (value) => value >= 0 && value <= 1, held = (value) => Math.min(1, Math.max(0, value));
+    return inside(update.x) && inside(update.y) ? { x: held(x), y: held(y) } : { x, y };
+  }
 }
 
 // An H.264 picture as H264Encoder.swift packs it: profile, compatibility and level, a flag for a
@@ -52,13 +115,30 @@ export class LiveView {
     this.pointer = null;
     this.meta = null;
     this.target = null;
+    this.ahead = new Ahead();
   }
 
   // The page shows the view or hides it. Hidden, nothing is drawn and the pointer is gone.
   show(on) {
     this.on = on;
-    if (!on) this.aim.hidden = true;
+    if (!on) {
+      this.aim.hidden = true;
+      this.ahead.clear(); // no update will name the moves under way
+    }
     this.layout();
+  }
+
+  // A pointer move of whole Mac points with the number `q` left for the Mac: the pointer goes there at once.
+  moved(q, x, y) {
+    if (!this.on || this.closed) return;
+    this.ahead.moved(q, x, y);
+    this.placeAim();
+  }
+
+  // The Mac's displays, as the `displays` message lists them: where a move ends at an edge.
+  setDisplays(list) {
+    this.ahead.displays = list;
+    this.placeAim();
   }
 
   /**
@@ -177,12 +257,20 @@ export class LiveView {
     return { left: (w - pw * scale) / 2, top: (h - ph * scale) / 2, width: pw * scale, height: ph * scale };
   }
 
+  // Puts marker and pointer picture where the pointer is: where the last update has it, and from there
+  // the moves the Mac has yet to answer. Runs with every move of the finger.
+  placeAim(box = this.box()) {
+    if (!box || !this.meta || !this.on) return;
+    const at = this.ahead.place(this.meta);
+    this.aim.style.transform = `translate3d(${box.left + at.x * box.width}px,${box.top + at.y * box.height}px,0)`;
+  }
+
   // Moves marker and pointer picture, and scales the picture for a zoom preview. Only transforms change:
   // the browser moves layers, with no layout and no repaint.
   layout() {
     const box = this.box(), meta = this.meta;
     if (!box || !meta || !this.on) { this.picture.style.transform = ''; return; }
-    this.aim.style.transform = `translate3d(${box.left + meta.x * box.width}px,${box.top + meta.y * box.height}px,0)`;
+    this.placeAim(box);
     // The picture's own zoom follows from its width in Mac points and its width on the display.
     const scale = this.target ? this.target / (box.width / meta.width) : 1;
     if (Math.abs(scale - 1) < 0.01) this.picture.style.transform = '';

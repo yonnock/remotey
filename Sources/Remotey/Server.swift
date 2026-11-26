@@ -48,7 +48,8 @@ final class Server {
         var authed = false
         /// The app icons this connection has, by the names the list gives them.
         var icons: Set<String> = []
-        /// The page opened the display picker on this connection, so it hears when the displays change.
+        /// The page asked for the displays on this connection, so it hears when they change: it shows them in
+        /// its picker, and stops the pointer it draws at their edges.
         var watchesDisplays = false
         /// What the phone's passkey has to sign to unlock the Mac from this connection, once.
         var challenge: Data?
@@ -323,11 +324,12 @@ final class Server {
         if Self.isActivity(command) { UserActivity.declare() }
         switch command {
         case .move(let dx, let dy, let sequence):
-            input.move(dx: dx, dy: dy)
             // The view follows at once instead of waiting for the screen to show the move.
             if viewer === client {
                 screen.followText(false)
-                screen.pointerMoved(applied: sequence)
+                screen.move(sequence) { input.move(dx: dx, dy: dy) }
+            } else {
+                input.move(dx: dx, dy: dy)
             }
         case .scroll(let dx, let dy):
             if viewer === client { screen.followText(false) } // scrolling moves the text away from where it was

@@ -73,13 +73,14 @@ const spread = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 export class Touchpad {
   /**
-   * `out` receives move(dx, dy), scroll(dx, dy), scrollEnd(), click(button), pinchStart() (false refuses),
+   * `out` receives move(dx, dy) in whole Mac points, scroll(dx, dy), scrollEnd(), click(button), pinchStart() (false refuses),
    * pinch(scale) with the scale since the start, pinchEnd(scale), dragStart() and dragEnd().
    * `settings()` returns { speed, acceleration, scroll } at the moment they are needed.
    */
   constructor(out, settings) {
     this.out = out;
     this.settings = settings;
+    this.rest = { x: 0, y: 0 }; // of a point, not yet moved
     this.reset();
   }
 
@@ -224,9 +225,17 @@ export class Touchpad {
     return distance / Math.max(4, interval);
   }
 
+  // The Mac moves its pointer by whole points. The page draws the pointer ahead of the Mac's answer, so it
+  // has to know by how many: whole points leave here, and the rest counts for the next move.
   move(dx, dy) {
     if (!dx && !dy) return;
     const g = gain(this.speed(), this.settings());
-    this.out.move(dx * g, dy * g);
+    this.rest.x += dx * g;
+    this.rest.y += dy * g;
+    const x = Math.trunc(this.rest.x), y = Math.trunc(this.rest.y);
+    if (!x && !y) return;
+    this.rest.x -= x;
+    this.rest.y -= y;
+    this.out.move(x, y);
   }
 }

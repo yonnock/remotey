@@ -30,6 +30,20 @@ function pad(settings = defaults) {
 }
 const total = (log, kind, i = 1) => Math.round(log.filter((e) => e[0] === kind).reduce((a, e) => a + e[i], 0) * 1e6) / 1e6;
 
+test('whole points leave for the Mac, and the rest of a point counts for the next move', () => {
+  // The page draws the pointer where a move takes it before the Mac answers, so it has to know that place.
+  const { log, touchpad } = pad({ ...defaults, speed: 0.3, acceleration: 0 });
+  touchpad.update('start', [{ id: 0, x: 100, y: 100 }], 0);
+  for (let i = 1; i <= 40; i++) touchpad.update('move', [{ id: 0, x: 100 + i, y: 100 - i }], 1000 + i * 16);
+  const moves = log.filter((e) => e[0] === 'm');
+  assert.ok(moves.length > 3 && moves.length < 40, `${moves.length} moves for 40 events: none is sent that moves nothing`);
+  assert.ok(moves.every(([, dx, dy]) => Number.isInteger(dx) && Number.isInteger(dy) && (dx || dy)), JSON.stringify(moves));
+  // Slower than one point an event: what one event lacks, the next ones bring.
+  const sent = total(log, 'm');
+  assert.equal(total(log, 'm', 2), -sent);
+  assert.ok(sent >= 9 && sent <= 12, `${sent} points for 32 px at 0.3`);
+});
+
 test('a tap clicks and a two-finger tap right-clicks, without moving anything', () => {
   const one = pad();
   one.drive({ steps: 3, ms: 30, at: (i) => [[100 + i, 100]] });
