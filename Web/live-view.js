@@ -116,6 +116,7 @@ export class LiveView {
     this.meta = null;
     this.target = null;
     this.ahead = new Ahead();
+    this.leads = false;
   }
 
   // The page shows the view or hides it. Hidden, nothing is drawn and the pointer is gone.
@@ -128,9 +129,22 @@ export class LiveView {
     this.layout();
   }
 
-  // A pointer move of whole Mac points with the number `q` left for the Mac: the pointer goes there at once.
+  // Whether the pointer is drawn ahead of the Mac's answer. The page asks for that while the window in front
+  // has the phone's shape: the picture then stands still, and the pointer moves in it. Where the picture
+  // follows the pointer, a pointer ahead of it runs to the picture's edge and comes back as the picture
+  // catches up, which is harder to steer than a pointer that waits for the Mac.
+  lead(on) {
+    if (on === this.leads) return;
+    this.leads = on;
+    if (!on) this.ahead.clear();
+    this.placeAim();
+  }
+
+  // A pointer move of whole Mac points with the number `q` left for the Mac. Drawn ahead, the pointer goes
+  // there at once: in a picture that is fitted to a window, not in one the Mac cuts around the pointer for
+  // want of a window in front.
   moved(q, x, y) {
-    if (!this.on || this.closed) return;
+    if (!this.on || this.closed || !this.leads || !this.meta?.fitted) return;
     this.ahead.moved(q, x, y);
     this.placeAim();
   }

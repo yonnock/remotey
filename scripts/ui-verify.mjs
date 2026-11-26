@@ -32,7 +32,8 @@ import { extname, join, resolve } from 'node:path';
 // 15: updates carry the view's place and height; T15 moves the pointer and checks that the page shows the move
 //     before the fake Mac answers, keeps it there with the answer, and stops it at the display's edge. T12 counts
 //     the page's question for the displays when it connects apart from the one the sheet asks.
-export const VERIFIER_VERSION = 15;
+// 16: T15 draws the pointer ahead only with "Telefonform" on, and first checks that without it the pointer waits.
+export const VERIFIER_VERSION = 16;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -145,15 +146,15 @@ const harness = `(() => {
     head.setUint32(39, request.v, true);
     head.setUint32(43, window.__pictures = (window.__pictures ?? 0) + 1, true);
     packet.set(jpeg, 47);
-    window.__shows = [points, points * request.h / request.w];
+    window.__shows = [points, points * request.h / request.w, fitted];
     socket.onmessage?.({ data: packet.buffer });
     await new Promise((r) => setTimeout(r, 150));
   };
   // The Mac's answer to pointer moves up to the one numbered \`q\`: the pointer is at \`x\`, \`y\` (Mac points) in the
   // view of the last picture, which stays as it is.
   window.__pointer = async (x, y, q) => {
-    const packet = new Uint8Array(47), head = new DataView(packet.buffer), [w, h] = window.__shows;
-    packet.set([0, 30, 0]);
+    const packet = new Uint8Array(47), head = new DataView(packet.buffer), [w, h, fitted] = window.__shows;
+    packet.set([0, 30, fitted ? 2 : 0]);
     [x / w, y / h, x / w, y / h, w, h, 0, 0].forEach((value, i) => head.setFloat32(3 + i * 4, value, true));
     head.setUint32(35, q, true);
     window.__socket.onmessage?.({ data: packet.buffer });
@@ -1207,24 +1208,36 @@ await task('T14', async () => {
       && open.label === 'Tippen…' && open.type === 'text' };
 });
 
-// T15: the pointer ahead of the Mac. A move shows on the page at once, before any answer; the answer leaves the
-// pointer where it is; and a move against the display's edge stops there, as the Mac holds the pointer.
+// T15: the pointer ahead of the Mac, while the window in front has the phone's shape. A move shows on the page at
+// once, before any answer; the answer leaves the pointer where it is; and a move against the display's edge stops
+// there, as the Mac holds the pointer. Without "Telefonform" the pointer waits for the Mac, as the picture does.
 await task('T15', async () => {
   const page = await openPage(390, 844);
   const screen = await page.rect('#screen');
+  const aim = async () => { const r = await page.rect('#aim'); return { x: round(r.x + r.w / 2 - screen.x), y: round(r.y + r.h / 2 - screen.y) }; };
+  const x0 = screen.x + 200, y0 = screen.y + 300;
+  const drag = async () => {
+    await page.clear();
+    await page.touch('touchStart', [[x0, y0]]);
+    for (let i = 1; i <= 20; i++) { await sleep(16); await page.touch('touchMove', [[x0 + i * 2, y0]]); }
+    await sleep(40);
+    return (await page.sent()).filter((m) => m.t === 'm');
+  };
   // The picture at the zoom the page asked for, 0.5, with its left top at the display's: the pointer is in the middle.
-  const wide = screen.w * 2;
+  const wide = screen.w * 2, pixelsPerPoint = 0.5;
   await page.evaluate(`window.__picture(${wide})`); // the first JPEG only switches the page from H.264 to JPEG
   await page.evaluate(`window.__picture(${wide})`);
   const [, high] = await page.evaluate('window.__shows');
-  const aim = async () => { const r = await page.rect('#aim'); return { x: round(r.x + r.w / 2 - screen.x), y: round(r.y + r.h / 2 - screen.y) }; };
-  const pixelsPerPoint = 0.5, x0 = screen.x + 200, y0 = screen.y + 300;
   const start = await aim();
-  await page.clear();
-  await page.touch('touchStart', [[x0, y0]]);
-  for (let i = 1; i <= 20; i++) { await sleep(16); await page.touch('touchMove', [[x0 + i * 2, y0]]); }
-  await sleep(40);
-  const moves = (await page.sent()).filter((m) => m.t === 'm');
+  // The picture is cut around the pointer: it waits for the Mac.
+  const waited = { moves: (await drag()).length, aim: await aim() };
+  await page.touch('touchEnd', []); await sleep(80);
+  // "Telefonform": the Mac fits the picture to the window, and the picture stands still.
+  await page.tap('[data-act=apps]'); await sleep(450);
+  await page.tap('[data-act=shape]'); await sleep(150);
+  await page.tap('[data-act=apps]'); await sleep(300);
+  await page.evaluate(`window.__picture(${wide}, true)`);
+  const moves = await drag();
   const points = Math.trunc(sum(moves, 'm', 'dx')), ahead = await aim();
   // The Mac answers with all of them made.
   await page.evaluate(`window.__pointer(${wide / 2 + points}, ${high / 2}, ${moves.at(-1).q})`);
@@ -1241,8 +1254,9 @@ await task('T15', async () => {
   await page.touch('touchEnd', []); await sleep(80);
   const clicks = count(await page.sent(), 'c');
   await page.close();
-  return { start, points, ahead, answered, taken, swiped, edge, clicks,
-    ok: points > 20 && Math.abs(ahead.x - start.x - points * pixelsPerPoint) < 1 && ahead.y === start.y
+  return { start, waited, points, ahead, answered, taken, swiped, edge, clicks,
+    ok: waited.moves > 5 && waited.aim.x === start.x && waited.aim.y === start.y
+      && points > 20 && Math.abs(ahead.x - start.x - points * pixelsPerPoint) < 1 && ahead.y === start.y
       && Math.abs(answered.x - ahead.x) < 0.5 && Math.abs(taken.x - 100 * pixelsPerPoint) < 0.5 && Math.abs(taken.y - 100 * pixelsPerPoint) < 0.5
       && swiped < -100 && Math.abs(edge.x) < 0.5 && edge.y === taken.y && clicks === 0 };
 });

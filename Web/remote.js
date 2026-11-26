@@ -304,6 +304,7 @@ function syncView() {
   if (!liveView) return; // not paired
   liveView.show(viewOn);
   liveView.zoomTo((fitted || shaping()) && !pinching ? 0 : showing);
+  liveView.lead(shaping()); // the pointer ahead of the Mac's answer: only where the picture stands still
   if (!ready || ws.readyState !== 1) return;
   const r = screenEl.getBoundingClientRect(); // measured after the layout change above
   // `zoom` goes along with "Auto" too: it counts while the Mac has no window in front to fit.

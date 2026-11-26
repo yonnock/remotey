@@ -481,14 +481,15 @@ test('the live view draws the pointer where a move takes it before the Mac answe
   const s = setup();
   try {
     s.player.setDisplays([{ x: 0, y: 0, w: 1560, h: 878 }]);
+    s.player.lead(true);
     // The picture shows 780 x 438.75 points on a display of 320 x 180: a point is 0.41 px.
-    s.player.receive(packet(1, true, 31, { q: 0, x: 0.5, y: 0.5, left: 100, top: 50 }));
+    s.player.receive(packet(1, true, 31, { q: 0, x: 0.5, y: 0.5, left: 100, top: 50, fitted: true }));
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     s.output(0, 1);
     assert.equal(s.aim.style.transform, 'translate3d(160px,90px,0)');
     s.player.moved(1, 78, 0);
     assert.equal(s.aim.style.transform, 'translate3d(192px,90px,0)', 'a tenth of the picture further, with no answer yet');
-    s.player.receive(pointerOnly(1, 0.6, 0.5, { left: 100, top: 50 }));
+    s.player.receive(pointerOnly(1, 0.6, 0.5, { left: 100, top: 50, fitted: true }));
     await s.player.chain;
     assert.equal(s.aim.style.transform, `translate3d(${320 * Math.fround(0.6)}px,90px,0)`, 'the answer leaves it there');
     assert.deepEqual(s.player.ahead.moves, []);
@@ -498,5 +499,33 @@ test('the live view draws the pointer where a move takes it before the Mac answe
     assert.deepEqual(s.player.ahead.moves, []);
     s.player.moved(3, 78, 0);
     assert.deepEqual(s.player.ahead.moves, [], 'nor does one sent while the view is hidden');
+  } finally { s.player.close(); }
+});
+
+test('the pointer is drawn ahead only where the page asks for it, in a picture fitted to a window', async () => {
+  const s = setup();
+  try {
+    s.player.setDisplays([{ x: 0, y: 0, w: 1560, h: 878 }]);
+    s.player.receive(packet(1, true, 31, { q: 0, x: 0.5, y: 0.5, left: 100, top: 50, fitted: true }));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    s.output(0, 1);
+    // Not asked for: the pointer waits for the Mac, as the picture does.
+    s.player.moved(1, 78, 0);
+    assert.equal(s.aim.style.transform, 'translate3d(160px,90px,0)');
+    assert.deepEqual(s.player.ahead.moves, []);
+    s.player.lead(true);
+    s.player.moved(2, 78, 0);
+    assert.equal(s.aim.style.transform, 'translate3d(192px,90px,0)');
+    // No longer asked for: the pointer is back where the Mac has it, and the move under way is forgotten.
+    s.player.lead(false);
+    assert.equal(s.aim.style.transform, 'translate3d(160px,90px,0)');
+    assert.deepEqual(s.player.ahead.moves, []);
+    // Asked for, but the Mac has no window in front and cuts the picture around the pointer: it will follow the move.
+    s.player.lead(true);
+    s.player.receive(pointerOnly(2, 0.5, 0.5, { left: 178, top: 50 }));
+    await s.player.chain;
+    s.player.moved(3, 78, 0);
+    assert.equal(s.aim.style.transform, 'translate3d(160px,90px,0)');
+    assert.deepEqual(s.player.ahead.moves, []);
   } finally { s.player.close(); }
 });
