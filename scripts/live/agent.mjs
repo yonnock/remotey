@@ -11,7 +11,12 @@ export const HTTP = `http://127.0.0.1:${PORT}`, WS = `ws://127.0.0.1:${PORT + 1}
 export const PING_MS = 5000;
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const fail = (msg) => { console.error('FAIL', msg); process.exit(1); };
-/** The agent writes the pairing token when it first starts. */
+/**
+ * The old shared token, which the agent writes when it first starts. The scripts still use it: a paired device
+ * needs the Mac's pairing window, which no script may open. Each agent keeps its own devices file and switch
+ * (`devices-<port>`), so a development agent on another port takes the token until someone switches it off
+ * there, whatever the installed one does; switched off, the agent answers `denied` with `why: "token"`.
+ */
 export const token = (() => {
   try { return readFileSync(`${homedir()}/Library/Application Support/Remotey/token`, 'utf8').trim(); }
   catch { return fail('no pairing token: start Remotey once'); }
@@ -35,7 +40,12 @@ export function open(first) {
     send: (msg) => ws.send(JSON.stringify(msg)), close: () => ws.close() };
   ws.onmessage = (e) => {
     if (answer) {
-      answer(JSON.parse(e.data));
+      const hello = JSON.parse(e.data);
+      // Only for the real token: smoke.mjs sends a wrong one on purpose.
+      if (hello.t === 'denied' && hello.why === 'token' && first?.token === token) {
+        console.error(`the agent on ${PORT} does not take the token (switched off, or another token): run a development agent with REMOTEY_PORT`);
+      }
+      answer(hello);
       answer = null;
       // As the page does: the agent drops a phone that is silent for 15 s. Its answers stay here.
       heartbeat = setInterval(() => { if (ws.readyState === WebSocket.OPEN) connection.send({ t: 'ping' }); }, PING_MS);

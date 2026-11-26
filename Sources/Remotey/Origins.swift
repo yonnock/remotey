@@ -36,6 +36,17 @@ struct HeaderFields {
 enum Origins {
     /// Whether a host, as `Host` or an origin names it, is one the page is served from.
     static func isOwn(host: String) -> Bool {
+        let name = bare(host)
+        return isLoopback(host: name) || name.hasSuffix(".ts.net")
+    }
+
+    /// The development page's places: plain HTTP on this Mac.
+    static func isLoopback(host: String) -> Bool {
+        ["127.0.0.1", "localhost", "::1"].contains(bare(host))
+    }
+
+    /// The name alone, in lower case.
+    private static func bare(_ host: String) -> String {
         var name = host.lowercased()
         // Without its port: `[::1]:47800`, `127.0.0.1:47800`, `mac.example.ts.net:8443`.
         if name.hasPrefix("["), let end = name.firstIndex(of: "]") {
@@ -44,7 +55,7 @@ enum Origins {
             name = String(name[..<colon])
         }
         if name.hasSuffix(".") { name.removeLast() }
-        return ["127.0.0.1", "localhost", "::1"].contains(name) || name.hasSuffix(".ts.net")
+        return name
     }
 
     /// `Host` of a request to either port.
@@ -58,6 +69,13 @@ enum Origins {
         guard let url = URL(string: origin), let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
               let host = url.host else { return false }
         return isOwn(host: host)
+    }
+
+    /// `Origin` of a `POST` to the pairing routes. `null` passes here: by the Fetch standard a browser may send it
+    /// for its own page's request where a referrer policy hides the origin, and the routes take only
+    /// `application/json`, which no other page can send without a CORS preflight that the agent never answers.
+    static func allowsPost(origin: String?) -> Bool {
+        origin == "null" || allows(origin: origin)
     }
 
     static func allows(_ fields: HeaderFields) -> Bool {

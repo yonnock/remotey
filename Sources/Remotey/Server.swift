@@ -40,6 +40,40 @@ final class Server {
         var retry = Backoff(first: 1, longest: 60)
         /// The phone may ask for a key frame this often at most.
         var keyFrames: TimeInterval = 1
+        /// How often the permissions are read again while a phone is connected, for the `mac` message.
+        /// Not at all while none is.
+        var permissions: TimeInterval = 2
+    }
+
+    /// One connected phone, for the Mac's list of who is connected.
+    struct Session: Equatable, Identifiable {
+        let id: Int
+        /// Nil: the old shared token.
+        let device: Device.ID?
+        /// The device's name; nil with the old token.
+        let name: String?
+        let since: Date
+        /// It has the live view.
+        let watches: Bool
+        /// The page runs from the Home Screen.
+        let standalone: Bool
+    }
+
+    /// What became of the pairing offer.
+    enum PairingState: Equatable {
+        case open(Pairing.Offer)
+        case paired(Device)
+        /// Too many wrong codes.
+        case tries
+        case expired
+        case closed
+    }
+
+    /// Who is allowed now: `paused` and `token` follow the switches, `ax` and `screen` the permissions.
+    private struct MacState: Equatable {
+        var accessibility: Bool
+        var screen: Bool
+        var paused: Bool
     }
 
     private(set) var health = Health.starting {
@@ -51,8 +85,27 @@ final class Server {
     static let port: UInt16 = ProcessInfo.processInfo.environment["REMOTEY_PORT"].flatMap(UInt16.init)
         .flatMap { $0 < .max ? $0 : nil } ?? 47800
 
-    /// Clients are authenticated against the current token, so replacing it drops all of them.
-    var token: String { didSet { clients.values.forEach { $0.connection.cancel() } } }
+    /// The old shared token. Replacing it drops the phones that use it, not the paired devices.
+    var token: String { didSet { drop(denied: .token) { $0.device == nil } } }
+    /// The Tailscale login of the Mac's owner (`Tailscale.Status.loginName`). A request through `tailscale serve`
+    /// from any other person is refused. Nil while it is not known: then nobody is refused for it.
+    var owner: String?
+    private let store: Devices
+    private let pairing: Pairing
+    private var tickets: Tickets
+    private var pairingEnds: DispatchWorkItem?
+    private let now: () -> Date
+    private let permissions: () -> (accessibility: Bool, screen: Bool)
+    private var mac: MacState?
+    private var lastPermissions = -TimeInterval.infinity
+    private var nextSession = 1
+    private var lastSessions: [Session] = []
+    /// Hears every change of `sessions`, on the main queue.
+    var sessionsChanged: (([Session]) -> Void)?
+    /// Hears every change of the devices and of the two switches, on the main queue.
+    var devicesChanged: (() -> Void)?
+    /// Hears what becomes of the pairing offer, on the main queue.
+    var pairingChanged: ((PairingState) -> Void)?
     private let input: Input
     private let apps = Apps()
     private let lock: LockScreen
@@ -75,7 +128,6 @@ final class Server {
     /// The client whose two-finger scroll is under way: `Input` has one, whoever scrolls.
     private var scroller: ObjectIdentifier?
     private var lastKeyFrame = -TimeInterval.infinity
-    private let canRecord: () -> Bool
     private let declareActivity: () -> Void
     private let makeScreen: (@escaping (LiveUpdate) -> Void, @escaping (Pointer.Picture) -> Bool) -> LiveScreen
     private lazy var screen: LiveScreen = {
@@ -114,6 +166,11 @@ final class Server {
         /// The mouse buttons this connection pressed and holds, by raw value. Only these are let go when it leaves:
         /// another phone's drag goes on.
         var held: Set<UInt32> = []
+        /// Set once it is authenticated. Nil with the old token.
+        var device: Device.ID?
+        var session = 0
+        var since = Date()
+        var standalone = false
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
@@ -126,11 +183,13 @@ final class Server {
     private let pendingTimeout: TimeInterval
     private let ports: (http: UInt16, ws: UInt16)
 
-    /// `canRecord` says whether the live view may capture the screen, and asks for the permission if not.
-    /// `screen` makes the live view; `activity` tells the Mac its user is active (`UserActivity`).
+    /// `permissions` reads Accessibility and Screen Recording without asking; the live view starts only with the
+    /// second. `screen` makes the live view; `activity` tells the Mac its user is active (`UserActivity`).
+    /// `devices` keeps the paired phones and the switches.
     init(token: String, input: Input, port: UInt16 = Server.port, pendingTimeout: TimeInterval = 5,
-         lock: LockScreen = LockScreen(), faceUnlock: FaceUnlock? = nil, timing: Timing = Timing(),
-         canRecord: @escaping () -> Bool = Server.canRecord,
+         lock: LockScreen = LockScreen(), faceUnlock: FaceUnlock? = nil, devices: Devices? = nil,
+         timing: Timing = Timing(), now: @escaping () -> Date = Date.init,
+         permissions: @escaping () -> (accessibility: Bool, screen: Bool) = Server.permissions,
          activity: @escaping () -> Void = UserActivity.declare,
          screen: ((@escaping (LiveUpdate) -> Void, @escaping (Pointer.Picture) -> Bool) -> LiveScreen)? = nil) {
         self.token = token
@@ -138,7 +197,11 @@ final class Server {
         self.ports = (port, port + 1)
         self.pendingTimeout = pendingTimeout
         self.timing = timing
-        self.canRecord = canRecord
+        self.now = now
+        self.permissions = permissions
+        self.store = devices ?? Devices(file: Devices.file(port: port), now: now)
+        self.pairing = Pairing(now: now)
+        self.tickets = Tickets(now: now)
         self.declareActivity = activity
         self.makeScreen = screen ?? { ScreenView(update: $0, cursor: $1) }
         self.lock = lock
@@ -164,13 +227,16 @@ final class Server {
         }
     }
 
-    private static func canRecord() -> Bool {
-        if CGPreflightScreenCaptureAccess() { return true }
-        CGRequestScreenCaptureAccess()
-        return false
+    /// Read the way the setup assistant reads them, so a grant counts without a restart. Nothing is asked here:
+    /// the assistant has the keys that ask.
+    static func permissions() -> (accessibility: Bool, screen: Bool) {
+        (Permissions.accessibility, Permissions.screenRecording.granted)
     }
 
     func stop() {
+        pairingEnds?.cancel()
+        pairingEnds = nil
+        pairing.close()
         nextTry?.cancel()
         nextTry = nil
         heartbeat?.cancel()
@@ -264,6 +330,153 @@ final class Server {
         }
     }
 
+    // MARK: Devices
+
+    /// The paired phones, oldest first.
+    var devices: [Device] { store.all }
+    /// For the setup assistant: a phone is paired.
+    var isPaired: Bool { !store.all.isEmpty }
+    /// For the setup assistant: a phone moved the pointer, once, on this Mac.
+    var hasMoved: Bool { store.moved }
+
+    func rename(_ id: Device.ID, to name: String) throws {
+        try store.rename(id, to: name)
+        devicesDidChange()
+    }
+
+    /// The device can no longer connect, and its sessions end now.
+    func revoke(_ id: Device.ID) throws {
+        try store.revoke(id)
+        tickets.revoke(id)
+        devicesDidChange()
+    }
+
+    func revokeAllDevices() throws {
+        try store.revokeAll()
+        tickets.revoke()
+        devicesDidChange()
+    }
+
+    /// Whether the old shared token still opens the socket and `POST /pair`. On for a Mac that had no
+    /// devices file yet; switched off, it drops the phones that use it.
+    var acceptsToken: Bool { store.acceptsToken }
+
+    func setAcceptsToken(_ on: Bool) throws {
+        try store.setAcceptsToken(on)
+        if !on { drop(denied: .token) { $0.device == nil } }
+        devicesDidChange()
+    }
+
+    /// Remote control stopped at the Mac: no input, no live view, and every phone stays paired and connected.
+    var paused: Bool { store.paused }
+
+    func setPaused(_ on: Bool) throws {
+        let was = store.paused
+        try store.setPaused(on)
+        if on, !was {
+            for client in clients.values where client.authed { release(client) }
+            if let viewer {
+                send(viewer, Wire.viewPaused)
+                stopView()
+            }
+        }
+        devicesDidChange()
+    }
+
+    /// Ends what a removed device has open, and tells the Mac.
+    private func devicesDidChange() {
+        let known = Set(store.all.map(\.id))
+        drop(denied: .revoked) { $0.device.map { !known.contains($0) } ?? false }
+        pushMac()
+        sessionsDidChange()
+        devicesChanged?()
+    }
+
+    /// Closes the authenticated connections `which` picks, after telling each why.
+    private func drop(denied why: Wire.Denial, _ which: (Client) -> Bool) {
+        for client in clients.values where client.authed && which(client) {
+            send(client, Wire.denied(why)) { client.connection.cancel() }
+        }
+    }
+
+    // MARK: Pairing
+
+    /// The codes of the open offer; nil while none is.
+    var pairingOffer: Pairing.Offer? {
+        pairing.expire()
+        return pairing.offer
+    }
+
+    /// Opens an offer for at most five minutes, in place of any before it. The Mac shows its codes while it is open.
+    @discardableResult
+    func openPairing(for time: TimeInterval = Pairing.time) -> Pairing.Offer {
+        let offer = pairing.open(for: time)
+        pairingEnds?.cancel()
+        let end = DispatchWorkItem { [weak self] in
+            guard let self, self.pairing.offer == offer else { return }
+            self.pairing.close()
+            self.pairingEnds = nil
+            self.pairingChanged?(.expired)
+        }
+        pairingEnds = end
+        DispatchQueue.main.asyncAfter(deadline: .now() + offer.ends.timeIntervalSince(now()), execute: end)
+        pairingChanged?(.open(offer))
+        return offer
+    }
+
+    /// The Mac's pairing window closed: its codes are gone.
+    func closePairing() {
+        pairingEnds?.cancel()
+        pairingEnds = nil
+        let wasOpen = pairing.offer != nil
+        pairing.close()
+        if wasOpen { pairingChanged?(.closed) }
+    }
+
+    // MARK: Sessions
+
+    /// Who is connected, longest first.
+    var sessions: [Session] {
+        let names = Dictionary(store.all.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        return clients.values.filter(\.authed).sorted { $0.session < $1.session }.map {
+            Session(id: $0.session, device: $0.device, name: $0.device.flatMap { names[$0] }, since: $0.since,
+                    watches: viewer === $0, standalone: $0.standalone)
+        }
+    }
+
+    /// Closes the connection. The page connects again by itself; to keep a phone out, revoke it or pause.
+    func end(_ session: Session.ID) {
+        clients.values.first { $0.authed && $0.session == session }?.connection.cancel()
+    }
+
+    private func sessionsDidChange() {
+        let now = sessions
+        guard now != lastSessions else { return }
+        lastSessions = now
+        sessionsChanged?(now)
+    }
+
+    // MARK: What the Mac allows
+
+    private func macState() -> MacState {
+        let read = permissions()
+        lastPermissions = ProcessInfo.processInfo.systemUptime
+        return MacState(accessibility: read.accessibility, screen: read.screen, paused: store.paused)
+    }
+
+    /// Tells every phone when a permission or the pause changed since it last heard.
+    private func pushMac() {
+        guard clients.values.contains(where: \.authed) else {
+            mac = nil
+            return
+        }
+        let next = macState()
+        guard next != mac else { return }
+        mac = next
+        let message = Wire.mac(accessibility: next.accessibility, screen: next.screen, paused: next.paused)
+        clients.values.filter(\.authed).forEach { send($0, message) }
+    }
+
     private func admit(_ connection: NWConnection) {
         pending.append(connection)
         if pending.count > Self.maxPending { pending.removeFirst().cancel() }
@@ -303,11 +516,12 @@ final class Server {
         wsOptions.autoReplyPing = true
         wsOptions.maximumMessageSize = 64 * 1024
         // A page in the Mac's browser may open sockets to the loopback port. The handshake names the page.
-        wsOptions.setClientRequestHandler(.main) { _, headers in
+        wsOptions.setClientRequestHandler(.main) { [weak self] _, headers in
             let fields = HeaderFields(headers)
-            guard Origins.allows(fields) else {
+            guard Origins.allows(fields), TailnetIdentity.allows(fields, owner: self?.owner) else {
                 if ScreenView.statsOn {
-                    FileHandle.standardError.write(Data("ws refused: host \(fields["Host"] ?? "-"), origin \(fields["Origin"] ?? "-")\n".utf8))
+                    let login = fields["Tailscale-User-Login"] ?? "-"
+                    FileHandle.standardError.write(Data("ws refused: host \(fields["Host"] ?? "-"), origin \(fields["Origin"] ?? "-"), login \(login)\n".utf8))
                 }
                 return NWProtocolWebSocket.Response(status: .reject, subprotocol: nil)
             }
@@ -379,6 +593,8 @@ final class Server {
     /// A phone that went silent lets go of its buttons, and after a while longer its connection.
     private func checkSilence() {
         let now = ProcessInfo.processInfo.systemUptime
+        // A permission granted while a phone is connected shows on it within this time.
+        if now - lastPermissions >= timing.permissions { pushMac() }
         for client in clients.values where client.authed {
             let quiet = now - client.heard
             if quiet >= timing.silence {
@@ -409,38 +625,159 @@ final class Server {
     private func serveHTTP(_ connection: NWConnection) {
         admit(connection)
         connection.start(queue: .main)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
-            self?.settle(connection)
-            guard let data else { return connection.cancel() }
-            let requestLine = String(data: data, encoding: .utf8)?.components(separatedBy: "\r\n").first ?? ""
-            let host = HeaderFields(request: data)["Host"]
-            if ScreenView.statsOn { FileHandle.standardError.write(Data("http \(requestLine) host \(host ?? "-")\n".utf8)) }
-            let parts = requestLine.split(separator: " ")
-            let path = parts.count > 1 ? String(parts[1].split(separator: "?").first ?? "") : ""
+        read(connection, Data())
+    }
 
-            var status = "404 Not Found", type = "text/plain; charset=utf-8", body = Data("Not found".utf8)
-            // A name that is not the page's own leads here by DNS rebinding: a page that would read the page's files.
-            if !Origins.allows(host: host) {
-                (status, body) = ("403 Forbidden", Data("Forbidden".utf8))
-            } else if parts.first == "GET", let file = Web.file(path == "/" ? "index.html" : String(path.dropFirst())) {
-                (status, type, body) = ("200 OK", file.type, file.body)
+    /// Reads until the request is whole, within the bounds of `HTTPRequest`. A request that takes longer than
+    /// the pending connections may wait is cut off with them.
+    private func read(_ connection: NWConnection, _ buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, complete, error in
+            guard let self else { return connection.cancel() }
+            var buffer = buffer
+            if let data { buffer.append(data) }
+            let answer: HTTPResponse
+            switch HTTPRequest.parse(buffer) {
+            case .incomplete:
+                guard data != nil, !complete, error == nil else {
+                    self.settle(connection)
+                    return connection.cancel()
+                }
+                return self.read(connection, buffer)
+            case .refused(let status):
+                answer = HTTPResponse(status: status, body: Data(status.utf8))
+            case .complete(let request):
+                answer = self.answer(request)
             }
-            let head = [
-                "HTTP/1.1 \(status)",
-                "Content-Type: \(type)",
-                "Content-Length: \(body.count)",
-                "Connection: close",
-                "Cache-Control: no-cache",
-                "X-Content-Type-Options: nosniff",
-                "Referrer-Policy: no-referrer",
-                // Styles and scripts are files of the page only. Scripts set styles through the CSSOM, which this allows.
-                "Content-Security-Policy: default-src 'none'; style-src 'self'; script-src 'self'; "
-                    + "connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'",
-            ].joined(separator: "\r\n") + "\r\n\r\n"
-            connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in
-                connection.cancel()
-            })
+            self.settle(connection)
+            self.respond(answer, on: connection)
         }
+    }
+
+    private func answer(_ request: HTTPRequest) -> HTTPResponse {
+        let fields = request.fields
+        if ScreenView.statsOn {
+            let login = fields["Tailscale-User-Login"].map { ", login \($0)" } ?? ""
+            FileHandle.standardError.write(Data("http \(request.method) \(request.path) host \(fields["Host"] ?? "-")\(login)\n".utf8))
+        }
+        // A name that is not the page's own leads here by DNS rebinding: a page that would read the page's files.
+        // Through `tailscale serve`, a person other than the Mac's owner, or the internet by Funnel.
+        guard Origins.allows(host: fields["Host"]), TailnetIdentity.allows(fields, owner: owner) else {
+            return HTTPResponse(status: "403 Forbidden", body: Data("Forbidden".utf8))
+        }
+        switch (request.method, request.path) {
+        case ("POST", "/pair"), ("POST", "/session"):
+            // A page in the Mac's browser names itself. It cannot send JSON either without asking first
+            // (a CORS preflight), which the agent never answers, so `Origin: null` is no way in.
+            guard Origins.allowsPost(origin: fields["Origin"]), Self.isJSON(fields["Content-Type"]) else {
+                return .json("403 Forbidden", ["ok": false, "why": "origin"])
+            }
+            return request.path == "/pair" ? pair(request) : session(request)
+        case ("GET", let path):
+            guard let file = Web.file(path == "/" ? "index.html" : String(path.dropFirst())) else { break }
+            return HTTPResponse(status: "200 OK", type: file.type, body: file.body)
+        default: break
+        }
+        return HTTPResponse(status: "404 Not Found", body: Data("Not found".utf8))
+    }
+
+    private static func isJSON(_ type: String?) -> Bool {
+        type?.split(separator: ";").first?.trimmingCharacters(in: .whitespaces).lowercased() == "application/json"
+    }
+
+    private func respond(_ answer: HTTPResponse, on connection: NWConnection) {
+        // The page's files may be cached and checked again; the answers of the two routes are never kept.
+        let cache = answer.fields.contains { $0.hasPrefix("Cache-Control:") } ? [] : ["Cache-Control: no-cache"]
+        let head = ([
+            "HTTP/1.1 \(answer.status)",
+            "Content-Type: \(answer.type)",
+            "Content-Length: \(answer.body.count)",
+            "Connection: close",
+            "X-Content-Type-Options: nosniff",
+            "Referrer-Policy: no-referrer",
+            // Styles and scripts are files of the page only. Scripts set styles through the CSSOM, which this allows.
+            "Content-Security-Policy: default-src 'none'; style-src 'self'; script-src 'self'; "
+                + "connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'",
+        ] + cache + answer.fields).joined(separator: "\r\n") + "\r\n\r\n"
+        connection.send(content: Data(head.utf8) + answer.body, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
+    }
+
+    // MARK: Pairing over HTTP
+
+    /// The cookie that holds a device's key. Named by port, as the files are: cookies do not tell ports apart,
+    /// and a development agent on 127.0.0.1 must not overwrite the installed one's.
+    var cookieName: String { ports.http == 47800 ? "remotey-device" : "remotey-device-\(ports.http)" }
+
+    /// 400 days, the most Chromium keeps a cookie; every session renews it. A phone that is lost is revoked at
+    /// the Mac, which is what makes its key worthless, not the cookie's end.
+    static let cookieLife = 400 * 24 * 3600
+
+    /// Scripts cannot read it (`HttpOnly`); only the page's own requests carry it (`SameSite=Strict`, no
+    /// `Domain`); it travels only over TLS (`Secure`) except on loopback, where the development page is plain
+    /// HTTP and has no TLS to ask for.
+    private func cookie(_ key: String, host: String?) -> String {
+        let secure = host.map(Origins.isLoopback(host:)) == true ? "" : "; Secure"
+        return "Set-Cookie: \(cookieName)=\(key); Path=/; Max-Age=\(Self.cookieLife); HttpOnly; SameSite=Strict\(secure)"
+    }
+
+    /// `{"code":…}` with either code of the open offer, or `{"token":…}` with the old shared token: a phone
+    /// paired the old way becomes a device without scanning again.
+    private func pair(_ request: HTTPRequest) -> HTTPResponse {
+        guard let body = request.json else { return .json("400 Bad Request", ["ok": false, "why": "body"]) }
+        if let code = body["code"] {
+            switch pairing.take(code) {
+            case nil:
+                pairingEnds?.cancel()
+                pairingEnds = nil
+            case .code: return .json("403 Forbidden", ["ok": false, "why": "code"])
+            case .closed: return .json("403 Forbidden", ["ok": false, "why": "closed"])
+            case .tries:
+                // The first refusal for tries ends the offer the Mac shows; later ones only repeat it.
+                if pairingEnds != nil {
+                    pairingEnds?.cancel()
+                    pairingEnds = nil
+                    pairingChanged?(.tries)
+                }
+                return .json("429 Too Many Requests", ["ok": false, "why": "tries"])
+            }
+        } else if let token = body["token"] {
+            guard store.acceptsToken, Token.matches(token, self.token) else {
+                return .json("403 Forbidden", ["ok": false, "why": "token"])
+            }
+        } else {
+            return .json("400 Bad Request", ["ok": false, "why": "body"])
+        }
+        let fields = request.fields
+        guard let (device, key) = try? store.add(name: Self.deviceName(userAgent: fields["User-Agent"]),
+                                                  login: TailnetIdentity.login(fields)) else {
+            if body["code"] != nil { pairingChanged?(.closed) }
+            return .json("500 Internal Server Error", ["ok": false, "why": "save"])
+        }
+        if body["code"] != nil { pairingChanged?(.paired(device)) }
+        devicesDidChange()
+        return .json("200 OK", ["ok": true, "device": ["id": device.id, "name": device.name]],
+                     fields: [cookie(key, host: fields["Host"])])
+    }
+
+    /// Trades the device's cookie for a ticket that opens the socket once, and renews the cookie.
+    private func session(_ request: HTTPRequest) -> HTTPResponse {
+        guard let (device, key) = request.cookies(cookieName).prefix(4).lazy
+            .compactMap({ key in self.store.device(key: key).map { ($0, key) } }).first else {
+            return .json("401 Unauthorized", ["why": "unpaired"])
+        }
+        store.saw(device.id)
+        return .json("200 OK", ["ticket": tickets.issue(for: device.id)], fields: [cookie(key, host: request.fields["Host"])])
+    }
+
+    /// What the Mac lists a new device as, until it is renamed. iPadOS says it is a Mac.
+    static func deviceName(userAgent: String?) -> String {
+        let agent = userAgent ?? ""
+        if agent.contains("iPhone") { return "iPhone" }
+        if agent.contains("iPad") { return "iPad" }
+        if agent.contains("Android") { return "Android" }
+        if agent.contains("Macintosh") { return "iPad oder Mac" }
+        return "Browser"
     }
 
     // MARK: WebSocket
@@ -457,6 +794,8 @@ final class Server {
                 // Only what this phone holds: another one may be in the middle of a drag.
                 if client.authed { self.release(client) }
                 if self.viewer === client { self.stopView() }
+                if let device = client.device { self.store.saw(device) }
+                self.sessionsDidChange()
             default: break
             }
         }
@@ -482,19 +821,57 @@ final class Server {
                     FileHandle.standardError.write(Data("ignored: \(String(decoding: data.prefix(200), as: UTF8.self))\n".utf8))
                 }
                 self.handle(command, from: client)
-            } else if case .auth(let candidate) = command, Token.matches(candidate, self.token) {
-                self.lock.refresh()
-                client.authed = true
-                self.settle(client.connection)
-                self.send(client, Wire.accepted(accessibility: AXIsProcessTrusted(), page: Web.version))
-                self.send(client, self.lockState(for: client))
-                if let offer = self.faceUnlock.offer { self.send(client, Wire.enrolment(offer, mac: Self.macName)) }
+            } else if case .auth(let credential) = command {
+                switch self.authenticate(credential) {
+                case .success(let device): self.accept(client, device: device, credential: credential)
+                case .failure(let why):
+                    self.send(client, Wire.denied(why)) { client.connection.cancel() }
+                    return
+                }
             } else {
-                self.send(client, Wire.denied) { client.connection.cancel() }
+                self.send(client, Wire.denied(.token)) { client.connection.cancel() }
                 return
             }
             self.receive(client)
         }
+    }
+
+    /// The device a ticket was issued to, or nil for the old token. A ticket counts once, whatever comes of it.
+    private func authenticate(_ credential: Wire.Credential) -> Result<Device?, Wire.Denial> {
+        switch credential {
+        case .ticket(let ticket, _):
+            switch tickets.take(ticket) {
+            case .device(let id):
+                guard let device = store.all.first(where: { $0.id == id }) else { return .failure(.revoked) }
+                return .success(device)
+            case .revoked: return .failure(.revoked)
+            case .unknown: return .failure(.ticket)
+            }
+        case .token(let token):
+            guard store.acceptsToken, Token.matches(token, self.token) else { return .failure(.token) }
+            return .success(nil)
+        }
+    }
+
+    private func accept(_ client: Client, device: Device?, credential: Wire.Credential) {
+        lock.refresh()
+        // The phones connected before hear what changed since they last heard; this one hears it after `ok`.
+        pushMac()
+        let state = mac ?? macState()
+        mac = state
+        client.authed = true
+        client.device = device?.id
+        client.since = now()
+        client.session = nextSession
+        nextSession += 1
+        if case .ticket(_, let standalone) = credential { client.standalone = standalone }
+        settle(client.connection)
+        if let device { store.saw(device.id) }
+        send(client, Wire.accepted(accessibility: state.accessibility, page: Web.version, mac: Self.macName, device: device?.name))
+        send(client, Wire.mac(accessibility: state.accessibility, screen: state.screen, paused: state.paused))
+        send(client, lockState(for: client))
+        if let offer = faceUnlock.offer { send(client, Wire.enrolment(offer, mac: Self.macName)) }
+        sessionsDidChange()
     }
 
     private func send(_ client: Client, _ text: String, then: (() -> Void)? = nil) {
@@ -514,7 +891,22 @@ final class Server {
         }
     }
 
+    /// What acts on the Mac or shows what is on it, and so stops while remote control is paused. Lists of the
+    /// displays stay: they show where the pointer may go, not what is on the screen.
+    private static func isControl(_ command: Wire.Command) -> Bool {
+        switch command {
+        case .move, .scroll, .scrollEnded, .click, .button, .text, .key, .media, .apps, .focus, .display, .unlock,
+             .unlockWithPasskey, .enrol: true
+        case .view(let request): request != nil
+        case .auth, .shown, .displays, .ping, .keyFrame, .ignored: false
+        }
+    }
+
     private func handle(_ command: Wire.Command, from client: Client) {
+        if store.paused, Self.isControl(command) {
+            if case .view(.some) = command { send(client, Wire.viewPaused) }
+            return
+        }
         if Self.isActivity(command) {
             declareActivity()
             // The display this wakes may have a capture again.
@@ -522,6 +914,7 @@ final class Server {
         }
         switch command {
         case .move(let dx, let dy, let sequence):
+            if !store.moved { store.noteMoved() } // the setup's last step
             // The view follows at once instead of waiting for the screen to show the move.
             if viewer === client {
                 screen.followText(false)
@@ -622,7 +1015,7 @@ final class Server {
             if viewer === client { stopView() }
             return
         }
-        guard canRecord() else { return send(client, Wire.viewRefused) }
+        guard permissions().screen else { return send(client, Wire.viewRefused) }
         if viewer !== client {
             // The phone that had the view hears that its picture stops, instead of seeing it stand still.
             if let displaced = viewer { send(displaced, Wire.viewTaken) }
@@ -631,10 +1024,12 @@ final class Server {
         viewer = client
         screen.locked = lock.isLocked
         screen.update(request)
+        sessionsDidChange()
     }
 
     private func stopView() {
         viewer = nil
         screen.update(nil)
+        sessionsDidChange()
     }
 }

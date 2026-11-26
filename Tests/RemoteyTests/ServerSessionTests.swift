@@ -26,9 +26,10 @@ final class SocketPhone {
     private(set) var messages: [[String: Any]] = []
     private(set) var closed = false
 
-    init(port: UInt16, origin: String? = nil) {
+    init(port: UInt16, origin: String? = nil, fields: [String: String] = [:]) {
         var request = URLRequest(url: URL(string: "ws://127.0.0.1:\(port)/ws")!)
         if let origin { request.setValue(origin, forHTTPHeaderField: "Origin") }
+        for (name, value) in fields { request.setValue(value, forHTTPHeaderField: name) }
         task = URLSession.shared.webSocketTask(with: request)
         task.resume()
         pump()
@@ -85,7 +86,8 @@ final class ServerSessionTests: XCTestCase {
         port = Self.nextPort
         Self.nextPort += 2
         let input = Input { [unowned self] in events.append($0) }
-        server = Server(token: token, input: input, port: port, timing: timing, canRecord: { canRecord }, activity: {},
+        server = Server(token: token, input: input, port: port, devices: .temporary(), timing: timing,
+                        permissions: { (true, canRecord) }, activity: {},
                         screen: { [unowned self] _, _ in screen })
         try server.start()
         let listening = await eventually { server.health == .listening }
@@ -95,6 +97,11 @@ final class ServerSessionTests: XCTestCase {
     override func tearDown() async throws {
         phones.forEach { $0.close() }
         server?.stop()
+    }
+
+    override class func tearDown() {
+        Devices.removeTemporaries()
+        super.tearDown()
     }
 
     private func phone(authenticated: Bool = true) async throws -> SocketPhone {

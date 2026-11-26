@@ -2,7 +2,7 @@ import AppKit
 import CoreImage
 import ServiceManagement
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     /// Port `tailscale serve` exposes inside the tailnet (see scripts/tailscale-serve.sh).
     static let tailnetPort = 8443
 
@@ -31,7 +31,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // A window the last run left in the phone's shape, when it crashed or was killed.
         ShapedFrame.restore()
         server.healthChanged = { [weak self] health in self?.show(health) }
+        // The window shows the codes of an open offer only: a phone that paired, or a guess too many, ends it.
+        server.pairingChanged = { [weak self] state in
+            if case .open = state { return }
+            self?.pairingWindow?.close()
+        }
         show(server.health)
+        // Whose phones may connect through `tailscale serve`. Unknown until Tailscale answers.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let owner = Self.tailscaleStatus()?.loginName
+            DispatchQueue.main.async { self?.server.owner = owner }
+        }
         do {
             try server.start()
         } catch {
@@ -87,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let listening = server.health == .listening
         add(menu, "iPhone koppeln (QR-Code)…", listening ? #selector(showPairing) : nil)
         add(menu, "Link kopieren", listening ? #selector(copyLink) : nil)
-        add(menu, "Token erneuern (trennt alle Geräte)", #selector(rotateToken))
+        add(menu, "Alle trennen (neuer Token, Geräte entfernen)", #selector(rotateToken))
         menu.addItem(.separator())
         if server.unlocksWithFaceID {
             add(menu, "Entsperren mit Face ID entfernen", #selector(removeFaceUnlock))
@@ -114,11 +124,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
 
+    /// A link for one phone, good for five minutes, as the QR code is.
     @objc private func copyLink() {
         guard let link = pairingLink() else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(link, forType: .string)
-        // The link carries the token: by this convention clipboard managers keep it out of their history.
+        // The link pairs a phone: by this convention clipboard managers keep it out of their history.
         NSPasteboard.general.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
     }
 
@@ -129,6 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             // The old token is still in the file, so it stays: a new one would be lost with the next start.
             return alert("Token nicht erneuert", "\(error). Der bisherige Token gilt weiter.")
+        }
+        do {
+            try server.revokeAllDevices()
+        } catch {
+            return alert("Geräte nicht entfernt", "\(error). Die gekoppelten Geräte gelten weiter.")
         }
         pairingWindow?.close()
         guard server.health == .listening else { return }
@@ -156,18 +172,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func showPairing() {
-        guard let link = pairingLink() else { return }
+        pairingWindow?.close() // and its offer: the new window shows new codes
+        guard let link = pairingLink(fresh: true) else { return }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 430),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "iPhone koppeln"
         window.isReleasedWhenClosed = false
+        window.delegate = self
 
         let image = NSImageView(image: Self.qrCode(link))
         image.imageScaling = .scaleProportionallyUpOrDown
+        let digits = server.pairingOffer.map { "\($0.digits.prefix(3)) \($0.digits.dropFirst(3))" } ?? ""
         let hint = NSTextField(wrappingLabelWithString:
             "Mit der iPhone-Kamera scannen (Tailscale muss auf dem iPhone verbunden sein), "
             + "dann in Safari über Teilen „Zum Home-Bildschirm“ wählen. "
-            + "Der Link enthält den Zugangsschlüssel, nicht weitergeben.")
+            + "Ohne Link auf dem iPhone diesen Code eingeben: \(digits). Gilt fünf Minuten, für ein Gerät.")
         hint.font = .systemFont(ofSize: 12)
         hint.textColor = .secondaryLabelColor
 
@@ -184,19 +203,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+    /// The pairing window closed: its codes go with it.
+    func windowWillClose(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === pairingWindow else { return }
+        pairingWindow = nil
+        server.closePairing()
+    }
+
     // MARK: Helpers
 
-    private func pairingLink() -> String? {
-        guard let host = Self.tailscaleHostname() else {
+    /// The link of the open pairing offer, or of a new one.
+    private func pairingLink(fresh: Bool = false) -> String? {
+        guard let status = Self.tailscaleStatus(), let host = status.dnsName else {
             alert("Tailscale nicht gefunden",
                   "Der Tailscale-Name dieses Macs ließ sich nicht ermitteln. Läuft Tailscale und ist es angemeldet?")
             return nil
         }
-        return "https://\(host):\(Self.tailnetPort)/#\(server.token)"
+        server.owner = status.loginName
+        let offer = (fresh ? nil : server.pairingOffer) ?? server.openPairing()
+        return Pairing.link(host: host, code: offer.code)
     }
 
-    /// MagicDNS name of this Mac, e.g. `mac.example.ts.net`.
-    private static func tailscaleHostname() -> String? {
+    /// This Mac's MagicDNS name, e.g. `mac.example.ts.net`, and its owner.
+    private static func tailscaleStatus() -> Tailscale.Status? {
         let candidates = ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale",
                           "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
         guard let binary = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else { return nil }
@@ -209,11 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard (try? process.run()) != nil else { return nil }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let me = json["Self"] as? [String: Any],
-              let name = (me["DNSName"] as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
-              !name.isEmpty else { return nil }
-        return name
+        return Tailscale.status(from: data)
     }
 
     private static func qrCode(_ text: String) -> NSImage {
