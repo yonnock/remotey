@@ -106,6 +106,9 @@ final class Server {
     var devicesChanged: (() -> Void)?
     /// Hears what becomes of the pairing offer, on the main queue.
     var pairingChanged: ((PairingState) -> Void)?
+    /// Hears the first pointer move of each session, with its device (nil: the old token), on the main queue.
+    /// The setup assistant waits on it for the phone it just paired; `hasMoved` is once per Mac.
+    var firstMove: ((Device.ID?) -> Void)?
     private let input: Input
     private let apps = Apps()
     private let lock: LockScreen
@@ -171,6 +174,7 @@ final class Server {
         var session = 0
         var since = Date()
         var standalone = false
+        var moved = false
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
@@ -915,6 +919,10 @@ final class Server {
         switch command {
         case .move(let dx, let dy, let sequence):
             if !store.moved { store.noteMoved() } // the setup's last step
+            if !client.moved {
+                client.moved = true
+                firstMove?(client.device)
+            }
             // The view follows at once instead of waiting for the screen to show the move.
             if viewer === client {
                 screen.followText(false)
