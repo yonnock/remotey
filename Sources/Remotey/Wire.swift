@@ -29,8 +29,9 @@ enum Wire {
         case view(ScreenView.Request?)
         /// The page has drawn or discarded the picture with this number.
         case shown(UInt32)
-        /// The page asks for the open apps and their windows, see `Apps`.
-        case apps
+        /// The page asks for the open apps and their windows, see `Apps`. `have` names the icons it has
+        /// already, from an earlier connection; nil if it does not say.
+        case apps(have: Set<String>?)
         /// Brings an app to the front. `window` names one of its windows by its id in the list; without it the
         /// app comes forward as after a click in the Dock.
         case focus(pid: Int32, window: Int?)
@@ -46,7 +47,11 @@ enum Wire {
         /// The phone made a passkey for the enrolment the agent offers. `publicKey`, `authenticator` and
         /// `client` are what the browser gave the page about it, `secret` what the passkey gives out.
         case enrol(id: Data, publicKey: Data, authenticator: Data, client: Data, secret: Data)
-        /// Nothing the agent acts on: an unknown kind, a missing field, a value out of range.
+        /// The page is alive: it says so every 5 s while it is visible, and hears `pong`.
+        case ping
+        /// The phone's decoder lost its state: the next picture of an H.264 stream must be a key frame.
+        case keyFrame
+        /// Nothing the agent acts on: an unknown kind, a missing field or one of the wrong type, a value out of range.
         case ignored
     }
 
@@ -86,13 +91,14 @@ enum Wire {
         var sig: String?
         var prf: String?
         var next: String?
+        var have: [String]?
     }
 
     private static let decoder = JSONDecoder()
 
-    /// Throws for anything that is not a message at all.
+    /// Throws for anything that is not a JSON object.
     static func command(from data: Data) throws -> Command {
-        let m = try decoder.decode(Fields.self, from: data)
+        let m = try fields(from: data)
         var delta: (dx: Double, dy: Double)? {
             guard let dx = m.dx, let dy = m.dy, dx.isFinite, dy.isFinite, abs(dx) <= 5000, abs(dy) <= 5000 else { return nil }
             return (dx, dy)
@@ -117,9 +123,10 @@ enum Wire {
         case "text": m.s.flatMap { $0.count <= 2000 ? .text($0) : nil }
         case "key": if let key = m.k, let mods = m.mods, let count = m.n { .key(key, mods: mods, count: count) } else { nil }
         case "media": m.k.map { .media($0) }
-        case "view": .view(view(m))
+        // A request to switch it on that lacks a field is refused, not taken as one to switch it off.
+        case "view": m.on == true ? view(m).map { .view($0) } : .view(nil)
         case "shown": m.n.flatMap(UInt32.init(exactly:)).map { .shown($0) }
-        case "apps": .apps
+        case "apps": .apps(have: m.have.map { Set($0.prefix(256)) })
         case "focus": m.pid.flatMap { $0 > 0 ? .focus(pid: $0, window: m.win) : nil }
         case "displays": .displays
         case "display": m.id.flatMap(UInt32.init(exactly:)).map { .display($0) }
@@ -140,9 +147,28 @@ enum Wire {
             } else {
                 nil
             }
+        case "ping": .ping
+        case "idr": .keyFrame
         default: nil
         }
         return command ?? .ignored
+    }
+
+    private struct NotAnObject: Error {}
+
+    /// The fields of a message. One of the wrong type counts as missing, so it costs only a message of a kind
+    /// that needs it, not the connection; so does a kind that is not a string.
+    private static func fields(from data: Data) throws -> Fields {
+        if let fields = try? decoder.decode(Fields.self, from: data) { return fields }
+        guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw NotAnObject() }
+        func decode(_ object: [String: Any]) throws -> Fields {
+            try decoder.decode(Fields.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        let kind = object["t"] as? String ?? ""
+        object["t"] = kind
+        // Field by field: a number out of range fails without naming its field.
+        object = object.filter { key, value in key == "t" || (try? decode(["t": kind, key: value])) != nil }
+        return try decode(object)
     }
 
     private static func view(_ m: Fields) -> ScreenView.Request? {
@@ -162,7 +188,13 @@ enum Wire {
     static let denied = #"{"t":"denied"}"#
 
     /// The live view needs the Screen Recording permission.
-    static let viewRefused = #"{"t":"view","ok":false}"#
+    static let viewRefused = #"{"t":"view","ok":false,"why":"permission"}"#
+
+    /// Another phone took the live view: this one gets no more pictures.
+    static let viewTaken = #"{"t":"view","ok":false,"why":"taken"}"#
+
+    /// The answer to `ping`.
+    static let pong = #"{"t":"pong"}"#
 
     /// Whether the Mac's lock screen is up. Follows `accepted`, and comes again whenever it changes. With a
     /// phone enrolled for Face ID, a locked Mac names the passkey to ask for, the salt of the secret that

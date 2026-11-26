@@ -1,10 +1,52 @@
 import AppKit
 import Network
 
+/// What the server asks of the live view: `ScreenView` in the agent, a stand-in in the tests.
+protocol LiveScreen: AnyObject {
+    var cameForward: ((CGRect) -> Void)? { get set }
+    var locked: Bool { get set }
+    func update(_ request: ScreenView.Request?)
+    func frameShown(_ number: UInt32)
+    func pointerMoved()
+    func move(_ sequence: UInt32?, post: () -> Void)
+    func followText(_ on: Bool)
+    func keyFrame()
+    func wake()
+}
+
+extension ScreenView: LiveScreen {}
+
 /// Two loopback-only listeners: plain HTTP for the web UI on `port` and a WebSocket for input on the port after it,
 /// which the page derives from its own. Nothing is reachable from the network directly; `tailscale serve` puts
 /// TLS in front of both.
 final class Server {
+    /// Whether the ports are open. A listener that cannot bind does not throw: it says so later, by its state.
+    enum Health: Equatable {
+        case starting
+        case listening
+        /// Why not, in words for the menu. The server tries again, after a wait that grows with each failure.
+        case failed(String)
+    }
+
+    /// How long things wait. The tests make them short.
+    struct Timing {
+        /// A phone that sent nothing for this long is gone: iOS froze the page, or the radio dropped and the socket
+        /// stays half open. Its connection is closed, which releases and stops everything as a close does. The page
+        /// sends `ping` every 5 s while it is visible.
+        var silence: TimeInterval = 15
+        /// The buttons a silent phone holds are let go after this long, before the connection is given up.
+        var release: TimeInterval = 10
+        /// Between tries to open the ports.
+        var retry = Backoff(first: 1, longest: 60)
+        /// The phone may ask for a key frame this often at most.
+        var keyFrames: TimeInterval = 1
+    }
+
+    private(set) var health = Health.starting {
+        didSet { if health != oldValue { healthChanged?(health) } }
+    }
+    /// Hears every change of `health`, on the main queue.
+    var healthChanged: ((Health) -> Void)?
     /// `REMOTEY_PORT` moves both, so a development build can run beside the installed app.
     static let port: UInt16 = ProcessInfo.processInfo.environment["REMOTEY_PORT"].flatMap(UInt16.init)
         .flatMap { $0 < .max ? $0 : nil } ?? 47800
@@ -24,13 +66,24 @@ final class Server {
     private var displays = Displays()
     private var displaysChanged: NSObjectProtocol?
     private var listeners: [NWListener] = []
+    /// The listeners that are ready, of `listeners`.
+    private var ready: Set<ObjectIdentifier> = []
+    private var timing: Timing
+    private var nextTry: DispatchWorkItem?
+    private var heartbeat: DispatchSourceTimer?
     private var clients: [ObjectIdentifier: Client] = [:]
-    private lazy var screen: ScreenView = {
-        let screen = ScreenView(update: { [weak self] update in
+    /// The client whose two-finger scroll is under way: `Input` has one, whoever scrolls.
+    private var scroller: ObjectIdentifier?
+    private var lastKeyFrame = -TimeInterval.infinity
+    private let canRecord: () -> Bool
+    private let declareActivity: () -> Void
+    private let makeScreen: (@escaping (LiveUpdate) -> Void, @escaping (Pointer.Picture) -> Bool) -> LiveScreen
+    private lazy var screen: LiveScreen = {
+        let screen = makeScreen({ [weak self] update in
             let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
             let context = NWConnection.ContentContext(identifier: "frame", metadata: [metadata])
             self?.viewer?.connection.send(content: update.data, contentContext: context, completion: .idempotent)
-        }, cursor: { [weak self] picture in
+        }, { [weak self] picture in
             guard let self, let viewer = self.viewer, let message = Wire.cursor(picture) else { return false }
             self.send(viewer, message)
             return true
@@ -56,6 +109,11 @@ final class Server {
         /// What the phone's passkey has to sign to unlock the Mac from this connection, once, and the salt
         /// of the secret it seals the password under after that.
         var ask: FaceUnlock.Ask?
+        /// When this connection last sent anything. Any message counts.
+        var heard = ProcessInfo.processInfo.systemUptime
+        /// The mouse buttons this connection pressed and holds, by raw value. Only these are let go when it leaves:
+        /// another phone's drag goes on.
+        var held: Set<UInt32> = []
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
@@ -68,12 +126,21 @@ final class Server {
     private let pendingTimeout: TimeInterval
     private let ports: (http: UInt16, ws: UInt16)
 
+    /// `canRecord` says whether the live view may capture the screen, and asks for the permission if not.
+    /// `screen` makes the live view; `activity` tells the Mac its user is active (`UserActivity`).
     init(token: String, input: Input, port: UInt16 = Server.port, pendingTimeout: TimeInterval = 5,
-         lock: LockScreen = LockScreen(), faceUnlock: FaceUnlock? = nil) {
+         lock: LockScreen = LockScreen(), faceUnlock: FaceUnlock? = nil, timing: Timing = Timing(),
+         canRecord: @escaping () -> Bool = Server.canRecord,
+         activity: @escaping () -> Void = UserActivity.declare,
+         screen: ((@escaping (LiveUpdate) -> Void, @escaping (Pointer.Picture) -> Bool) -> LiveScreen)? = nil) {
         self.token = token
         self.input = input
         self.ports = (port, port + 1)
         self.pendingTimeout = pendingTimeout
+        self.timing = timing
+        self.canRecord = canRecord
+        self.declareActivity = activity
+        self.makeScreen = screen ?? { ScreenView(update: $0, cursor: $1) }
         self.lock = lock
         self.faceUnlock = faceUnlock ?? FaceUnlock(file: FaceUnlock.file(port: port))
         lock.changed = { [weak self] locked in
@@ -97,9 +164,20 @@ final class Server {
         }
     }
 
+    private static func canRecord() -> Bool {
+        if CGPreflightScreenCaptureAccess() { return true }
+        CGRequestScreenCaptureAccess()
+        return false
+    }
+
     func stop() {
+        nextTry?.cancel()
+        nextTry = nil
+        heartbeat?.cancel()
+        heartbeat = nil
         listeners.forEach { $0.cancel() }
         listeners = []
+        ready = []
         pending.forEach { $0.cancel() }
         clients.values.forEach { $0.connection.cancel() }
         // A window that has the phone's shape gets its frame back now, not with the news of the closed connection.
@@ -203,13 +281,38 @@ final class Server {
         return true
     }
 
+    /// Opens the ports. `health` says when they are open, or why not; the server tries again until they are, or
+    /// until `stop`. Throws only for parameters Network refuses, which no later try changes.
     func start() throws {
+        try listen()
+        let heartbeat = DispatchSource.makeTimerSource(queue: .main)
+        let every = max(0.02, min(timing.silence, timing.release) / 10)
+        heartbeat.schedule(deadline: .now() + every, repeating: every)
+        heartbeat.setEventHandler { [weak self] in self?.checkSilence() }
+        heartbeat.resume()
+        self.heartbeat = heartbeat
+    }
+
+    private func listen() throws {
+        nextTry = nil
+        health = .starting
         let http = try listener(port: ports.http, parameters: .tcp)
         http.newConnectionHandler = { [weak self] in self?.serveHTTP($0) }
 
         let wsOptions = NWProtocolWebSocket.Options()
         wsOptions.autoReplyPing = true
         wsOptions.maximumMessageSize = 64 * 1024
+        // A page in the Mac's browser may open sockets to the loopback port. The handshake names the page.
+        wsOptions.setClientRequestHandler(.main) { _, headers in
+            let fields = HeaderFields(headers)
+            guard Origins.allows(fields) else {
+                if ScreenView.statsOn {
+                    FileHandle.standardError.write(Data("ws refused: host \(fields["Host"] ?? "-"), origin \(fields["Origin"] ?? "-")\n".utf8))
+                }
+                return NWProtocolWebSocket.Response(status: .reject, subprotocol: nil)
+            }
+            return NWProtocolWebSocket.Response(status: .accept, subprotocol: nil)
+        }
         // Without Nagle's algorithm: a frame smaller than a segment must not wait for the acknowledgement of the one before.
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
@@ -219,13 +322,86 @@ final class Server {
         ws.newConnectionHandler = { [weak self] in self?.serveWebSocket($0) }
 
         listeners = [http, ws]
-        listeners.forEach { $0.start(queue: .main) }
+        ready = []
+        for (listener, port) in [(http, ports.http), (ws, ports.ws)] {
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener else { return }
+                self.listener(listener, on: port, changed: state)
+            }
+            listener.start(queue: .main)
+        }
     }
 
+    private func listener(_ listener: NWListener, on port: UInt16, changed state: NWListener.State) {
+        // A listener given up already, of an earlier try.
+        guard listeners.contains(where: { $0 === listener }) else { return }
+        switch state {
+        case .ready:
+            ready.insert(ObjectIdentifier(listener))
+            if ready.count == listeners.count {
+                timing.retry.reset()
+                health = .listening
+            }
+        case .failed(let error), .waiting(let error):
+            let reason = if case .posix(.EADDRINUSE) = error { "Port \(port) ist belegt" } else { "Port \(port): \(error)" }
+            failed(reason)
+        default: break
+        }
+    }
+
+    /// Both listeners go, and a new pair tries again later.
+    private func failed(_ reason: String) {
+        listeners.forEach { $0.cancel() }
+        listeners = []
+        ready = []
+        let wait = timing.retry.failed()
+        health = .failed(reason)
+        if ScreenView.statsOn { FileHandle.standardError.write(Data("listen failed: \(reason), next try in \(wait) s\n".utf8)) }
+        let next = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            do { try self.listen() } catch { self.failed("\(error)") }
+        }
+        nextTry = next
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: next)
+    }
+
+    /// Network sets the address to be reused on a listener either way: measured on macOS 27, a port another
+    /// listener holds fails with this as without it (EADDRINUSE, also against another process with SO_REUSEADDR
+    /// or SO_REUSEPORT), and one that only has connections in TIME_WAIT opens without it as well.
     private func listener(port: UInt16, parameters: NWParameters) throws -> NWListener {
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
         parameters.allowLocalEndpointReuse = true
         return try NWListener(using: parameters)
+    }
+
+    // MARK: Heartbeat
+
+    /// A phone that went silent lets go of its buttons, and after a while longer its connection.
+    private func checkSilence() {
+        let now = ProcessInfo.processInfo.systemUptime
+        for client in clients.values where client.authed {
+            let quiet = now - client.heard
+            if quiet >= timing.silence {
+                if ScreenView.statsOn { FileHandle.standardError.write(Data("silent for \(Int(quiet)) s: closed\n".utf8)) }
+                client.connection.cancel()
+            } else if quiet >= timing.release {
+                release(client)
+            }
+        }
+    }
+
+    /// Lets go of what this client holds: its buttons, and the scroll it began.
+    private func release(_ client: Client) {
+        for raw in client.held { if let button = CGMouseButton(rawValue: raw) { input.button(button, down: false) } }
+        client.held = []
+        if scroller == ObjectIdentifier(client) {
+            scroller = nil
+            input.endScroll()
+        }
+    }
+
+    private func heldByAnother(_ button: CGMouseButton, than client: Client) -> Bool {
+        clients.values.contains { $0 !== client && $0.held.contains(button.rawValue) }
     }
 
     // MARK: HTTP
@@ -237,12 +413,16 @@ final class Server {
             self?.settle(connection)
             guard let data else { return connection.cancel() }
             let requestLine = String(data: data, encoding: .utf8)?.components(separatedBy: "\r\n").first ?? ""
-            if ScreenView.statsOn { FileHandle.standardError.write(Data("http \(requestLine)\n".utf8)) }
+            let host = HeaderFields(request: data)["Host"]
+            if ScreenView.statsOn { FileHandle.standardError.write(Data("http \(requestLine) host \(host ?? "-")\n".utf8)) }
             let parts = requestLine.split(separator: " ")
             let path = parts.count > 1 ? String(parts[1].split(separator: "?").first ?? "") : ""
 
             var status = "404 Not Found", type = "text/plain; charset=utf-8", body = Data("Not found".utf8)
-            if parts.first == "GET", let file = Web.file(path == "/" ? "index.html" : String(path.dropFirst())) {
+            // A name that is not the page's own leads here by DNS rebinding: a page that would read the page's files.
+            if !Origins.allows(host: host) {
+                (status, body) = ("403 Forbidden", Data("Forbidden".utf8))
+            } else if parts.first == "GET", let file = Web.file(path == "/" ? "index.html" : String(path.dropFirst())) {
                 (status, type, body) = ("200 OK", file.type, file.body)
             }
             let head = [
@@ -274,7 +454,8 @@ final class Server {
             case .failed, .cancelled:
                 guard let self, self.clients.removeValue(forKey: id) != nil else { return }
                 self.settle(connection)
-                if client.authed { self.input.releaseAll() }
+                // Only what this phone holds: another one may be in the middle of a drag.
+                if client.authed { self.release(client) }
                 if self.viewer === client { self.stopView() }
             default: break
             }
@@ -294,7 +475,12 @@ final class Server {
                 client.connection.cancel()
                 return
             }
+            client.heard = ProcessInfo.processInfo.systemUptime
             if client.authed {
+                // A field the agent does not know how to read costs this message, not the connection.
+                if case .ignored = command, ScreenView.statsOn {
+                    FileHandle.standardError.write(Data("ignored: \(String(decoding: data.prefix(200), as: UTF8.self))\n".utf8))
+                }
                 self.handle(command, from: client)
             } else if case .auth(let candidate) = command, Token.matches(candidate, self.token) {
                 self.lock.refresh()
@@ -324,12 +510,16 @@ final class Server {
         switch command {
         case .move, .scroll, .click, .button, .text, .key, .focus, .display, .unlock, .unlockWithPasskey: true
         case .view(let request): request != nil
-        case .auth, .scrollEnded, .media, .shown, .apps, .displays, .enrol, .ignored: false
+        case .auth, .scrollEnded, .media, .shown, .apps, .displays, .enrol, .ping, .keyFrame, .ignored: false
         }
     }
 
     private func handle(_ command: Wire.Command, from client: Client) {
-        if Self.isActivity(command) { UserActivity.declare() }
+        if Self.isActivity(command) {
+            declareActivity()
+            // The display this wakes may have a capture again.
+            if viewer === client { screen.wake() }
+        }
         switch command {
         case .move(let dx, let dy, let sequence):
             // The view follows at once instead of waiting for the screen to show the move.
@@ -341,13 +531,20 @@ final class Server {
             }
         case .scroll(let dx, let dy):
             if viewer === client { screen.followText(false) } // scrolling moves the text away from where it was
+            scroller = ObjectIdentifier(client)
             input.scroll(dx: dx, dy: dy)
-        case .scrollEnded: input.endScroll()
+        case .scrollEnded:
+            scroller = nil
+            input.endScroll()
         case .click(let button, let mods):
+            // A button another phone holds is not this one's to click: its release would end that drag.
+            guard !heldByAnother(button, than: client) else { return }
             if viewer === client { screen.followText(false) } // the view shows where the click lands
             input.click(button, mods: mods)
         case .button(let button, let down, let mods):
+            guard !heldByAnother(button, than: client) else { return }
             if viewer === client { screen.followText(false) }
+            if down { client.held.insert(button.rawValue) } else { client.held.remove(button.rawValue) }
             input.button(button, down: down, mods: mods)
         case .text(let text):
             input.type(text)
@@ -359,7 +556,9 @@ final class Server {
         case .media(let key): input.media(key)
         case .view(let request): view(request, for: client)
         case .shown(let number): if viewer === client { screen.frameShown(number) }
-        case .apps:
+        case .apps(let have):
+            // The page kept the icons of an earlier connection: only those it lacks go out.
+            if let have { client.icons = have }
             apps.list { [weak self, weak client] list in
                 guard let self, let client else { return }
                 self.send(client, Wire.apps(list))
@@ -407,6 +606,12 @@ final class Server {
                 return send(client, Wire.enrolled(false))
             }
             endEnrolment(enrolled: true)
+        case .ping: send(client, Wire.pong)
+        case .keyFrame:
+            let now = ProcessInfo.processInfo.systemUptime
+            guard viewer === client, now - lastKeyFrame >= timing.keyFrames else { return }
+            lastKeyFrame = now
+            screen.keyFrame()
         case .auth, .ignored: break
         }
     }
@@ -417,11 +622,12 @@ final class Server {
             if viewer === client { stopView() }
             return
         }
-        guard CGPreflightScreenCaptureAccess() else {
-            CGRequestScreenCaptureAccess()
-            return send(client, Wire.viewRefused)
+        guard canRecord() else { return send(client, Wire.viewRefused) }
+        if viewer !== client {
+            // The phone that had the view hears that its picture stops, instead of seeing it stand still.
+            if let displaced = viewer { send(displaced, Wire.viewTaken) }
+            stopView()
         }
-        if viewer !== client { stopView() }
         viewer = client
         screen.locked = lock.isLocked
         screen.update(request)

@@ -23,6 +23,8 @@ final class H264Encoder {
         }
     }
     private let session: VTCompressionSession
+    /// The next picture is a key frame, with its parameter sets: the phone's decoder lost its state.
+    private var keyFrameDue = false
 
     init(width: Int, height: Int, framesPerSecond: Int32 = 60, bitsPerSecond: Double = LinkRate.most) throws {
         self.width = width
@@ -63,6 +65,9 @@ final class H264Encoder {
 
     deinit { VTCompressionSessionInvalidate(session) }
 
+    /// Makes the next picture a key frame. The session and its rate control go on, unlike with a new encoder.
+    func requestKeyFrame() { keyFrameDue = true }
+
     /// The callback may run on a VideoToolbox thread. A rate-control drop is not an encoder failure.
     func encode(_ image: CIImage, context: CIContext, completion: @escaping (Output) -> Void) throws {
         guard let pool = VTCompressionSessionGetPixelBufferPool(session) else {
@@ -74,15 +79,17 @@ final class H264Encoder {
         let bounds = CGRect(x: 0, y: 0, width: width, height: height)
         context.render(image, to: buffer, bounds: bounds, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
         let time = CMTime(seconds: ProcessInfo.processInfo.systemUptime, preferredTimescale: 1_000_000)
+        let properties = keyFrameDue ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         try Self.check(VTCompressionSessionEncodeFrame(
             session, imageBuffer: buffer, presentationTimeStamp: time, duration: .invalid,
-            frameProperties: nil, infoFlagsOut: nil
+            frameProperties: properties, infoFlagsOut: nil
         ) { status, flags, sample in
             if status != noErr { completion(.failed) }
             else if flags.contains(.frameDropped) { completion(.dropped) }
             else if let frame = sample.flatMap(Self.packet) { completion(.frame(frame)) }
             else { completion(.failed) }
         })
+        keyFrameDue = false
     }
 
     /// Payload: profile/compatibility/level bytes, IDR flag, then Annex B H.264.

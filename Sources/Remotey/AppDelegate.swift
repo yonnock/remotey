@@ -7,7 +7,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let tailnetPort = 8443
 
     private let input = Input()
-    private lazy var server = Server(token: Token.load(), input: input)
+    private lazy var server: Server = {
+        let loaded = Token.load()
+        tokenProblem = loaded.failure.map { "Token nicht gespeichert, gilt nur bis zum Beenden: \($0)" }
+        return Server(token: loaded.token, input: input)
+    }()
+    /// The token in use is not the one in the file, or there is none: the menu says so.
+    private var tokenProblem: String?
+    /// `pkill` and Control-C end the agent with a signal, on which AppKit does not call `applicationWillTerminate`.
+    private var signals: [DispatchSourceSignal] = []
     private var statusItem: NSStatusItem!
     private var pairingWindow: NSWindow?
     private lazy var faceUnlockWindow = FaceUnlockWindow(server: server)
@@ -19,10 +27,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
 
+        endOnSignals()
+        // A window the last run left in the phone's shape, when it crashed or was killed.
+        ShapedFrame.restore()
+        server.healthChanged = { [weak self] health in self?.show(health) }
+        show(server.health)
         do {
             try server.start()
         } catch {
-            alert("Remotey konnte nicht starten", "Port \(Server.port)/\(Server.port + 1) ist belegt: \(error.localizedDescription)")
+            alert("Remotey konnte nicht starten", "Port \(Server.port)/\(Server.port + 1): \(error.localizedDescription)")
             NSApp.terminate(nil)
         }
         // Shows the system prompt once if the permission is missing.
@@ -34,16 +47,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         server.stop()
     }
 
+    /// Ends the agent in order on SIGTERM and SIGINT, so the window in the phone's shape gets its frame back.
+    private func endOnSignals() {
+        for number in [SIGTERM, SIGINT] {
+            signal(number, SIG_IGN) // else the default action ends the process before the source hears it
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler { NSApp.terminate(nil) }
+            source.resume()
+            signals.append(source)
+        }
+    }
+
+    /// A dimmed icon while the ports are not open; the menu says why.
+    private func show(_ health: Server.Health) {
+        statusItem?.button?.appearsDisabled = health != .listening
+        if health != .listening { pairingWindow?.close() }
+    }
+
+    private var healthText: String {
+        let ports = "Port \(Server.port)/\(Server.port + 1)"
+        return switch server.health {
+        case .starting: "Öffnet \(ports)…"
+        case .listening: "Bereit auf \(ports)"
+        case .failed(let reason): "Nicht erreichbar: \(reason). Neuer Versuch folgt."
+        }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        menu.addItem(withTitle: healthText, action: nil, keyEquivalent: "")
+        if let tokenProblem { menu.addItem(withTitle: tokenProblem, action: nil, keyEquivalent: "") }
         if AXIsProcessTrusted() {
             menu.addItem(withTitle: "Bedienungshilfen: erlaubt", action: nil, keyEquivalent: "")
         } else {
             add(menu, "Bedienungshilfen fehlen, Einstellungen öffnen…", #selector(openAccessibilitySettings))
         }
         menu.addItem(.separator())
-        add(menu, "iPhone koppeln (QR-Code)…", #selector(showPairing))
-        add(menu, "Link kopieren", #selector(copyLink))
+        // No pairing while nothing listens: the phone would get a link that leads nowhere.
+        let listening = server.health == .listening
+        add(menu, "iPhone koppeln (QR-Code)…", listening ? #selector(showPairing) : nil)
+        add(menu, "Link kopieren", listening ? #selector(copyLink) : nil)
         add(menu, "Token erneuern (trennt alle Geräte)", #selector(rotateToken))
         menu.addItem(.separator())
         if server.unlocksWithFaceID {
@@ -59,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @discardableResult
-    private func add(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
+    private func add(_ menu: NSMenu, _ title: String, _ action: Selector?) -> NSMenuItem {
         let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
         item.target = self
         return item
@@ -80,8 +123,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func rotateToken() {
-        server.token = Token.rotate()
+        do {
+            server.token = try Token.rotate()
+            tokenProblem = nil
+        } catch {
+            // The old token is still in the file, so it stays: a new one would be lost with the next start.
+            return alert("Token nicht erneuert", "\(error). Der bisherige Token gilt weiter.")
+        }
         pairingWindow?.close()
+        guard server.health == .listening else { return }
         showPairing()
     }
 

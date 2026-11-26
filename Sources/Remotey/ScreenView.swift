@@ -214,6 +214,10 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
             guard let self, self.request != nil else { return }
             self.configure()
         }
+        // A display that wakes has a capture again: one that waits to be rebuilt is rebuilt now.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.rebuildNow(always: true) }
     }
 
     private static let maxOutputWidth = 1400.0
@@ -251,6 +255,11 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
     private var active: Set<CGDirectDisplayID>?
     private var configuring = false
     private var dirty = false
+    /// The capture could not be set up, and the next try waits: longer with every failure in a row, since a
+    /// display that sleeps has nothing to capture for minutes. Input from the phone or a display that wakes
+    /// cut the wait short (`rebuildNow`).
+    private var retry = Backoff(first: 1, longest: 30)
+    private var retrying: Task<Void, Never>?
     /// Reports pointer moves the phone did not send: the Mac's own mouse or trackpad.
     private var mouseMonitor: Any?
     /// The pointer picture the phone has.
@@ -355,7 +364,7 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         }
         queue.async {
             self.resetFrames()
-            if restarting { self.window.reset() }
+            if restarting { self.withdrawAll() }
             if fresh { self.link = LinkRate() }
         }
         self.request = request
@@ -365,6 +374,36 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
         watchWindow()
         sendCursorIfChanged()
         configure()
+    }
+
+    /// Input from the phone: the display it woke may have a capture again. A wait longer than the first is cut
+    /// short; the first one stays, so input that comes a hundred times a second does not try as often.
+    func wake() { rebuildNow(always: false) }
+
+    private func rebuildNow(always: Bool) {
+        guard let retrying, always || retry.failures > 1 else { return }
+        retry.reset()
+        retrying.cancel()
+    }
+
+    /// The phone's decoder lost its state. An H.264 stream goes on with a key frame, and the send window starts
+    /// over as after a restart: the pictures under way were for a decoder that is gone.
+    func keyFrame() {
+        queue.async {
+            guard self.geometry?.request.h264 == true, !self.jpegFallback, let encoder = self.encoder else { return }
+            encoder.requestKeyFrame()
+            self.withdrawAll()
+            self.link.restarts()
+            self.stale = true
+            self.encodeLatest()
+        }
+    }
+
+    /// The pictures under way will not be answered: the link no longer counts them either, else it would take
+    /// itself to be busy from now on. Frame queue.
+    private func withdrawAll() {
+        let now = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<window.reset() { link.withdrawn(now: now) }
     }
 
     /// The phone has drawn (or discarded) the picture with this number.
@@ -509,11 +548,16 @@ final class ScreenView: NSObject, SCStreamDelegate, @unchecked Sendable {
                 dirty = false
                 do {
                     try await apply()
+                    retry.reset()
                 } catch {
-                    if Stats.on { FileHandle.standardError.write(Data("capture failed: \(error)\n".utf8)) }
                     await teardown()
                     if request != nil {
-                        try? await Task.sleep(for: .seconds(1))
+                        let wait = retry.failed()
+                        if Stats.on { FileHandle.standardError.write(Data("capture failed: \(error), next try in \(wait) s\n".utf8)) }
+                        let pause = Task { _ = try? await Task.sleep(for: .seconds(wait)) }
+                        retrying = pause
+                        await pause.value
+                        retrying = nil
                         dirty = true
                     }
                 }

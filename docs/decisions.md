@@ -690,6 +690,92 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
     - Prüfungen: `swift test` 142 Tests, `node --test scripts/` 70 Tests, `scripts/ui-verify.mjs` (Seite in Chromium,
       T14 mit einem `lock` ohne `next`, wie ein älterer Agent ihn schickt). Jeder neue Swift-Test scheitert ohne seine
       Änderung (für das Tippen in Blöcken vorgeführt: sechs Fehler im alten `LockScreen`).
+18. CI, sichere Skripte und die Robustheit des Agenten (Runde aus einer Analyse des Repos; jeder Befund am Code
+    geprüft, jede Änderung mit einem Test, der ohne sie fehlschlägt: neun Abwandlungen von `Server`, `Wire` und
+    `Origins`, je eine Änderung zurückgenommen, ließen je ihren Test scheitern).
+    - CI: `.github/workflows/ci.yml` auf `macos-26` für Pull Requests und Pushes auf `main` und `development`:
+      `swift build --build-tests`, `swift test`, `node --test scripts/*.test.mjs` (Node 24), `ui-verify.mjs`.
+      Die Tests heißen beim Namen: `node --test scripts/` fand auf Node 24 keine (vom Lead gemeldet), hier auf
+      Node 26 69. chrome-headless-shell kommt per `npx playwright@1.64.0 install --only-shell chromium`, das ist
+      Build 1248 wie bei den Messungen oben; kein `package.json`. `ui-verify.mjs` urteilt nicht und endet mit 0,
+      darum prüft `.github/check-ui-verify.mjs` jedes `ok` im Bericht (lokal 19 von 19) und nennt die falschen als
+      Annotation. Ein Fehlschlag druckt die gescheiterten Swift-Tests und lädt Log, Bericht und Bilder hoch.
+    - Was auf einem gehosteten Mac anders ist: eine virtuelle Maschine mit angemeldeter Sitzung, ohne
+      Bedienungshilfen und Bildschirmaufnahme. Kein Test braucht die beiden Rechte: ohne Bedienungshilfen hat die
+      App-Liste keine Fenster, das prüft niemand. Der Hardware-Encoder fehlt in einer VM womöglich; dann überspringen
+      die `H264EncoderTests` mit dem Status von VideoToolbox, aber nur, wenn `CI` gesetzt ist, sonst schlagen sie
+      fehl. Finder und die Displays werden nicht mehr vorausgesetzt, sondern mit dem verglichen, was die Maschine
+      hat (`NSWorkspace`, `NSScreen`). Die Server-Tests mit Eingaben posten nichts: `Input` sammelt die Ereignisse,
+      das Live-Bild ist ein Stellvertreter (`LiveScreen`), Bildschirmrecht und Nutzeraktivität sind eingesetzt.
+    - Skripte: `smoke`, `bench`, `lock` und `agent.mjs` liegen in `scripts/live/`. Jedes importiert zuerst
+      `guard.mjs`, das ohne `--live` wirft; Importe werden in ihrer Reihenfolge ausgewertet, also läuft vorher nichts,
+      auch kein Lesen des Tokens. `lock.mjs` braucht dazu `--lock-mac`. Geprüft: ohne Schalter, als Import und mit
+      `node --test scripts/live/` tun sie nichts. `agent.mjs` sendet alle 5 s `ping` und reicht `pong` nicht weiter
+      (gegen einen nachgebauten Socket: nach 11 s zwei `ping`, kein `pong` beim Skript).
+    - Ports (a): `NWListener` wirft beim Belegen nicht, er meldet `.failed` später. Gemessen auf macOS 27: ein
+      zweiter Listener auf demselben Port scheitert mit EADDRINUSE, mit und ohne `allowLocalEndpointReuse`, auch
+      gegen einen anderen Prozess mit SO_REUSEADDR auf 0.0.0.0 oder SO_REUSEPORT auf 127.0.0.1; ein Port mit
+      Verbindungen in TIME_WAIT öffnet in beiden Fällen, auch aus einem neuen Prozess. Der Schalter ändert also
+      nichts, was sich hier zeigt; er bleibt. `Server.health` ist `starting`, `listening` oder `failed(Grund)` mit
+      `healthChanged`; scheitert einer der beiden Listener, gehen beide, und ein neues Paar versucht es nach 1, 2,
+      4 … höchstens 60 s. Das Menü zeigt den Zustand, Koppeln und Link sind aus, solange nichts lauscht, das Symbol
+      ist gedimmt. Der Alarm beim Start entfällt: er hätte nie erscheinen können, und eine Wiederholung braucht ihn
+      nicht. Test: ein zweiter Server auf denselben Ports meldet `failed` mit dem Port und lauscht, sobald der erste
+      geht.
+    - Herzschlag (b): die Seite sendet `{"t":"ping"}` alle 5 s, solange sie sichtbar ist, der Agent antwortet
+      `{"t":"pong"}`. Jede Nachricht zählt als Lebenszeichen. Nach 10 s Stille lässt der Agent die Tasten dieses
+      Telefons los und beendet seinen Bildlauf, nach 15 s schließt er die Verbindung, was alles weitere wie ein
+      Schließen erledigt (Bild aus, Fenster zurück). Die Zeiten sind in `Server.Timing` einsetzbar, die Tests laufen
+      mit 0,3 und 0,8 s. Geprüft alle 1/10 der kürzeren Zeit.
+    - Mehrere Telefone (c): jedes `Client` führt die Tasten, die es drückte; ein Telefon, das geht oder schweigt,
+      lässt nur diese los. Eine Taste, die ein anderes hält, kann es weder drücken noch loslassen noch klicken (sonst
+      endete dessen Ziehen). Der Bildlauf gehört dem, der zuletzt scrollte: `Input` hat nur einen.
+    - Verdrängt (d): wer das Live-Bild an ein anderes Telefon verliert, hört `{"t":"view","ok":false,"why":"taken"}`;
+      die fehlende Bildschirmaufnahme heißt `{"t":"view","ok":false,"why":"permission"}`. Wer nur neu anfragt,
+      verdrängt niemanden.
+    - Token (e): geschrieben in eine 0600-Datei daneben und per `rename` darüber, also steht dort der alte oder der
+      neue, nie ein Teil. Scheitert das, wirft `rotate` und der alte gilt weiter, im Speicher wie nach einem
+      Neustart; das Menü meldet es. Ein Token, der beim ersten Start nicht gespeichert werden kann, gilt bis zum
+      Beenden, und das Menü sagt das.
+    - Fehlerhafte Nachrichten (f): ein Feld vom falschen Typ zählt als fehlend, Feld für Feld geprüft, weil eine
+      Zahl außerhalb des Bereichs (`"q":-1`, `"n":1.5`) ihren Feldnamen im `DecodingError` nicht nennt. So kostet
+      es nur eine Nachricht, deren Art das Feld braucht; die Verbindung bleibt, `REMOTEY_STATS` schreibt sie auf.
+      Eine Ansichtsanfrage mit `on: true` und fehlendem Feld wird verworfen statt als „aus“ gelesen. Was kein
+      JSON-Objekt ist, beendet die Verbindung weiter. Der schnelle Weg (ein Dekodieren) bleibt für jede gültige
+      Nachricht.
+    - Schlüsselbild (g): `{"t":"idr"}` vom Betrachter: der Encoder macht das nächste Bild zum Schlüsselbild
+      (`kVTEncodeFrameOptionKey_ForceKeyFrame`, dieselbe Sitzung und Ratenregelung), das Sendefenster beginnt neu,
+      `LinkRate` zählt die unbeantworteten Bilder nicht mehr als unterwegs (sonst hielte es die Strecke für
+      belegt; dasselbe galt schon beim Wechsel des Codecs und ist mit behoben). Höchstens eins je Sekunde, nur für
+      H.264; ein JPEG-Strom braucht keins.
+    - Symbole (h): `{"t":"apps","have":[…]}` nennt bis zu 256 Symbole, die die Seite hat; nur die übrigen gehen
+      hinaus. Ohne `have` gilt, was die Verbindung schon bekam, wie bisher.
+    - Schlafendes Display (i): der Neuaufbau wartet nach jedem Fehlschlag doppelt so lang, 1 bis 30 s. Eine Eingabe
+      vom Betrachter kürzt eine Wartezeit über der ersten ab und beginnt wieder bei 1 s; das Aufwachen der Displays
+      (`screensDidWakeNotification`) kürzt jede ab. Der erste Versuch nach einem Fehlschlag kommt also wie bisher
+      nach 1 s, und der Weg von der Eingabe zum Bild aus Runde 11 (0,34 s, mit Neuaufbau im Sekundentakt bis etwa
+      1,5 s) wird nicht länger: die Eingabe weckt, das Aufwachen baut sofort neu auf.
+    - Signale (j): SIGTERM und SIGINT beenden über `NSApp.terminate`, also mit `applicationWillTerminate` und dem
+      Rahmen zurück. `build.sh` sendet SIGTERM und erst nach 10 s SIGKILL. Solange ein Fenster in Telefonform ist,
+      steht sein alter Rahmen in `shaped-window` (je Port, wie der Token); beim nächsten Start bekommt das Fenster
+      ihn zurück, wenn die App noch läuft (pid und Bundle) und das Fenster noch den Rahmen hat, den es nahm, auf
+      einen Punkt genau. Was der Nutzer seitdem damit tat, bleibt.
+    - Herkunft (k): geprüft werden `Host` auf beiden Ports und `Origin` beim WebSocket-Handshake
+      (`setClientRequestHandler` sieht die Kopfzeilen, gemessen: `Host` ist darunter). Beleg aus Tailscale,
+      `ipn/ipnlocal/serve.go` (main, f2c476c): der Proxy ist `httputil.ReverseProxy` mit `Rewrite`, und
+      `reverseProxy.ServeHTTP` setzt `r.Out.Host = r.In.Host`, außer bei einem Unix-Socket als Ziel; dazu kommen
+      `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-For` und die `Tailscale-User-*`-Kopfzeilen. `Origin`
+      fasst es nicht an: `ReverseProxy` entfernt nur Hop-by-hop-Kopfzeilen und mitgebrachte `X-Forwarded-*`. Das Telefon sendet also `Host:
+      <mac>.<tailnet>.ts.net:8443` und `Origin: https://<mac>.<tailnet>.ts.net:8443`. Regel: zugelassen sind
+      127.0.0.1, localhost, ::1 und jeder Name auf `.ts.net`, mit beliebigem Port, in beiden Feldern; ein Feld, das
+      fehlt, lässt durch, `Origin: null` nicht. Gewählt, damit sie das eigene Telefon nicht abweisen kann, auch wo
+      ich nichts prüfen konnte: ältere Tailscale-Versionen, die `Host` womöglich auf das Ziel umschrieben, stünden
+      bei 127.0.0.1; der Name des Macs wird nicht verglichen, weil ihn nur `tailscale status` liefert und ein
+      umbenannter Mac sonst gesperrt wäre; Host und Origin müssen nicht übereinstimmen (in der Entwicklung liegt
+      der Socket einen Port weiter). Was das abwehrt: eine Seite im Browser des Macs (ihr `Origin` ist ihr eigener
+      Name), DNS-Rebinding (ihr `Host` ist ihr Name), auch das Füllen der 32 Plätze, denn der Handshake scheitert
+      sofort statt nach 5 s. Was nicht: ein Prozess auf dem Mac, der sendet, was er will. `HeaderFields` liest
+      Kopfzeilen für beide Wege und ist für Gerätschlüssel und `Tailscale-User-*` wiederverwendbar.
 
 ## Not verified
 
@@ -764,3 +850,13 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   nur aus dem Header (`kODErrorCredentialsInvalid`), nicht gemessen: ein Versuch mit falschem Passwort zählte als
   fehlgeschlagene Anmeldung. Die Ränder unter den Bedienelementen sind nur gerechnet; die Seite sendet `inset` noch
   nicht, Bild, Kopf und schwarze Flächen liefen nicht am Mac.
+- Runde 18: der CI-Lauf selbst. `macos-26` als Image, ob ein gehosteter Mac einen Hardware-Encoder hat, ob er eine
+  Anzeige und den Finder zeigt, und `npx playwright@1.64.0 install --only-shell chromium` dort sind nicht gelaufen;
+  der Lead beobachtet den ersten Lauf. Node 24 ist hier nicht installiert, der Aufruf mit Dateinamen lief nur auf
+  Node 26. Die Signale sind nicht am laufenden Agenten geprüft (er durfte nicht starten), ebenso wenig das
+  Zurückgeben des Rahmens nach einem Absturz, das Menü und das gedimmte Symbol: der Weg über `NSApp.terminate` und
+  `ShapedFrame.restore` ist nur gelesen, `ShapedFrame` nur in seinen reinen Teilen getestet. Der Rückzug des
+  Neuaufbaus bei schlafendem Display ist nur als `Backoff` getestet, nicht mit einem echten Display;
+  `screensDidWakeNotification` als Auslöser ist aus der Dokumentation, nicht gemessen. Das erzwungene
+  Schlüsselbild ist am Encoder getestet, nicht im Strom zu einem Telefon. Tailscale: gelesen ist der Quelltext von
+  main, nicht der der installierten Version, und kein echter Handshake durch `tailscale serve` wurde mitgeschnitten.

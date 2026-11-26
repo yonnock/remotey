@@ -118,3 +118,15 @@ final class SendWindowTests: XCTestCase {
         XCTAssertTrue(window.isOpen(now: 1.06))
     }
 }
+
+final class SendWindowResetTests: XCTestCase {
+    /// The link counts the pictures under way too: it is told how many will never be answered.
+    func testAResetSaysHowManyPicturesWereUnderWay() {
+        var window = SendWindow()
+        _ = window.send(100, now: 0)
+        let late = window.send(100, now: 0)
+        XCTAssertEqual(window.reset(), 2)
+        XCTAssertNil(window.answered(late, now: 1), "a late answer fits no new picture")
+        XCTAssertEqual(window.reset(), 0)
+    }
+}
