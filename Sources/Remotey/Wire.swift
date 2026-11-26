@@ -236,12 +236,12 @@ enum Wire {
 }
 
 extension LiveUpdate {
-    static let headerSize = 35
+    static let headerSize = 47
 
     /// One binary message, little endian: UInt8 kind (0 pointer only, 1 JPEG, 2 H.264), UInt8 frames per second,
     /// UInt8 flags (1: the view follows the text caret, 2: it is fitted to the window in front), Float32 pointer x
-    /// and y, Float32 focus x and y, Float32 width, UInt32 sequence, UInt32 number of the view request, UInt32
-    /// picture number, then the picture.
+    /// and y, Float32 focus x and y, Float32 width and height of the view, Float32 its left and top edge, UInt32
+    /// sequence, UInt32 number of the view request, UInt32 picture number, then the picture.
     var data: Data {
         let (kind, payload): (UInt8, Data) = switch picture?.content {
         case nil: (0, Data())
@@ -252,8 +252,8 @@ extension LiveUpdate {
         data.append(kind)
         data.append(UInt8(clamping: framesPerSecond))
         data.append((followsText ? 1 : 0) | (fitted ? 2 : 0))
-        for value in [Float32(pointer.x).bitPattern, Float32(pointer.y).bitPattern, Float32(focus.x).bitPattern,
-                      Float32(focus.y).bitPattern, Float32(width).bitPattern, sequence, request, picture?.number ?? 0] {
+        let floats = [pointer.x, pointer.y, focus.x, focus.y, view.width, view.height, view.minX, view.minY]
+        for value in floats.map({ Float32($0).bitPattern }) + [sequence, request, picture?.number ?? 0] {
             withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
         }
         data.append(payload)

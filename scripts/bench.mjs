@@ -1,8 +1,8 @@
 // Measures the live view of a running agent: delay from a pointer move to the message that shows it,
 // delivered frame rate, CPU time, and whether a burst of pointer moves arrives complete.
-// Usage: node scripts/bench.mjs [--fps=120] [--size=366x420] [--move-rate=240] [--ack-delay=30 | --link=wifi | --link=3mbit] [--jpeg] [--still]
+// Usage: node scripts/bench.mjs [--fps=120] [--size=366x420] [--move-rate=240] [--ack-delay=30 | --link=wifi | --link=relay | --link=3mbit | --link=relay,3mbit] [--jpeg] [--still] [--seconds=8]
 // Moves the pointer for about 20 seconds and puts it back. --still leaves the pointer alone and measures the stream
-// for 8 seconds only: meant for an agent started with REMOTEY_TEST_PATTERN, whose picture moves by itself.
+// for 8 seconds only, or --seconds: meant for an agent started with REMOTEY_TEST_PATTERN, whose picture moves by itself.
 // Close Remotey on the phone first: the most recent viewer gets the live view.
 // Frames are answered on arrival, so the numbers are the Mac's side: no decoding, no network.
 import { execFileSync } from 'node:child_process';
@@ -22,24 +22,38 @@ const ackDelay = Number(process.argv.find((arg) => arg.startsWith('--ack-delay='
  * (30 pings, direct connection, in ms), in order: an answer never overtakes the one before, as on one connection.
  */
 const WIFI = [170, 213, 23, 224, 38, 141, 231, 106, 96, 102, 72, 159, 115, 17, 333, 67, 69, 16, 117, 64, 136, 104, 777, 46, 135, 18, 17, 16, 20, 19];
-/** --link=2mbit: a link that carries this many Mbit/s, one message after the other, with a round trip of 20 ms. */
+/**
+ * --link=relay: the same phone on a mobile network, where no direct connection came about and Tailscale's relay
+ * in Paris carried the packets (30 pings a second apart, in ms). The pings are replayed in their order, one a
+ * second: what is sent while a ping is under way arrives with it, and later no sooner than the fastest ping
+ * takes. So every run has the same link, with its two stalls.
+ */
+const RELAY = [1695, 96, 153, 163, 186, 88, 110, 84, 182, 200, 590, 97, 146, 205, 255, 171, 94, 125, 116, 230, 161, 178, 178, 136, 197, 218, 285, 120, 104, 102];
+/** --link=2mbit: a link that carries this many Mbit/s, one message after the other. With `relay,2mbit` it is the relay that does. */
 const link = process.argv.find((arg) => arg.startsWith('--link='))?.slice(7);
-const mbit = /^(\d+(?:\.\d+)?)mbit$/.exec(link ?? '')?.[1];
-if (link && link !== 'wifi' && !mbit) fail('--link is wifi or a rate such as 2mbit');
-let lastAnswer = 0, lastArrival = 0;
+const parts = link?.split(',') ?? [];
+const mbit = Number(parts.map((part) => /^(\d+(?:\.\d+)?)mbit$/.exec(part)?.[1]).find(Boolean) ?? 0);
+const wifi = parts.includes('wifi'), relay = parts.includes('relay');
+if (parts.some((part) => part !== 'wifi' && part !== 'relay' && !/^\d+(?:\.\d+)?mbit$/.test(part)) || (wifi && relay)) fail('--link is wifi, relay, a rate such as 2mbit, or relay,2mbit');
+let lastAnswer = 0, lastArrival = 0, free = 0;
+const started = performance.now();
+/** The round trip of a message that leaves at `now`; 20 ms on a link that only has a rate. */
+function trip(now) {
+  if (wifi) return WIFI[Math.floor(Math.random() * WIFI.length)];
+  if (!relay) return 20;
+  const second = Math.floor((now - started) / 1000);
+  return Math.max(Math.min(...RELAY), RELAY[second % RELAY.length] - (now - started - second * 1000));
+}
 /**
  * When a message of `bytes` that left the agent `now` reaches the phone, and when the phone's answer reaches the
  * agent. Without --link the phone gets it at once and answers after --ack-delay.
  */
 function modelled(now, bytes) {
-  if (mbit) {
-    // `lastArrival` is when the link is free again; then the message travels 10 ms, and so does the answer.
-    lastArrival = Math.max(lastArrival, now) + bytes * 8 / (Number(mbit) * 1000);
-    return { arrival: lastArrival + 10, answer: lastArrival + 20 };
-  }
   if (!link) return { arrival: now, answer: now + ackDelay };
-  lastAnswer = Math.max(lastAnswer, now + WIFI[Math.floor(Math.random() * WIFI.length)]);
-  lastArrival = Math.max(lastArrival, now + (lastAnswer - now) / 2);
+  // `free` is when the link has carried the message; then it travels half the round trip, and so does the answer.
+  free = Math.max(free, now) + (mbit ? bytes * 8 / (mbit * 1000) : 0);
+  lastAnswer = Math.max(lastAnswer, free + trip(now));
+  lastArrival = Math.max(lastArrival, free + (lastAnswer - free) / 2);
   return { arrival: lastArrival, answer: lastAnswer };
 }
 const sh = (cmd, ...args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
@@ -59,6 +73,7 @@ const hello = await agentSocket.reply;
 if (hello?.t !== 'ok') fail(hello ? 'token refused' : 'agent not running');
 if (!hello.ax) fail('no Accessibility permission');
 const still = process.argv.includes('--still');
+const seconds = Number(process.argv.find((arg) => arg.startsWith('--seconds='))?.slice(10) || 8);
 let frames = 0, moves = 0, bytes = 0, onUpdate = null, moveNumber = 0;
 /** For each picture: when it left the agent and when it reached the phone (the modelled link, queueing included). */
 const travel = [];
@@ -121,7 +136,7 @@ async function circles() {
 if (still) {
   send({ t: 'view', on: true, w: width, h: height, zoom: 0.5, dpr: 3, codec, fps });
   await sleep(1500);
-  await measure(`${codec} ${fps} fps, ${link ?? `answers after ${ackDelay} ms`}`, () => sleep(8000));
+  await measure(`${codec} ${fps} fps, ${link ?? `answers after ${ackDelay} ms`}`, () => sleep(seconds * 1000));
   send({ t: 'view', on: false });
   await sleep(100);
   agentSocket.close();
@@ -133,7 +148,7 @@ await measure('view off', () => sleep(4000));
 await measure('view off, circles', circles);
 send({ t: 'view', on: true, w: width, h: height, zoom: 0.5, dpr: 3, codec, fps });
 await sleep(1500);
-console.log(`${codec}, ${fps} fps requested, frames answered after ${link === 'wifi' ? 'a Wi-Fi round trip' : mbit ? `crossing ${mbit} Mbit/s` : `${ackDelay} ms`}`);
+console.log(`${codec}, ${fps} fps requested, frames answered after ${link ? `crossing ${link}` : `${ackDelay} ms`}`);
 
 await measure('idle, view on', () => sleep(4000));
 

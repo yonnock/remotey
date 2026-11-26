@@ -464,6 +464,87 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
      `PasskeyTests`. `FaceUnlockServerTests` richtet über den Socket ein und entsperrt gegen einen Sperrbildschirm,
      den es nur im Test gibt.
 
+16. Zeiger voraus, Bitrate nach der Strecke (nach „von außerhalb meines Netzwerks geisteskrank langsam, übelst hoher
+    Ping“ und „im Code etwas ändern, ohne Server und ohne IPv6“). Gemessen am Mac des Nutzers: `tailscale ping` zum
+    iPhone im Mobilfunk lief über `DERP(par)`, 30 Pings 84 bis 285 ms, dazu einer mit 590 und einer mit 1695 ms, „direct
+    connection not established“. Der Mac hängt an einem 5G-Router (Carrier-NAT, `MappingVariesByDestIP: true`, kein
+    IPv6), das Telefon ebenso: ohne Relay kommt keine direkte Verbindung zustande. Den Weg kürzt kein Code; was er kann,
+    ist, weniger davon spüren zu lassen. Verifier v15 (neu: T15).
+    - Ursache 1, Zeiger: jede Bewegung wartete den Hin- und Rückweg ab, weil die Seite den Zeiger erst dort zeichnete,
+      wo eine Meldung des Macs ihn nannte, und eine Meldung ohne Bild stand hinter den Bildern in derselben Verbindung.
+    - Entscheidung: die Seite zeichnet den Zeiger sofort, wohin die Bewegung ihn bringt (`Ahead` in `live-view.js`),
+      und zählt die Bewegungen, die noch unterwegs sind, zu jedem Ort, den der Mac nennt: jede Meldung nennt die letzte
+      Bewegung, die ihr Ort enthält. Dafür braucht die Seite den Ort des Zeigers am Mac und die Kanten, an denen der Mac
+      ihn hält: der Kopf einer Meldung trägt jetzt Lage und Höhe des Ausschnitts (47 statt 35 Bytes), die Displays
+      kommen aus der Meldung des Display-Wählers, die die Seite beim Verbinden einmal erfragt. Das Bild folgt einen
+      Hin- und Rückweg später; ein Zeiger, der ihm davonläuft, wartet an dessen Rand.
+    - Verworfen: den Ausschnitt mit vorauszurechnen (das Bild verschieben, bis das neue kommt). Das hieße, `viewport`
+      und `fitted` auf der Seite ein zweites Mal zu halten, und der Rand bliebe leer. Verworfen: nur Grenzen des
+      Ausschnitts im Kopf zu senden; ein Schreibtisch aus mehreren Displays ist kein Rechteck.
+    - Dabei gefunden (vom Smoke-Test, 1 Punkt daneben mit Bewegungen unterwegs): der Mac führt Bruchteile eines Punkts
+      selbst mit, auch die eines früheren Absenders, die Seite kannte den Rest nicht. Jetzt schickt die Seite ganze
+      Punkte und behält den Rest (`touchpad.js`); eine Bewegung in ganzen Punkten macht der Mac so, wie sie ist.
+      Und: Ort und Nummer der letzten Bewegung wurden getrennt gelesen; sie werden jetzt unter einer Sperre gesetzt
+      und gelesen (`ScreenView.move`), sonst nennt eine Meldung eine Bewegung, die ihr Ort noch nicht hat. Das
+      Zweite ließ sich im Smoke-Test nicht auslösen (drei Läufe ohne Sperre, alle grün): es ist nach Bauart behoben.
+      Und: eine Bewegung gegen die Displaykante ließ den Zeiger stehen, also kam keine Meldung, und die Seite hätte
+      sie zum nächsten Ort gezählt, den der Mac nennt. Jetzt nennt eine Meldung auch eine Bewegung, die nichts
+      bewegt hat (Testmuster in Ruhe: nach 2 bis 7 ms genannt, ohne die Änderung erst nach 330 ms mit dem nächsten Bild).
+    - Ursache 2, Bitrate (in Runde 6 als offen notiert): fest 4 Mbit/s. Auf einer Strecke, die weniger trägt, hielt das
+      Sendefenster die Schlange bei gut 200 ms und die Bildrate bei einem Drittel. Der Encoder hält sich bei einem
+      Schlüsselbild und bei einem Szenenwechsel nicht an die Bitrate (Seite Text, 780 × 1688: 317 KB bei 4 Mbit/s,
+      205 KB bei 1 Mbit/s, auch mit `DataRateLimits`; mit `MinAllowedFrameQP` 42 noch 145 KB) und wirft danach Bilder
+      weg, bis die Schuld bezahlt ist.
+    - Entscheidung: `LinkRate` passt die Bitrate an, allein aus den Antworten des Telefons. Eine Schlange ist, wenn
+      auch die promptste Antwort einer halben Sekunde belegter Strecke 60 ms später kommt als die schnellste bisher,
+      die Antworten gleichmäßig kommen (eine Strecke am Anschlag gibt nie schneller ab, als sie trägt; eine, die Pakete
+      nur zurückhielt, gibt sie auf einmal ab) und der Strom die Strecke auch füllt. Dann geht die Rate auf 85 % dessen,
+      was die Strecke trug, höchstens auf die Hälfte je Schritt, und steigt wieder, solange der Strom sie nutzt: 1 % je
+      halbe Sekunde nahe an dem, was die Strecke zuletzt trug, sonst 5 %. Bleiben die Antworten drei Intervalle unter
+      dem Getragenen so spät, war es keine Schlange (längerer Weg, andere Zelle): die Antworten gelten dann, wie sie
+      kommen. Jede dieser Regeln hat einen Test, der ohne sie fehlschlägt (16 Abwandlungen von `LinkRate`, je eine
+      Regel entfernt).
+    - Die erste Antwort hat nichts, woran sie spät wäre: sie gilt als spät, wenn sie länger als 300 ms brauchte. Danach
+      lässt das Sendefenster die Strecke einmal leerlaufen, sonst mäße es die Schlange an der Zeit des Schlüsselbilds
+      (gemessen: „fastest answer 2165 ms“, 24 Bilder unterwegs).
+    - Größe: unter 0,75 Bit je Pixel und Sekunde geht das Bild auf drei Viertel oder die Hälfte seiner Breite, und
+      erst mit dem 1,5-Fachen wieder hinauf. Grund ist das Schlüsselbild und jeder Szenenwechsel: sie kosten nach
+      Pixeln, nicht nach Bitrate, auf 1 Mbit/s also Sekunden. Nur für H.264.
+    - Schärfe in Ruhe: ein Bild in Bewegung bekommt die Bits eines Frames, und das letzte blieb so stehen, weil eine
+      Aufnahme nichts liefert, solange sich nichts ändert. Jetzt wird ein Bild, dem 150 ms keines folgte, erneut
+      kodiert, bis zwei Durchgänge in Folge unter 0,02 Bit je Pixel bleiben (höchstens 30). Gemessen mit einem Muster,
+      das zwei Sekunden läuft und zwei ruht (`REMOTEY_TEST_PATTERN=rests`), PSNR gegen das letzte Bild der Ruhe:
+      bei 1 Mbit/s 30,7 → 54,1 dB in 12 Durchgängen (2,0 s), ohne Grenze 32,8 → 65 dB in 8 (1,3 s, einmal etwa 240 KB).
+      Auch bei 4 Mbit/s stand das Bild also vorher weicher, als es sein konnte.
+    - Gemessen (`bench.mjs --still --seconds=30 --size=390x844 --fps=60`, Testmuster, vorher = ffcf2f0 (main),
+      je ein Lauf; „zeigt“ = neue Bilder je 60-Hz-Takt des Telefons, „Alter“ = Alter des sichtbaren Bilds):
+
+      | Strecke | zeigt/s vorher → nachher | Alter Median | Alter p90 | Mbit/s |
+      |---|---|---|---|---|
+      | 1 Mbit/s | 14,1 → 51,8 | 767 → 37 ms | 1250 → 104 ms | 1,02 → 0,94 |
+      | 2 Mbit/s | 18,9 → 53,2 | 412 → 41 ms | 792 → 101 ms | 2,02 → 1,90 |
+      | 3 Mbit/s | 19,9 → 49,8 | 378 → 43 ms | 452 → 77 ms | 2,94 → 2,79 |
+      | Relay-Pings, mit 2 Mbit/s | 24,5 → 45,1 | 405 → 73 ms | 679 → 191 ms | 1,76 → 1,65 |
+      | Relay-Pings ohne Grenze | 50,9 → 54,1 | 54 → 46 ms | 84 → 79 ms | 3,80 → 3,51 |
+      | WLAN-Modell aus Runde 6 | 18,1 → 17,3 | 256 → 295 ms | 542 → 554 ms | 2,17 → 2,10 |
+      | Antwort nach 30 ms | 60,1 → 60,1 gesendet | | | 4,02 → 4,03 |
+
+      Die beiden Zeilen ohne Grenze und das WLAN-Modell sind die Gegenprobe: dort darf sich nichts ändern, und die
+      Bitrate blieb im WLAN-Modell 41 von 41 Sekunden bei 4000 kbit/s. Bei den Relay-Pings ohne Grenze kostet der
+      Stillstand der ersten Sekunde (1,7 s) einen Schritt auf die Hälfte, nach 8 s ist die Rate zurück. Anlauf auf
+      1 Mbit/s: erstes Bild nach 1,24 s wie vorher (das Schlüsselbild), ab Sekunde 3 60 Bilder/s mit 27 ms Alter und
+      zwei Schlüsselbilder insgesamt; vorher blieben es 21 Bilder/s mit 700 ms.
+    - Das Relay-Modell (`--link=relay`) spielt die 30 gemessenen Pings in ihrer Reihenfolge ab, einen je Sekunde: was
+      gesendet wird, während ein Ping unterwegs ist, kommt mit ihm an. Jeder Lauf hat so dieselbe Strecke.
+    - Zeiger: T15 in Chromium (20 px Bewegung zeigt 40 Punkte weiter, bevor der falsche Mac antwortet; die Antwort
+      lässt ihn stehen; ein Wisch über die Kante hält an ihr). Am echten Agenten prüft `smoke.mjs`, dass jede Meldung
+      samt der Bewegungen, die sie noch nicht enthält, dorthin führt, wo der Zeiger landet: 120 Bewegungen, je Lauf
+      7 bis 10 Meldungen (H.264) und 3 bis 5 (JPEG) mit Bewegungen unterwegs, dazu fünf Stöße gegen die Displaykante,
+      auch im eingepassten Bild.
+    - Nebenbei: `smoke.mjs` scheiterte mit einem Fenster vorn in einem von drei Läufen an „pictures still fitted“,
+      auch auf main: ein Bild der vorigen Anfrage war noch unterwegs, als der Test zu zählen begann. Er zählt jetzt
+      nur Bilder der neuesten Anfrage.
+
 ## Not verified
 
 - No real iPhone. iOS Simulator 27.2 (Safari, portrait only: no Simulator GUI is installed, so no rotation, taps or
@@ -509,3 +590,10 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   die zweiseitige Sperrtaste liefen danach nur in Chromium und als gerenderte Bilder des Fensters, nicht am iPhone.
   Nicht versucht: ein abgelehntes versiegeltes Passwort am echten Mac, das Ende des Angebots nach zwei Minuten,
   Passkeys aus anderen Passwortmanagern (1Password).
+- Runde 16: kein iPhone, keine echte Relay-Strecke. Die Bitrate ist gegen modellierte Strecken gemessen (Rate, die
+  Relay-Pings, das WLAN-Modell), mit dem Testmuster statt echtem Bildschirminhalt; was DERP wirklich trägt und wie
+  regelmäßig seine Antworten kommen, ist offen. Der Zeiger voraus lief in Chromium und gegen den echten Agenten am
+  Mac, nicht in Safari. Die Sperre um Ort und Nummer einer Bewegung ließ sich ohne sie nicht zum Fehler bringen.
+  Nicht gemessen: ein Mac mit mehreren Displays (die Kante zwischen zweien ist nur in Tests gerechnet), ein Telefon,
+  das langsamer dekodiert, als die Strecke liefert (es sähe aus wie eine Schlange), und ein Weg zum Telefon von mehr
+  als 300 ms von Anfang an (kostet einen Schritt auf die Hälfte, wie der Stillstand im Relay-Modell).

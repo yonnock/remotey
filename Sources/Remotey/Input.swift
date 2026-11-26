@@ -36,13 +36,19 @@ final class Input {
 
     // MARK: Mouse
 
+    /// The page sends whole points and keeps the rest itself: it draws the pointer ahead of the answer, so
+    /// it has to know where a move ends. Such a move is made as it is, whatever rest an earlier sender left.
+    /// For one that sends fractions, as the scripts do, the rest is carried over here.
     func move(dx: Double, dy: Double) {
-        moveRemainder.x += dx
-        moveRemainder.y += dy
-        let step = CGPoint(x: moveRemainder.x.rounded(.towardZero), y: moveRemainder.y.rounded(.towardZero))
+        var step = CGPoint(x: dx, y: dy)
+        if dx != dx.rounded() || dy != dy.rounded() {
+            moveRemainder.x += dx
+            moveRemainder.y += dy
+            step = CGPoint(x: moveRemainder.x.rounded(.towardZero), y: moveRemainder.y.rounded(.towardZero))
+            moveRemainder.x -= step.x
+            moveRemainder.y -= step.y
+        }
         guard step != .zero else { return }
-        moveRemainder.x -= step.x
-        moveRemainder.y -= step.y
 
         let from = Pointer.location
         let to = clamp(CGPoint(x: from.x + step.x, y: from.y + step.y), from: from)

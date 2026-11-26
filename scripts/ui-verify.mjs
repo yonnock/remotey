@@ -29,7 +29,10 @@ import { extname, join, resolve } from 'node:path';
 // 14: T14 enrols the phone for Face ID and unlocks with it; Chromium's virtual authenticator is the passkey. The
 //     page is loaded from `localhost`, since a passkey belongs to a host name. T10 and T14 also tap the lock key on
 //     a locked Mac, which unlocks as the type key does.
-export const VERIFIER_VERSION = 14;
+// 15: updates carry the view's place and height; T15 moves the pointer and checks that the page shows the move
+//     before the fake Mac answers, keeps it there with the answer, and stops it at the display's edge. T12 counts
+//     the page's question for the displays when it connects apart from the one the sheet asks.
+export const VERIFIER_VERSION = 15;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
@@ -135,14 +138,26 @@ const harness = `(() => {
     context.fillRect(0, 0, canvas.width, canvas.height);
     if (fitted) { context.fillStyle = '#d9dce1'; context.fillRect(0, canvas.height * 0.3, canvas.width, canvas.height * 0.4); }
     const jpeg = new Uint8Array(await (await new Promise((r) => canvas.toBlob(r, 'image/jpeg'))).arrayBuffer());
-    const packet = new Uint8Array(35 + jpeg.length), head = new DataView(packet.buffer);
+    const packet = new Uint8Array(47 + jpeg.length), head = new DataView(packet.buffer);
     packet.set([1, 30, fitted ? 2 : 0]);
-    [0.5, 0.5, 0.5, 0.5, points].forEach((value, i) => head.setFloat32(3 + i * 4, value, true));
-    head.setUint32(27, request.v, true);
-    head.setUint32(31, window.__pictures = (window.__pictures ?? 0) + 1, true);
-    packet.set(jpeg, 35);
+    // The pointer in the middle of a view that has its left top at the Mac's origin.
+    [0.5, 0.5, 0.5, 0.5, points, points * request.h / request.w, 0, 0].forEach((value, i) => head.setFloat32(3 + i * 4, value, true));
+    head.setUint32(39, request.v, true);
+    head.setUint32(43, window.__pictures = (window.__pictures ?? 0) + 1, true);
+    packet.set(jpeg, 47);
+    window.__shows = [points, points * request.h / request.w];
     socket.onmessage?.({ data: packet.buffer });
     await new Promise((r) => setTimeout(r, 150));
+  };
+  // The Mac's answer to pointer moves up to the one numbered \`q\`: the pointer is at \`x\`, \`y\` (Mac points) in the
+  // view of the last picture, which stays as it is.
+  window.__pointer = async (x, y, q) => {
+    const packet = new Uint8Array(47), head = new DataView(packet.buffer), [w, h] = window.__shows;
+    packet.set([0, 30, 0]);
+    [x / w, y / h, x / w, y / h, w, h, 0, 0].forEach((value, i) => head.setFloat32(3 + i * 4, value, true));
+    head.setUint32(35, q, true);
+    window.__socket.onmessage?.({ data: packet.buffer });
+    await new Promise((r) => setTimeout(r, 50));
   };
   try { localStorage.clear(); localStorage.setItem('remotey-view', '1'); localStorage.setItem('remotey-zoom', '0.5'); } catch {}
 })();`;
@@ -919,9 +934,12 @@ await task('T12', async () => {
     }
   }
   const page = await openPage(375, 812);
-  // One display: no map, and the sheet is as it was.
+  // One display: no map, and the sheet is as it was. The page has asked for the displays once before, when it
+  // connected: the pointer it draws stops at their edges.
+  const askedFor = async () => (await page.sent()).filter((m) => m.t === 'displays').length;
+  const connecting = await askedFor();
   await open(page);
-  const one = { ...(await tiles(page)), asked: (await page.sent()).filter((m) => m.t === 'displays').length };
+  const one = { ...(await tiles(page)), asked: await askedFor() - connecting, connecting };
   await page.tap('[data-act=apps]'); await sleep(300);
   // Three: plugged in while the sheet was shut.
   await page.evaluate(`window.__displays = ${JSON.stringify(DISPLAYS)}`);
@@ -946,11 +964,11 @@ await task('T12', async () => {
   await sleep(500);
   stale.after = (await tiles(page)).list.filter((t) => !t.off).length;
   await page.close();
-  return { ...out, one: { hidden: one.hidden, asked: one.asked, appsInSight: one.appsInSight }, three, tap, two: { tiles: two.list.length, here: two.list.filter((t) => t.here).map((t) => t.id) }, stale,
+  return { ...out, one: { hidden: one.hidden, asked: one.asked, connecting: one.connecting, appsInSight: one.appsInSight }, three, tap, two: { tiles: two.list.length, here: two.list.filter((t) => t.here).map((t) => t.id) }, stale,
     // Sideways the display is short: the map is lower there, so a row of apps stays in sight on the smallest phone.
     ok: Object.entries(out.layout).every(([name, l]) => l.tiles === 3 && l.smallest >= (name.endsWith('portrait') ? 44 : 30) && l.inside && l.belowZoom
         && l.arranged && l.appsInSight >= 5 && l.cut.length === 0)
-      && one.hidden && one.asked === 1 && !three.hidden && arranged(three.list) && !three.markup
+      && one.hidden && one.asked === 1 && one.connecting === 1 && !three.hidden && arranged(three.list) && !three.markup
       && three.list.filter((t) => t.here).map((t) => t.id).join() === '1' && three.list[0].label === 'Display Built-in Retina Display, mit dem Zeiger'
       && three.list[2].name.startsWith('<img')
       && JSON.stringify(tap.sent) === '[{"t":"display","id":2}]' && tap.closed
@@ -1187,6 +1205,46 @@ await task('T14', async () => {
       && declined.unlocks.length === 0 && declined.label === 'Entsperren…' && !declined.focused
       && after.focused && after.unlocks.length === 0
       && open.label === 'Tippen…' && open.type === 'text' };
+});
+
+// T15: the pointer ahead of the Mac. A move shows on the page at once, before any answer; the answer leaves the
+// pointer where it is; and a move against the display's edge stops there, as the Mac holds the pointer.
+await task('T15', async () => {
+  const page = await openPage(390, 844);
+  const screen = await page.rect('#screen');
+  // The picture at the zoom the page asked for, 0.5, with its left top at the display's: the pointer is in the middle.
+  const wide = screen.w * 2;
+  await page.evaluate(`window.__picture(${wide})`); // the first JPEG only switches the page from H.264 to JPEG
+  await page.evaluate(`window.__picture(${wide})`);
+  const [, high] = await page.evaluate('window.__shows');
+  const aim = async () => { const r = await page.rect('#aim'); return { x: round(r.x + r.w / 2 - screen.x), y: round(r.y + r.h / 2 - screen.y) }; };
+  const pixelsPerPoint = 0.5, x0 = screen.x + 200, y0 = screen.y + 300;
+  const start = await aim();
+  await page.clear();
+  await page.touch('touchStart', [[x0, y0]]);
+  for (let i = 1; i <= 20; i++) { await sleep(16); await page.touch('touchMove', [[x0 + i * 2, y0]]); }
+  await sleep(40);
+  const moves = (await page.sent()).filter((m) => m.t === 'm');
+  const points = Math.trunc(sum(moves, 'm', 'dx')), ahead = await aim();
+  // The Mac answers with all of them made.
+  await page.evaluate(`window.__pointer(${wide / 2 + points}, ${high / 2}, ${moves.at(-1).q})`);
+  const answered = await aim();
+  // And then says that its own mouse took the pointer elsewhere.
+  await page.evaluate(`window.__pointer(100, 100, ${moves.at(-1).q})`);
+  const taken = await aim();
+  await page.touch('touchEnd', []); await sleep(80);
+  // A fast swipe to the left, further than the display goes: the pointer waits at its edge.
+  await page.touch('touchStart', [[x0 + 150, y0]]);
+  for (let i = 1; i <= 10; i++) { await sleep(8); await page.touch('touchMove', [[x0 + 150 - i * 25, y0]]); }
+  await sleep(40);
+  const swiped = Math.trunc(sum((await page.sent()).filter((m) => m.q > moves.at(-1).q), 'm', 'dx')), edge = await aim();
+  await page.touch('touchEnd', []); await sleep(80);
+  const clicks = count(await page.sent(), 'c');
+  await page.close();
+  return { start, points, ahead, answered, taken, swiped, edge, clicks,
+    ok: points > 20 && Math.abs(ahead.x - start.x - points * pixelsPerPoint) < 1 && ahead.y === start.y
+      && Math.abs(answered.x - ahead.x) < 0.5 && Math.abs(taken.x - 100 * pixelsPerPoint) < 0.5 && Math.abs(taken.y - 100 * pixelsPerPoint) < 0.5
+      && swiped < -100 && Math.abs(edge.x) < 0.5 && edge.y === taken.y && clicks === 0 };
 });
 
 socket.close();
