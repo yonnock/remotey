@@ -3,7 +3,7 @@
 // in headless Chromium with touch emulation, pairs with a code, connects with a ticket, and checks that a finger
 // on the pad arrives at the agent as pointer moves.
 //
-// The page's half of pairing: when the page's remote.js names `/session`, the script trusts the page to pair from
+// The page's half of pairing: when the agent serves the page's pairing.js, the script trusts the page to pair from
 // `#p=<code>` and to fetch its ticket itself (mode "page"). Until then (mode "shim"), the script pairs through the
 // page's own origin with fetch (so the browser keeps the cookie, as it would for the page), and a small wrapper
 // around the page's WebSocket trades the page's token message for `{"t":"auth","ticket":…}` from `POST /session`.
@@ -79,8 +79,8 @@ const [, code, digits] = (await line((l) => l.startsWith('pairing '), 20000, 'pa
 console.log(`ok   agent headless on ${port}, pairing open`);
 
 // ---- Which half of pairing the page has
-const remote = await (await fetch(`${origin}/remote.js`)).text();
-const mode = arg('mode', 'auto') === 'auto' ? (remote.includes('/session') ? 'page' : 'shim') : arg('mode');
+const pairs = (await fetch(`${origin}/pairing.js`)).ok; // the module that posts to /pair and /session
+const mode = arg('mode', 'auto') === 'auto' ? (pairs ? 'page' : 'shim') : arg('mode');
 console.log(`ok   mode ${mode}${mode === 'shim' ? ' (the page does not pair yet: the script drives /pair and /session)' : ''}`);
 
 // ---- Chromium
@@ -160,11 +160,18 @@ try {
   await line((l) => l.startsWith('paired '), 10000, '"paired"');
   await line((l) => l === 'session 1', 10000, '"session 1"');
   const status = await (async () => {
-    for (let i = 0; i < 50; i++) { const c = await evaluate("document.querySelector('#status').className"); if (c === 'ok') return c; await sleep(100); }
-    return evaluate("document.querySelector('#status').textContent");
+    // The page names its connection's state on the body; the words in `#status` are in the phone's language.
+    for (let i = 0; i < 50; i++) { const c = await evaluate('document.body.dataset.link'); if (c === 'connected') return c; await sleep(100); }
+    return evaluate("document.body.dataset.link + ': ' + document.querySelector('#status').textContent");
   })();
-  if (status !== 'ok') await fail(`the page does not say it is connected: ${status}`);
+  if (status !== 'connected') await fail(`the page does not say it is connected: ${status}`);
   console.log('ok   the page connected with a ticket');
+  if (mode === 'page') {
+    // What "Zum Home-Bildschirm" would keep holds no secret, and neither does anything a script can read.
+    const kept = await evaluate('JSON.stringify({ hash: location.hash, cookie: document.cookie, token: localStorage.getItem("remotey-token") })');
+    if (kept.includes(code) || kept.includes('remotey-device')) await fail(`the page kept a secret where scripts or the address show it: ${kept}`);
+    console.log('ok   the page paired from the link; address, storage and scripts hold no secret');
+  }
 
   // A finger across the pad, as ui-verify.mjs moves one.
   const pad = await evaluate("(() => { const r = document.querySelector('#pad').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()");
