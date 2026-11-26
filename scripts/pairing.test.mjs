@@ -60,6 +60,11 @@ test('a session: a ticket, a phone the Mac does not know, an older agent, or no 
   assert.deepEqual(await session(agent({ '/session': { status: 401, json: { why: 'unpaired' } } }).fetcher), { why: 'unpaired' });
   assert.deepEqual(await session(agent({}).fetcher), { why: 'old' });
   assert.deepEqual(await session(agent({ '/session': 'down' }).fetcher), { why: 'offline' });
+  // While the agent restarts, the proxy in front of it answers: that says nothing about this phone.
+  for (const status of [502, 503, 500, 403]) {
+    assert.deepEqual(await session(agent({ '/session': { status } }).fetcher), { why: 'offline' }, String(status));
+  }
+  assert.deepEqual(await pair({ code: '482913' }, agent({ '/pair': { status: 502 } }).fetcher), { ok: false, why: 'offline' });
 });
 
 test('the first message names the ticket and where the page runs, or the old token', () => {
@@ -89,17 +94,52 @@ test('paired by code: the device is kept, a token from before is not needed any 
 
 test('paired the old way: the token is posted once to become a device, then only tickets', async () => {
   const storage = memory();
+  let devices = 0;
   const { fetcher, posted } = agent({
-    '/pair': (body) => (body.token === 'old' ? { status: 200, json: { ok: true, device: { id: 'd1', name: 'iPhone' } } } : { status: 403, json: { ok: false } }),
-    '/session': { status: 200, json: { ticket: 't' } },
+    '/pair': (body) => (body.token === 'old' ? (devices++, { status: 200, json: { ok: true, device: { id: `d${devices}`, name: 'iPhone' } } }) : { status: 403, json: { ok: false } }),
+    '/session': () => (devices ? { status: 200, json: { ticket: 't' } } : { status: 401, json: { why: 'unpaired' } }),
   });
   const pairing = new Pairing({ storage, fetcher });
   pairing.keepToken('old');
   assert.deepEqual(await pairing.credentials(), { ticket: 't' });
   assert.deepEqual(await pairing.credentials(), { ticket: 't' });
-  assert.deepEqual(posted.map((p) => p.path), ['/pair', '/session', '/session']);
-  assert.deepEqual(posted[0].body, { token: 'old' });
+  assert.deepEqual(posted.map((p) => p.path), ['/session', '/pair', '/session', '/session']);
+  assert.deepEqual(posted[1].body, { token: 'old' });
   assert.equal(storage.getItem('remotey-token'), null, 'the token is gone from the phone');
+  // A Home Screen app from before has the token in its start address, so every start hands it over again.
+  for (let start = 0; start < 3; start++) {
+    const again = new Pairing({ storage, fetcher });
+    again.keepToken('old');
+    assert.deepEqual(await again.credentials(), { ticket: 't' });
+  }
+  assert.equal(devices, 1, 'a phone the Mac knows does not become another device');
+});
+
+test('two connections that ask at once share one answer, and the token makes one device', async () => {
+  let devices = 0, release;
+  const held = new Promise((r) => { release = r; });
+  const { fetcher } = agent({ '/session': () => (devices ? { status: 200, json: { ticket: 't' } } : { status: 401 }) });
+  const slow = async (path, options) => {
+    if (path !== '/pair') return fetcher(path, options);
+    await held;
+    devices++;
+    return new Response(JSON.stringify({ ok: true, device: { id: `d${devices}`, name: 'iPhone' } }), { status: 200 });
+  };
+  const pairing = new Pairing({ storage: memory(), fetcher: slow });
+  pairing.keepToken('old');
+  const first = pairing.credentials(), second = pairing.credentials();
+  release();
+  assert.deepEqual(await first, { ticket: 't' });
+  assert.deepEqual(await second, { ticket: 't' });
+  assert.equal(devices, 1);
+});
+
+test('the agent restarts: the try failed, and the phone stays paired', async () => {
+  const storage = memory();
+  storage.setItem('remotey-device', JSON.stringify({ id: 'd1', name: 'iPhone' }));
+  const pairing = new Pairing({ storage, fetcher: agent({ '/session': { status: 502 } }).fetcher });
+  await assert.rejects(pairing.credentials());
+  assert.deepEqual(pairing.device, { id: 'd1', name: 'iPhone' });
 });
 
 test('an agent from before pairing per device: the old token, as before, and asked only once', async () => {
@@ -108,7 +148,7 @@ test('an agent from before pairing per device: the old token, as before, and ask
   pairing.keepToken('old');
   assert.deepEqual(await pairing.credentials(), { token: 'old' });
   assert.deepEqual(await pairing.credentials(), { token: 'old' });
-  assert.deepEqual(posted.map((p) => p.path), ['/pair'], 'it said once that it knows no pairing');
+  assert.deepEqual(posted.map((p) => p.path), ['/session'], 'it said once that it knows no pairing');
 });
 
 test('upgrading fails but sessions exist: the token stays the way in until the Mac refuses it', async () => {

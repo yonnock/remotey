@@ -61,6 +61,8 @@ export async function pair(body, fetcher = globalThis.fetch) {
   if (status === 200 && json?.ok === true) return { ok: true, device: readDevice(json.device) };
   if (status === 0) return { ok: false, why: 'offline' };
   if (status === 404 || status === 405 || status === 501) return { ok: false, why: 'old' };
+  // An agent that is restarting behind `tailscale serve` answers through the proxy: that is no word on the code.
+  if (status >= 500) return { ok: false, why: 'offline' };
   if (status === 429) return { ok: false, why: 'tries' };
   if (json?.why === 'closed') return { ok: false, why: 'closed' };
   return { ok: false, why: 'token' in body ? 'token' : 'code' };
@@ -70,14 +72,16 @@ const readDevice = (device) => ({ id: typeof device?.id === 'string' ? device.id
 
 /**
  * A ticket for the next connection. Resolves to { ticket }, or { why }: `unpaired` (this phone is no device of
- * the Mac's), `old` (an agent without sessions) or `offline` (nothing answered).
+ * the Mac's), `old` (an agent without sessions) or `offline` (nothing answered, or not the agent: while it
+ * restarts, the proxy in front of it answers with an error of its own).
  */
 export async function session(fetcher = globalThis.fetch) {
   const { status, json } = await post(fetcher, '/session', {});
   if (status === 200 && typeof json?.ticket === 'string' && json.ticket) return { ticket: json.ticket };
-  if (status === 0) return { why: 'offline' };
   if (status === 404 || status === 405 || status === 501) return { why: 'old' };
-  return { why: 'unpaired' };
+  // Only the agent's own "I do not know you" unpairs a phone. Anything else is a try that failed.
+  if (status === 401) return { why: 'unpaired' };
+  return { why: 'offline' };
 }
 
 /** The socket's first message. `standalone`: the page runs from the Home Screen. */
@@ -95,6 +99,7 @@ export class Pairing {
     this.fetcher = fetcher;
     this.old = false; // the agent answered that it knows no pairing per device: no need to ask again
     this.tried = false; // the token was refused as a device once on this page: the next connection does not ask again
+    this.asking = null; // the answer under way, shared by everyone who asks meanwhile
   }
 
   read(key) { try { return this.storage?.getItem(key) ?? null; } catch { return null; } }
@@ -121,24 +126,31 @@ export class Pairing {
 
   /**
    * What the next connection authenticates with: { ticket }, { token }, or null for a phone that is not paired.
-   * Throws when nothing answered, which the connection counts as a failed try.
+   * Throws when nothing answered, which the connection counts as a failed try. Two connections that ask at the
+   * same time share one answer: the page uses only the newest, and a token posted twice would make two devices.
    */
-  async credentials() {
-    const token = this.token;
-    // Paired the old way: once a device, the token goes.
-    if (token && !this.old && !this.tried) {
-      const upgraded = await this.pair({ token });
-      if (!upgraded.ok && upgraded.why === 'offline') throw new Error('offline');
+  credentials() {
+    this.asking ??= this.ask().finally(() => { this.asking = null; });
+    return this.asking;
+  }
+
+  async ask() {
+    if (this.old) return this.token ? { token: this.token } : null;
+    let answer = await session(this.fetcher);
+    // The Mac does not know this phone. One paired the old way posts its token once to become a device. Only
+    // then: a Home Screen app from before keeps the token in its start address and has it again at every start.
+    if (answer.why === 'unpaired' && this.token && !this.tried) {
+      const upgraded = await this.pair({ token: this.token });
+      if (upgraded.ok) answer = await session(this.fetcher);
+      else if (upgraded.why === 'offline') throw new Error('offline');
       // Refused or out of tries: asking at every reconnect would only use up more of them.
-      if (!upgraded.ok) this.tried = true;
+      else this.tried = true;
     }
-    if (this.old) return token ? { token } : null;
-    const answer = await session(this.fetcher);
     if (answer.ticket) return { ticket: answer.ticket };
     if (answer.why === 'offline') throw new Error('offline');
-    if (answer.why === 'old') { this.old = true; return token ? { token } : null; }
-    // The Mac does not know this phone (any more): what the page kept of it is gone too.
-    this.write(DEVICE, null);
+    if (answer.why === 'old') this.old = true;
+    // Not a device (any more): what the page kept of it goes. The old token is the way in while the Mac takes it.
+    else this.write(DEVICE, null);
     return this.token ? { token: this.token } : null;
   }
 
