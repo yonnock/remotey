@@ -776,6 +776,92 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       Name), DNS-Rebinding (ihr `Host` ist ihr Name), auch das Füllen der 32 Plätze, denn der Handshake scheitert
       sofort statt nach 5 s. Was nicht: ein Prozess auf dem Mac, der sendet, was er will. `HeaderFields` liest
       Kopfzeilen für beide Wege und ist für Gerätschlüssel und `Tailscale-User-*` wiederverwendbar.
+19. Koppeln je Gerät, Sitzungen, Pause (der geteilte Token war alles: im Fragment des Links und für immer im
+    localStorage, für jedes Telefon derselbe, ein verlorenes nur auszusperren, indem man alle aussperrt, und am Mac
+    nicht zu sehen, wer verbunden ist).
+    - Geräte: `Devices` hält je Gerät Id, Namen, Kopplung, zuletzt gesehen, den Tailscale-Login, von dem es koppelte,
+      und nur den SHA-256 seines Schlüssels, in `devices` neben dem Token (je Port wie `face-unlock`, 0600, daneben
+      geschrieben und umbenannt; `Token.write` ist dafür herausgelöst). Erst gespeichert, dann gültig: ein Gerät, das
+      sich nicht speichern lässt, gibt es nicht. In derselben Datei stehen die beiden Schalter (alter Token,
+      Pause) und ob ein Telefon den Zeiger schon bewegt hat, damit alle drei einen Neustart überleben. Fehlt die
+      Datei, nimmt der Agent den alten Token an (das Telefon des Nutzers geht nach dem Update weiter); ist sie da
+      und unlesbar, nicht: es könnte eine sein, in der er abgeschaltet war. Die Telefone koppeln dann neu.
+    - Angebot: `Pairing` öffnet ein Angebot für höchstens fünf Minuten mit zwei Codes, 128 Bit für den Link
+      (`#p=…`) und sechs Ziffern zum Tippen (ohne Schieflage gezogen: Werte ab dem letzten Vielfachen einer Million unter 2^32 werden
+      neu gezogen). Der erste Gebrauch verbraucht beide, fünf falsche Versuche beenden das Angebot, danach gibt es
+      429, bis der Mac ein neues öffnet. Beide Codes werden bei jedem Versuch verglichen, in konstanter Zeit.
+      Entschieden: keine Bestätigung am Mac. Das Öffnen des Kopplungsfensters ist die Zustimmung, die Codes gibt es
+      nur, solange es offen ist; schließt es, sind sie weg (`closePairing`). Eine zweite Frage hätte nur dieselbe
+      Person am selben Mac gefragt, und das Raten der sechs Ziffern bleibt bei 5 zu 10^6 je Angebot.
+    - Cookie: `remotey-device` (auf anderen Ports `remotey-device-<port>`: Cookies kennen keine Ports, und ein
+      Entwicklungsagent auf 127.0.0.1 darf den Cookie des installierten nicht überschreiben), `HttpOnly`,
+      `SameSite=Strict`, `Path=/`, kein `Domain`, `Max-Age` 400 Tage (das Höchste, was Chromium hält), bei jedem
+      `POST /session` erneuert. `Secure` überall außer auf 127.0.0.1, localhost und ::1, wo die Entwicklungsseite
+      HTTP ist; entschieden nach `Host`, nicht nach `X-Forwarded-Proto`, weil ein fehlendes Feld so nur einen
+      Cookie ohne `Secure` auf Loopback ergibt und nie einen, den das Telefon verwirft. Was ein verlorenes Telefon
+      wertlos macht, ist das Entfernen am Mac, nicht das Ende des Cookies.
+    - Ticket: der Handshake-Handler sieht die Kopfzeilen (auch `Cookie`), kann sie aber keiner Verbindung
+      zuordnen; einen sauberen Weg dafür gibt es in Network nicht. Also tauscht die Seite ihren Cookie per
+      `POST /session` gegen ein Ticket, gut einmal und 30 s, höchstens 64 offen. Ein Ticket eines entfernten Geräts
+      sagt `revoked`, nicht `ticket`, damit die Seite neu koppeln lässt statt neu zu fragen.
+    - HTTP: bisher las der Agent nur die erste Zeile. `HTTPRequest` liest Kopf und Körper, höchstens 8 KiB Kopf
+      (431) und 4 KiB Körper (413), nur nach `Content-Length` (`Transfer-Encoding` 411, zwei Längen 400), alles
+      innerhalb der 5 s, die eine Verbindung ohne Antwort warten darf. Für die beiden POST-Routen gilt: `Host`
+      und Tailscale wie für alles, `Origin` eigen oder fehlend oder `null`, und `Content-Type: application/json`.
+      Das letzte ist die eigentliche Sperre gegen eine Seite im Browser des Macs: JSON geht von fremdem Ursprung
+      nur nach einer CORS-Vorabfrage, die der Agent nie beantwortet (404), und ein `no-cors`-fetch oder ein
+      Formular kann es nicht setzen. `null` lasse ich durch, weil die Fetch-Spezifikation es bei einer
+      Referrer-Policy wie `no-referrer` (die die Seite setzt) für Anfragen außerhalb des CORS-Modus vorsieht und ich
+      nicht geprüft habe, ob Safari es auch für das eigene fetch sendet. Eine fremde Seite oder ein falscher Name
+      kostet das Angebot keinen Versuch.
+    - Tailscale: gelesen in `ipn/ipnlocal/serve.go` auf main, f2c476c. `addTailscaleIdentityHeaders` löscht
+      zuerst jedes mitgebrachte `Tailscale-User-Login`, `-Name`, `-Profile-Pic`, `Tailscale-Funnel-Request` und
+      `Tailscale-Headers-Info`, auch mit `_` statt `-` geschrieben (`delHeaderVariants`). Dann setzt es für eine
+      Anfrage über Funnel `Tailscale-Funnel-Request: ?1` und sonst nichts; findet `WhoIs` die Quelle nicht
+      („traffic from outside of Tailnet (funneled or local machine)“) oder ist sie ein getaggtes Gerät, setzt es
+      nichts; sonst Login und Namen, über `mime.QEncoding` (ASCII bleibt, wie es ist, anderes wird RFC 2047).
+      Durch `serve` lässt sich das also nicht fälschen, ein Prozess am Mac kann alles schicken. Regel
+      (`TailnetIdentity`): Funnel wird abgewiesen; ein Login, der lesbar ist und nicht der des Besitzers
+      (`Tailscale.Status.loginName`, ohne Rücksicht auf Groß- und Kleinschreibung), wird abgewiesen, auf beiden Ports
+      und im Handshake; alles andere kommt durch: ohne Feld, ohne bekannten Besitzer (nil oder `tagged-devices`,
+      so heißt der Besitzer eines getaggten Macs), ein Wert, der sich nicht dekodieren lässt. Das Telefon des
+      Besitzers kann die Regel so nicht aussperren. Der Login ist auch die Beschriftung, von wem ein Gerät
+      gekoppelt wurde. Den Besitzer liest das Menü beim Start einmal im Hintergrund und bei jedem Koppeln.
+    - Alter Token: angenommen, solange `acceptsToken` an ist; `setAcceptsToken(false)` schließt die Telefone, die
+      ihn benutzen, mit `denied`/`token`. `POST /pair` mit `{"token":…}` macht so ein Telefon zum Gerät, ohne zu
+      scannen. Ein neuer Token („Alle trennen“ im Menü) trennt nur die Telefone des alten; das Menü entfernt dazu
+      alle Geräte. Die Skripte in `scripts/live/` bleiben beim Token: ein Gerät bräuchte das Kopplungsfenster, und
+      jeder Agent hat seine eigene Datei, also nimmt ein Entwicklungsagent auf einem anderen Port den Token, was
+      immer der installierte tut. Abgeschaltet sagt `agent.mjs`, woran es liegt.
+    - Sitzungen: `Server.sessions` (Id, Gerät oder nil, Name, seit, Live-Bild, Home-Bildschirm) mit
+      `sessionsChanged`; `end` schließt die Verbindung, die Seite verbindet sich danach von selbst wieder. Wer
+      draußen bleiben soll, wird entfernt oder die Pause eingeschaltet. `isPaired` und `hasMoved` sind die beiden
+      Proben des Assistenten.
+    - Pause: verwirft Eingaben, Live-Bild, App-Liste, Fokus, Sprung auf ein Display, Entsperren und Einrichten;
+      Ping, die Liste der Displays und das Ausschalten des Bildes gehen weiter. Beim Einschalten lässt der Agent
+      gehaltene Tasten los, beendet den Bildlauf und das Bild (`view`/`paused`). Niemand wird entkoppelt.
+    - `mac`: nach `ok` und bei jeder Änderung von Bedienungshilfen, Bildschirmaufnahme oder Pause, gelesen alle 2 s,
+      solange ein Telefon verbunden ist, sonst gar nicht. Das Live-Bild fragt jetzt `Permissions.screenRecording`
+      statt Preflight, und der Server fragt nicht mehr nach der Erlaubnis (bisher rief eine Bildanfrage
+      `CGRequestScreenCaptureAccess`): das Fragen ist die Taste des Assistenten, die Seite sieht in `mac`, was fehlt.
+    - Ohne Oberfläche: `REMOTEY_HEADLESS=1` mit `REMOTEY_PORT` (nicht 47800, sonst endet er) startet den Agenten
+      ohne Statussymbol, Fenster und Abfragen, mit `.prohibited` (kein Dock, nie vorn), mit Token, Geräten und
+      Face-ID-Datei in einem eigenen Ordner, der beim Ende geht, und einer Eingabe, die nichts postet, sondern
+      jedes Ereignis auf stdout schreibt; Bedienungshilfen gelten als da, Bildschirmaufnahme nie. `main.swift` wählt
+      den Delegate. `scripts/pairing-e2e.mjs` startet ihn auf einem freien Port, öffnet die echte Seite in
+      chrome-headless-shell (Touch-Emulation, Safari-Kennung des iPhones), koppelt mit den sechs Ziffern, verbindet
+      mit einem Ticket und prüft, dass ein Finger über das Feld als Bewegungen nach rechts ankommt (lokal: 19
+      Bewegungen, 129 Punkte), ohne Klick. Die Seite kann das Koppeln noch nicht; bis dahin koppelt das Skript per
+      fetch im Ursprung der Seite (der Browser hält den Cookie, `document.cookie` zeigt ihn nicht), und eine Hülle um
+      den WebSocket der Seite ersetzt deren `auth` mit Token durch eines mit Ticket. Sobald `remote.js` `/session`
+      nennt, lässt das Skript die Hülle weg und öffnet `/#p=<code>`: dann muss die Seite selbst `POST /pair` mit
+      `{"code":…}` und `Content-Type: application/json` schicken, vor jedem Verbinden `POST /session`, und mit
+      `{"t":"auth","ticket":…,"standalone":…}` öffnen. `--mode=page` erzwingt das heute und scheitert, wie es soll,
+      mit „no "paired"“. In der CI nach `ui-verify`.
+    - Prüfungen: `swift test` 257 Tests, `node --test scripts/*.test.mjs` 70, `ui-verify.mjs` 19 von 19,
+      `pairing-e2e.mjs` grün. Je Sicherheitsregel ein Test; vierzehn Abwandlungen (Origin, JSON, Login über HTTP
+      und im Handshake, Ticket einmal, Versuche, Verbrauch, Entfernen, Pause, HttpOnly, Token-Schalter, Hash statt
+      Schlüssel, Ablauf, Erlaubnis), je eine Regel zurückgenommen, ließen je ihren Test scheitern.
 
 ## Not verified
 
@@ -860,3 +946,14 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   `screensDidWakeNotification` als Auslöser ist aus der Dokumentation, nicht gemessen. Das erzwungene
   Schlüsselbild ist am Encoder getestet, nicht im Strom zu einem Telefon. Tailscale: gelesen ist der Quelltext von
   main, nicht der der installierten Version, und kein echter Handshake durch `tailscale serve` wurde mitgeschnitten.
+- Runde 19: kein iPhone, kein `tailscale serve` (nicht verändert, nichts hindurch geschickt). Gelesen ist der
+  Quelltext von main, nicht der installierten Version; ob Tailscale den Login eines Telefons wirklich so schreibt,
+  wie `tailscale status` den Besitzer nennt, und ob `Set-Cookie` und ein über HTTP/2 geteilter `Cookie` den Proxy
+  unverändert passieren, ist nicht gemessen. Safari nicht geprüft: ob es einen `HttpOnly`/`SameSite=Strict`-Cookie
+  aus der Antwort auf ein fetch hält, ob eine Web-App vom Home-Bildschirm ihn mitbekommt oder einen eigenen Speicher
+  hat (dafür gibt es die sechs Ziffern), ob ITP die 400 Tage kürzt und welches `Origin` Safari bei `POST` mit
+  `no-referrer` sendet. Dass ScreenCaptureKit nach einer Erlaubnis ohne Neustart aufnimmt, ist nicht gemessen (die
+  Erlaubnis wurde nicht umgeschaltet); der Server sagt jetzt `screen: true`, sobald die Fenstertitel es zeigen.
+  `Setup` empfiehlt in diesem Fall weiter einen Neustart (`needsRestart`, nicht geändert). Das Menü mit Fenster,
+  Ziffern und Owner-Abfrage lief nie (die App durfte nicht starten), nur der Server dahinter in Tests und ohne
+  Oberfläche. Ob der Agent ohne Oberfläche auf einem gehosteten Mac startet, zeigt der erste CI-Lauf.
