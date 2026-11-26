@@ -3,12 +3,17 @@ import Foundation
 @testable import Remotey
 
 /// A phone's passkey that exists only in the tests: it signs as an authenticator does, on the page of
-/// `origin`, and gives out `secret` as its PRF value.
+/// `origin`, and gives out a secret for a salt as PRF does: the same for the same salt, another for another.
 struct TestPhone {
-    let key = P256.Signing.PrivateKey()
+    var key = P256.Signing.PrivateKey()
     let id = Data([1, 2, 3, 4])
     var origin = "https://mac.example.ts.net:8443"
-    var secret = Data(repeating: 7, count: 32)
+    /// What the passkey makes its secrets from. Two phones with the same one give the same secrets.
+    var seed = Data(repeating: 7, count: 32)
+
+    func secret(for salt: Data) -> Data {
+        Data(HMAC<SHA256>.authenticationCode(for: salt, using: SymmetricKey(data: seed)))
+    }
 
     var publicKey: Data { key.publicKey.derRepresentation }
 
@@ -30,12 +35,13 @@ struct TestPhone {
     /// Enrols this phone for `offer`.
     func enrol(in faceUnlock: FaceUnlock, for offer: FaceUnlock.Offer) -> Bool {
         faceUnlock.enrol(id: id, publicKey: publicKey, authenticator: authenticator(),
-                         client: client("webauthn.create", challenge: offer.challenge), secret: secret)
+                         client: client("webauthn.create", challenge: offer.challenge), secret: secret(for: offer.salt))
     }
 
-    /// The page's `unlock` message for `answer`.
-    func message(_ answer: Passkey.Answer) -> String {
+    /// The page's `unlock` message for `answer`, with the secrets for `salt` and, if named, for `next`.
+    func message(_ answer: Passkey.Answer, salt: Data, next: Data? = nil) -> String {
         #"{"t":"unlock","auth":"\#(answer.authenticator.base64URL)","client":"\#(answer.client.base64URL)","#
-            + #""sig":"\#(answer.signature.base64URL)","prf":"\#(secret.base64URL)"}"#
+            + #""sig":"\#(answer.signature.base64URL)","prf":"\#(secret(for: salt).base64URL)""#
+            + (next.map { #","next":"\#(secret(for: $0).base64URL)""# } ?? "") + "}"
     }
 }

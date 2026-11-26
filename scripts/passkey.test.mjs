@@ -40,21 +40,37 @@ test('a passkey that gives out no secret, or comes without its public key, enrol
   await assert.rejects(create(offer, 'h', { create: async () => { throw new DOMException('declined', 'NotAllowedError'); } }));
 });
 
-test('unlocking asks for that one passkey, verified, and sends its signature and secret', async () => {
-  const device = phone({ getClientExtensionResults: () => ({ prf: { results: { first: bytes(9), second: undefined } } }),
-    response: { authenticatorData: bytes(7, 7), clientDataJSON: bytes(4), signature: bytes(8) } });
-  const message = await get({ id: 'AQID', salt: 'Ag', challenge: 'AQ' }, 'mac.example.ts.net', device);
-  assert.deepEqual(message, { t: 'unlock', auth: 'Bwc', client: 'BA', sig: 'CA', prf: 'CQ' });
+const answering = (results) => phone({ getClientExtensionResults: () => ({ prf: { results } }),
+  response: { authenticatorData: bytes(7, 7), clientDataJSON: bytes(4), signature: bytes(8) } });
+
+test('unlocking asks for that one passkey, verified, and sends its signature and the secrets for both salts', async () => {
+  const device = answering({ first: bytes(9), second: bytes(10) });
+  const message = await get({ id: 'AQID', salt: 'Ag', next: 'Aw', challenge: 'AQ' }, 'mac.example.ts.net', device);
+  assert.deepEqual(message, { t: 'unlock', auth: 'Bwc', client: 'BA', sig: 'CA', prf: 'CQ', next: 'Cg' });
   const { publicKey: asked } = device.asked[0];
   assert.equal(asked.rpId, 'mac.example.ts.net');
   assert.equal(asked.userVerification, 'required');
   assert.deepEqual(asked.allowCredentials, [{ type: 'public-key', id: new Uint8Array([1, 2, 3]) }]);
   assert.deepEqual(asked.challenge, new Uint8Array([1]));
-  assert.deepEqual(asked.extensions.prf.eval.first, new Uint8Array([2]));
+  assert.deepEqual(asked.extensions.prf.eval, { first: new Uint8Array([2]), second: new Uint8Array([3]) });
+});
+
+test('without a second secret the unlock goes with the first alone, and the agent keeps its salt', async () => {
+  const key = { id: 'AQID', salt: 'Ag', next: 'Aw', challenge: 'AQ' };
+  // Safari named `second` without a value where none was asked (decisions.md, round 15).
+  for (const results of [{ first: bytes(9) }, { first: bytes(9), second: undefined }, { first: bytes(9), second: bytes(9) }]) {
+    assert.deepEqual(await get(key, 'h', answering(results)), { t: 'unlock', auth: 'Bwc', client: 'BA', sig: 'CA', prf: 'CQ' });
+  }
+  // An agent from before the salt changed with every unlock names no next one: nothing else is asked for.
+  const device = answering({ first: bytes(9), second: undefined });
+  assert.deepEqual(await get({ id: 'AQID', salt: 'Ag', challenge: 'AQ' }, 'h', device),
+    { t: 'unlock', auth: 'Bwc', client: 'BA', sig: 'CA', prf: 'CQ' });
+  assert.deepEqual(device.asked[0].publicKey.extensions.prf.eval, { first: new Uint8Array([2]) });
 });
 
 test('without a secret, or declined, nothing is sent', async () => {
   const key = { id: 'AQID', salt: 'Ag', challenge: 'AQ' };
   await assert.rejects(get(key, 'h', phone({ getClientExtensionResults: () => ({}), response: {} })));
+  await assert.rejects(get({ ...key, next: 'Aw' }, 'h', answering({ second: bytes(10) })), 'a second secret without the first');
   await assert.rejects(get(key, 'h', { get: async () => { throw new DOMException('declined', 'NotAllowedError'); } }));
 });

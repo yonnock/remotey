@@ -67,9 +67,10 @@ final class WireTests: XCTestCase {
         }
         let key = FaceUnlock.Key(passkey: Passkey(id: Data([251, 255]), publicKey: Data([1]), origin: "https://mac.example.ts.net:8443"),
                                  salt: Data([1, 2]), sealed: Data([9]))
-        let locked = try object(Wire.lock(true, passkey: (key, Data([3, 4]))))
-        XCTAssertEqual(locked as NSDictionary, ["t": "lock", "on": true, "key": ["id": "-_8", "salt": "AQI", "challenge": "AwQ"]])
-        XCTAssertEqual(try object(Wire.lock(false, passkey: (key, Data([3, 4])))) as NSDictionary, ["t": "lock", "on": false],
+        let ask = FaceUnlock.Ask(challenge: Data([3, 4]), next: Data([7]))
+        let locked = try object(Wire.lock(true, passkey: (key, ask)))
+        XCTAssertEqual(locked as NSDictionary, ["t": "lock", "on": true, "key": ["id": "-_8", "salt": "AQI", "next": "Bw", "challenge": "AwQ"]])
+        XCTAssertEqual(try object(Wire.lock(false, passkey: (key, ask))) as NSDictionary, ["t": "lock", "on": false],
                        "an open Mac asks for no passkey")
         XCTAssertEqual(try object(Wire.passkeyRefused) as NSDictionary, ["t": "unlock", "ok": false, "why": "key"])
         let offer = FaceUnlock.Offer(challenge: Data([5]), salt: Data([6]))
@@ -81,11 +82,17 @@ final class WireTests: XCTestCase {
 
     func testThePasskeysMessagesOfThePage() throws {
         func command(_ json: String) throws -> Wire.Command { try Wire.command(from: Data(json.utf8)) }
-        guard case .unlockWithPasskey(let answer, let secret) = try command(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#) else {
+        guard case .unlockWithPasskey(let answer, let secret, let next) =
+            try command(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ","next":"Bg"}"#) else {
             return XCTFail("not an unlock by passkey")
         }
         XCTAssertEqual(answer, Passkey.Answer(authenticator: Data([1, 2]), client: Data([3]), signature: Data([4])))
         XCTAssertEqual(secret, Data([5]))
+        XCTAssertEqual(next, Data([6]))
+        for (json, why) in [(#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#, "from a page that asks for one secret"),
+                            (#"{"t":"unlock","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ","next":"!"}"#, "a second secret that is none")] {
+            guard case .unlockWithPasskey(_, Data([5]), nil) = try command(json) else { return XCTFail(why) }
+        }
         guard case .unlock("geheim") = try command(#"{"t":"unlock","s":"geheim","auth":"AQI","client":"Aw","sig":"BA","prf":"BQ"}"#) else {
             return XCTFail("a typed password counts as one")
         }
