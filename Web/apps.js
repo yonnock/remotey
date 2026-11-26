@@ -155,7 +155,7 @@ export class Switcher {
     list.style.minHeight = '';
     list.setAttribute('aria-busy', view === 'grid waiting');
     list.replaceChildren(...(this.notice ? [make('p', '', this.notice)]
-      : app ? app.windows.map((w) => this.row(app, w))
+      : app ? [...app.windows.map((w) => this.row(app, w)), make('p', 'foot', t('apps.windowsNote'))]
         : apps ? apps.map((a) => this.tile(a))
           : Array.from({ length: this.apps?.length || 8 }, () => make('span', 'app ghost'))));
     if (changed) {

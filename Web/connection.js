@@ -3,10 +3,11 @@
 // shows for each state live in remote.js; this module only decides.
 //
 // States:
-//   unpaired     no key on this phone: nothing to try
+//   unpaired     the Mac does not know this phone: nothing to try until it is paired
 //   connecting   a socket is on its way, or one was lost and is tried again at once
 //   connected    the Mac took the key
 //   noAccess     the Mac took the key, but lacks the Accessibility permission: it cannot steer
+//   paused       the Mac took the key, and someone at the Mac paused remote control there
 //   unreachable  nothing answers: Tailscale off on the phone, the Mac asleep or away
 //   stopped      the Mac answers, Remotey on it does not
 //   denied       the Mac refused the key: the pairing is no longer valid
@@ -59,7 +60,7 @@ export class Link {
   }
 
   /** Whether the Mac took the key on the connection there is. */
-  get up() { return this.state === 'connected' || this.state === 'noAccess'; }
+  get up() { return this.state === 'connected' || this.state === 'noAccess' || this.state === 'paused'; }
 
   /**
    * Try now: at the start, on a tap, back in sight and when the network returns. Without a key there is
@@ -68,7 +69,9 @@ export class Link {
   begin({ paired = true, ask = false } = {}) {
     this.stop();
     if (!paired) return this.set('unpaired');
-    if (this.state === 'denied' && !ask) return;
+    // Refused or unknown, a phone is not tried again behind the user's back: the notice or the first start
+    // stays until they ask (a tap, a new pairing).
+    if ((this.state === 'denied' || this.state === 'unpaired') && !ask) return;
     // A failure stays on show while it is tried again by itself; a tap shows that something happens, and
     // starts the intervals over.
     if (ask) this.attempt = 0;
@@ -83,6 +86,23 @@ export class Link {
     this.hooks.cancel(this.watch);
     this.attempt = 0;
     this.set(steer ? 'connected' : 'noAccess');
+  }
+
+  /**
+   * What the Mac says about itself while connected, on `ok` and with every change: `ax` whether it may steer,
+   * `paused` whether remote control is paused at the Mac. A paused Mac counts before a missing permission:
+   * it is what someone there chose.
+   */
+  mac({ ax, paused }) {
+    if (!this.up) return;
+    this.set(paused ? 'paused' : ax ? 'connected' : 'noAccess');
+  }
+
+  /** The Mac does not know this phone: no tries until it is paired, which starts over with `begin`. */
+  unpaired() {
+    this.stop();
+    this.generation++;
+    this.set('unpaired');
   }
 
   /** The Mac refused the key. */

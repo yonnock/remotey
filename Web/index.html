@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Remotey">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#000000">
 <link rel="apple-touch-icon" href="/icon.png">
 <link rel="stylesheet" href="remote.css">
@@ -16,218 +16,341 @@
 </head>
 <!-- Every word comes from strings.js: an element names its key in data-text (its text) or data-label (its aria-label). -->
 <body data-page="media" data-link="connecting">
+<!-- The symbols, drawn for this page in one style: a 24 grid, round 1.8 strokes, filled only where a glyph is a
+     solid thing (media keys, the status dot). SF Symbols' licence does not cover web pages. -->
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M14.5 5.5L8 12l6.5 6.5"/></symbol>
+  <symbol id="i-forward" viewBox="0 0 24 24"><path d="M9.5 5.5L16 12l-6.5 6.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5.5 12h13"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5.5 12.5l4.2 4.2L18.5 7.5"/></symbol>
+  <symbol id="i-window" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M3.5 9h17"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/></symbol>
+  <symbol id="i-text" viewBox="0 0 24 24"><path d="M9 4.5c1.6 0 3 .7 3 2v11c0 1.3-1.4 2-3 2M15 4.5c-1.6 0-3 .7-3 2v11c0 1.3 1.4 2 3 2M10 12h4"/></symbol>
+  <symbol id="i-actual" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9 9.5v5M14 9.5v5M11.5 11v.01M11.5 13.5v.01"/></symbol>
+  <symbol id="i-desktop" viewBox="0 0 24 24"><rect x="2.5" y="5" width="11" height="8" rx="1.8"/><rect x="13.5" y="9" width="8" height="10" rx="1.8"/><path d="M6 17h4M8 13v4"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14h8"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="2"/></symbol>
+  <symbol id="i-controls" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="6.5" rx="3.25"/><rect x="3.5" y="13" width="17" height="6.5" rx="3.25"/><circle cx="16.75" cy="7.75" r="1.6"/><circle cx="7.25" cy="16.25" r="1.6"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+  <symbol id="i-unlock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 7.9-.9"/></symbol>
+  <symbol id="i-face" viewBox="0 0 24 24"><path d="M4 8.5V6.5A2.5 2.5 0 0 1 6.5 4h2M15.5 4h2A2.5 2.5 0 0 1 20 6.5v2M20 15.5v2a2.5 2.5 0 0 1-2.5 2.5h-2M8.5 20h-2A2.5 2.5 0 0 1 4 17.5v-2M9 9.5v1.2M15 9.5v1.2M12 9.5v3.3h-1M9.2 15.4c1.7 1.2 3.9 1.2 5.6 0"/></symbol>
+  <symbol id="i-hand" viewBox="0 0 24 24"><path d="M8.5 12.5V5.8a1.5 1.5 0 0 1 3 0v5.7M11.5 11V4.6a1.5 1.5 0 0 1 3 0V11M14.5 11V6.1a1.5 1.5 0 0 1 3 0v7.6c0 4-2.5 6.8-6 6.8-2.6 0-4-1.2-5.4-3.4L4.4 14a1.5 1.5 0 0 1 2.4-1.8l1.7 2"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.2M12 16.3v.01"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path class="solid" d="M11.5 6.2v11.6L3 12zM21 6.2v11.6L12.5 12z"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path class="solid" d="M12.5 6.2v11.6L21 12zM3 6.2v11.6L11.5 12z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path class="solid" d="M3 5.5v13l9-6.5zM14 5.5h2.6v13H14zM18.4 5.5H21v13h-2.6z"/></symbol>
+  <symbol id="i-mute" viewBox="0 0 24 24"><path class="solid" d="M3 9h3.8L12 4.5v15L6.8 15H3z"/><path d="M15.5 9.5l5 5M20.5 9.5l-5 5"/></symbol>
+  <symbol id="i-quieter" viewBox="0 0 24 24"><path class="solid" d="M3 9h3.8L12 4.5v15L6.8 15H3z"/><path d="M15.5 12h5"/></symbol>
+  <symbol id="i-louder" viewBox="0 0 24 24"><path class="solid" d="M3 9h3.8L12 4.5v15L6.8 15H3z"/><path d="M15.5 12h5M18 9.5v5"/></symbol>
+  <symbol id="i-devices" viewBox="0 0 48 48"><rect x="5" y="10" width="27" height="19" rx="3"/><path d="M2 34h31"/><rect x="31.5" y="16" width="13" height="23" rx="3.5"/><path d="M36.5 35h3"/></symbol>
+</svg>
 <div id="app">
-  <div id="console">
-    <div id="screen">
-      <div id="picture">
-        <canvas id="view" hidden></canvas>
-        <div id="aim" hidden><div id="marker"></div><img id="cursor" alt=""></div>
-      </div>
-      <div id="pad" data-label="pad"></div>
-      <!-- What keeps the Mac out of reach or the live view off: a symbol, what it is, its likely cause and the one
-           thing to do about it. Touches pass through to the pad everywhere but on the button. -->
-      <div id="notice" aria-live="polite" hidden>
-        <div class="card">
-          <svg class="sym" data-for="unreachable" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 8.8a14 14 0 0 1 19 0M5.5 12.2a9.5 9.5 0 0 1 13 0M8.7 15.5a5 5 0 0 1 6.6 0M12 19.2h.01M3.5 3.5l17 17"/></svg>
-          <svg class="sym" data-for="stopped" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11.5" rx="1.8"/><path d="M1.5 19.5h21M10 8l4 4.5M14 8l-4 4.5"/></svg>
-          <svg class="sym" data-for="noAccess" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="7.2" r=".9"/><path d="M7.5 10h9M12 10v4.2l-2.6 3.8M12 14.2l2.6 3.8"/></svg>
-          <svg class="sym" data-for="denied" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15.5" r="3.8"/><path d="M10.8 12.8L19 4.6M16 7.6l2.6 2.6M3.5 3.5l17 17"/></svg>
-          <svg class="sym" data-for="offline" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M11 18.5h2M3.5 3.5l17 17"/></svg>
-          <svg class="sym" data-for="permission" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4M3.5 3.5l17 17"/></svg>
-          <svg class="sym" data-for="taken" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4.5" width="14" height="10" rx="1.8"/><path d="M6 18.5h6M9 14.5v4"/><rect x="17.5" y="8.5" width="4.5" height="11" rx="1.2"/></svg>
-          <h2 id="noticeTitle"></h2>
-          <p id="noticeText"></p>
-          <button class="pill" id="noticeAct" data-act="notice"></button>
-        </div>
-      </div>
-      <!-- Lies over the display while the agent offers to enrol this phone for unlocking with Face ID, started
-           from its menu at the Mac. -->
-      <div id="enrol" role="dialog" aria-labelledby="enrolTitle" aria-describedby="enrolText" data-state="offer" hidden>
-        <div class="card">
-          <svg class="face" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9.5v1.5M15 9.5v1.5M12 9.5v3.2h-1M9 15.2c1.8 1.4 4.2 1.4 6 0"/></svg>
-          <svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12.4l2.7 2.7L16 9.6"/></svg>
-          <h2 id="enrolTitle" data-text="enrol.title"></h2>
-          <p id="enrolText"></p>
-          <div class="choice">
-            <button class="cap" data-act="enrol-later" data-text="enrol.later"></button>
-            <button class="cap accent" data-act="enrol" data-text="enrol.go"></button>
-          </div>
-        </div>
-      </div>
-      <!-- Printed on the display's glass: the connection on the left, zoom on the right. Only the keys take touches. -->
-      <div id="hud">
-        <!-- The connection says what it is in words, with a symbol for each kind: a dot, a ring, a warning. -->
-        <span id="status" role="status">
-          <svg class="ok" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4"/></svg>
-          <svg class="wait" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5a4.5 4.5 0 1 1-4.5 4.5"/></svg>
-          <svg class="bad" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5.5"/><path d="M6 3v3.6M6 8.6v.1"/></svg>
-          <span id="statusText"></span>
-        </span>
-        <!-- Frame rate and delay of the live view: shown when the setting asks for it. -->
-        <div id="meter" class="idle" role="img">
-          <span><b>0</b> fps</span><span>– ms</span>
-        </div>
-        <span id="follow" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6M9 20h6M12 4v16"/></svg>
-          <span data-text="follow"></span>
-        </span>
-        <div id="zoom" role="group" data-label="zoom.group">
-          <button class="key" data-act="zoom" data-step="-1" data-label="zoom.out">−</button>
-          <!-- The readout is a key: it fits the view to the window in front on the Mac. While it does, a symbol
-               stands over the zoom: a window, or a phone while that window also takes the phone's shape. -->
-          <button class="readout" data-act="fit" aria-pressed="false"><svg id="fitLamp" viewBox="0 0 24 24" aria-hidden="true"><rect class="window" x="3" y="5" width="18" height="14" rx="2"/><path class="window" d="M3 9h18"/><rect class="phone" x="7.5" y="3" width="9" height="18" rx="2"/></svg><span id="zoomValue">0,5×</span></button>
-          <button class="key" data-act="zoom" data-step="1" data-label="zoom.in">+</button>
-        </div>
+  <!-- The picture element: the live view over the whole phone, safe areas included, and the trackpad on top of it.
+       The stage behind the picture is black; without the live view a calm surface lies there instead. -->
+  <div id="screen">
+    <div id="picture">
+      <canvas id="view" hidden></canvas>
+      <div id="aim" hidden><div id="marker"></div><img id="cursor" alt=""></div>
+    </div>
+    <div id="surface" aria-hidden="true"><p id="hint" data-text="pad.hint"></p></div>
+    <div id="pad" data-label="pad"></div>
+    <!-- Without the live view nothing else answers a click: a ring where it landed. -->
+    <div id="ring" aria-hidden="true"></div>
+  </div>
+  <!-- What keeps the Mac out of reach or the live view off: a symbol, what it is, its likely cause and the one
+       thing to do about it. Touches pass through to the pad everywhere but on the button. -->
+  <div id="notice" aria-live="polite" hidden>
+    <div class="card">
+      <svg class="sym" data-for="unreachable" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 8.8a14 14 0 0 1 19 0M5.5 12.2a9.5 9.5 0 0 1 13 0M8.7 15.5a5 5 0 0 1 6.6 0M12 19.2h.01M3.5 3.5l17 17"/></svg>
+      <svg class="sym" data-for="stopped" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11.5" rx="1.8"/><path d="M1.5 19.5h21M10 8l4 4.5M14 8l-4 4.5"/></svg>
+      <svg class="sym" data-for="noAccess" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="7.2" r=".9"/><path d="M7.5 10h9M12 10v4.2l-2.6 3.8M12 14.2l2.6 3.8"/></svg>
+      <svg class="sym" data-for="denied" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15.5" r="3.8"/><path d="M10.8 12.8L19 4.6M16 7.6l2.6 2.6M3.5 3.5l17 17"/></svg>
+      <svg class="sym" data-for="revoked" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2M3.5 3.5l17 17"/></svg>
+      <svg class="sym" data-for="offline" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 3.5l17 17M12 19.2h.01M8.7 15.5a5 5 0 0 1 6.6 0M5.5 12.2a9.5 9.5 0 0 1 6-2.7M2.5 8.8A14 14 0 0 1 8 5.5M14.5 9.7a9.5 9.5 0 0 1 4 2.5M12.8 5a14 14 0 0 1 8.7 3.8"/></svg>
+      <svg class="sym" data-for="paused" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M10 8.5v7M14 8.5v7"/></svg>
+      <svg class="sym" data-for="permission" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4M3.5 3.5l17 17"/></svg>
+      <svg class="sym" data-for="taken" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4.5" width="14" height="10" rx="1.8"/><path d="M6 18.5h6M9 14.5v4"/><rect x="17.5" y="8.5" width="4.5" height="11" rx="1.2"/></svg>
+      <h2 id="noticeTitle"></h2>
+      <p id="noticeText"></p>
+      <button class="pill" id="noticeAct" data-act="notice"></button>
+    </div>
+  </div>
+  <!-- Lies over the picture while the agent offers to enrol this phone for unlocking with Face ID, started from its
+       menu at the Mac. -->
+  <div id="enrol" role="dialog" aria-labelledby="enrolTitle" aria-describedby="enrolText" data-state="offer" hidden>
+    <div class="card">
+      <svg class="face" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-face"/></svg>
+      <svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12.4l2.7 2.7L16 9.6"/></svg>
+      <h2 id="enrolTitle" data-text="enrol.title"></h2>
+      <p id="enrolText"></p>
+      <div class="choice">
+        <button class="pill" data-act="enrol-later" data-text="enrol.later"></button>
+        <button class="pill accent" data-act="enrol" data-text="enrol.go"></button>
       </div>
     </div>
-    <!-- The tray: slides up out of the display's lower edge, so the live view keeps its size. -->
-    <div id="drawer" class="sheet">
-      <div class="grip" aria-hidden="true"></div>
-      <div id="pages" class="switch" role="group" data-label="pages">
-        <i></i>
-        <button data-act="page" data-page="media" data-text="page.media"></button>
-        <button data-act="page" data-page="keys" data-text="page.keys"></button>
-        <button data-act="page" data-page="settings" data-text="page.settings"></button>
+  </div>
+
+  <!-- The glass over the picture. Upright: the Mac and the view capsule at the top, mouse keys and bar under the
+       thumb. Sideways the same pieces stand in the two side margins (remote.js moves them): mouse keys on one side,
+       tools on the other. Only the controls take touches; the rest of each zone passes them to the pad. -->
+  <div id="hud">
+    <!-- The state in words for a screen reader, said when it changes; the Mac's button shows the same. -->
+    <span id="status" role="status" class="sr"><span id="statusText"></span></span>
+    <div class="zone" id="zoneTop">
+      <!-- The Mac: its state in a symbol and in words, its name, and a menu with what concerns the Mac. -->
+      <button id="macBtn" class="glass capsule" data-act="mac" aria-haspopup="menu" aria-expanded="false">
+        <span class="state" aria-hidden="true">
+          <svg class="ok" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4"/></svg>
+          <svg class="wait" viewBox="0 0 12 12"><path d="M6 1.5a4.5 4.5 0 1 1-4.5 4.5"/></svg>
+          <svg class="bad" viewBox="0 0 24 24"><use href="#i-warn"/></svg>
+          <svg class="shut" viewBox="0 0 24 24"><use href="#i-lock"/></svg>
+          <svg class="held" viewBox="0 0 24 24"><use href="#i-pause"/></svg>
+        </span>
+        <span class="words"><span id="macName"></span><span id="macState"></span></span>
+        <svg class="more" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-down"/></svg>
+      </button>
+      <!-- The view: − and + around the readout, which opens the view's menu. The readout's segment is tinted while
+           the view is fitted to the window in front; a symbol says how: a window, a phone, or the text being typed. -->
+      <div id="zoom" class="glass capsule" role="group" data-label="zoom.group">
+        <button class="step" data-act="zoom" data-step="-1" data-label="zoom.out"><svg viewBox="0 0 24 24"><use href="#i-minus"/></svg></button>
+        <button class="readout" id="readout" data-act="viewmenu" aria-haspopup="menu" aria-expanded="false">
+          <svg id="fitLamp" viewBox="0 0 24 24" aria-hidden="true"><use class="window" href="#i-window"/><use class="phone" href="#i-phone"/><use class="text" href="#i-text"/></svg>
+          <span id="zoomValue">0,5×</span>
+          <svg class="more" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-down"/></svg>
+        </button>
+        <button class="step" data-act="zoom" data-step="1" data-label="zoom.in"><svg viewBox="0 0 24 24"><use href="#i-plus"/></svg></button>
       </div>
-      <div id="deck">
-        <div class="track">
-          <div class="page media" data-page="media" role="group" data-label="page.media">
-            <div class="transport">
-              <button data-media="prev" data-label="media.prev"><svg viewBox="0 0 24 24"><path d="M5 5h3v14H5zM20 5v14l-10-7z"/></svg></button>
-              <button class="play" data-media="play" data-label="media.play"><svg viewBox="0 0 24 24"><path d="M3 5l9 7-9 7zM14 5h3v14h-3zM19 5h3v14h-3z"/></svg></button>
-              <button data-media="next" data-label="media.next"><svg viewBox="0 0 24 24"><path d="M16 5h3v14h-3zM4 5l10 7-10 7z"/></svg></button>
-            </div>
-            <div class="stack">
-              <button class="cap" data-media="mute" data-label="media.mute">
-                <svg viewBox="0 0 24 24"><path d="M3 9h4l5-4v14l-5-4H3zM15.3 9.3l1.4-1.4L19 10.2l2.3-2.3 1.4 1.4-2.3 2.3 2.3 2.3-1.4 1.4-2.3-2.3-2.3 2.3-1.4-1.4 2.3-2.3z"/></svg>
-              </button>
-              <!-- The Mac's lock: open or shut as the Mac is. A tap locks it, as Control-Command-Q on its keyboard
-                   does; on a locked Mac it unlocks, as the type key does then. -->
-              <button class="cap" data-act="lock" data-label="lock.lock" aria-pressed="false">
-                <svg class="line open" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.9-.8"/></svg>
-                <svg class="line shut" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-              </button>
-            </div>
-            <div class="rocker" role="group" data-label="media.volume">
-              <button data-media="volup" data-repeat data-label="media.up">+</button>
-              <button data-media="voldown" data-repeat data-label="media.down">−</button>
-            </div>
-          </div>
-          <div class="page keys" data-page="keys" role="group" data-label="page.keys">
-            <button class="cap word" data-key="escape" data-text="key.escape"></button>
-            <button class="cap word" data-key="tab" data-text="key.tab"></button>
-            <button class="cap" data-key="space" data-label="key.space">␣</button>
-            <button class="cap" data-key="backspace" data-repeat data-label="key.backspace">⌫</button>
-            <button class="cap" data-key="return" data-label="key.return">↵</button>
-            <!-- The zoom of the app in front: browsers, editors and terminals scale their content on these. -->
-            <button class="cap pair" data-key="-" data-with="cmd" data-label="key.zoomOut">⌘−</button>
-            <button class="cap pair" data-key="0" data-with="cmd" data-label="key.zoomReset">⌘0</button>
-            <button class="cap pair" data-key="+" data-with="cmd" data-label="key.zoomIn">⌘+</button>
-            <button class="cap" data-mod="cmd" data-label="key.cmd">⌘</button>
-            <button class="cap" data-mod="alt" data-label="key.alt">⌥</button>
-            <button class="cap" data-mod="ctrl" data-label="key.ctrl">⌃</button>
-            <button class="cap" data-mod="shift" data-label="key.shift">⇧</button>
-            <button class="cap" data-key="left" data-repeat data-label="key.left">←</button>
-            <button class="cap" data-key="down" data-repeat data-label="key.down">↓</button>
-            <button class="cap" data-key="up" data-repeat data-label="key.up">↑</button>
-            <button class="cap" data-key="right" data-repeat data-label="key.right">→</button>
-          </div>
-          <div class="page settings" data-page="settings" role="group" data-label="page.settings">
-            <div class="setting" data-setting="speed">
-              <span class="name"><span data-text="setting.speed"></span><output></output></span>
-              <div class="slider" role="slider" tabindex="0" data-label="setting.speed"><b></b></div>
-            </div>
-            <div class="setting" data-setting="acceleration">
-              <span class="name"><span data-text="setting.acceleration"></span><output></output></span>
-              <div class="slider" role="slider" tabindex="0" data-label="setting.accelerationLabel"><b></b></div>
-            </div>
-            <div class="setting" data-setting="scroll">
-              <span class="name"><span data-text="setting.scroll"></span><output></output></span>
-              <div class="slider" role="slider" tabindex="0" data-label="setting.scroll"><b></b></div>
-            </div>
-            <div class="actions">
-              <button class="cap" data-act="meter" aria-pressed="false" data-label="setting.meterLabel"><span data-text="setting.meter"></span></button>
-              <button class="cap" data-act="settings-reset" data-label="setting.resetLabel"><span data-text="setting.reset"></span></button>
-            </div>
-          </div>
+      <!-- Without the live view: the key that turns it on, where the view capsule stands while it runs. -->
+      <button id="liveBtn" class="glass capsule" data-act="view" data-label="view.turnOn" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-eye"/></svg><span class="long" data-text="view"></span>
+      </button>
+    </div>
+    <div class="zone" id="zoneBottom">
+      <!-- The mouse keys: back and forward where a mouse has its side buttons, then click and right-click. -->
+      <div id="mouse" class="glass capsule">
+        <div id="side" class="side" role="group" data-label="mouse.side">
+          <button data-click="back" data-label="mouse.back"><svg viewBox="0 0 24 24"><use href="#i-back"/></svg></button>
+          <button data-click="forward" data-label="mouse.forward"><svg viewBox="0 0 24 24"><use href="#i-forward"/></svg></button>
         </div>
+        <button id="leftBtn" class="click" data-hold="left" data-label="mouse.leftLabel"><span data-text="mouse.left"></span></button>
+        <button id="rightBtn" class="click" data-click="right" data-label="mouse.right"><span class="long" data-text="mouse.right"></span><span class="narrow" data-text="mouse.rightNarrow"></span></button>
+      </div>
+      <!-- The bar: write on the Mac (on a locked Mac: unlock it, the main action then), the apps, the controls. -->
+      <div id="bar">
+        <button class="slot glass capsule" data-act="type" data-label="type.label">
+          <svg class="open" viewBox="0 0 24 24"><use href="#i-keyboard"/></svg>
+          <svg class="shut" viewBox="0 0 24 24"><use href="#i-lock"/></svg>
+          <svg class="face" viewBox="0 0 24 24"><use href="#i-face"/></svg>
+          <span id="typeLabel" class="long" data-text="type"></span><span id="typeShort" class="short" data-text="type.short"></span>
+        </button>
+        <button class="round glass" data-act="apps" data-label="apps.key" aria-expanded="false"><svg viewBox="0 0 24 24"><use href="#i-grid"/></svg></button>
+        <button class="round glass" data-act="deck" data-label="deck.key" aria-expanded="false"><svg viewBox="0 0 24 24"><use href="#i-controls"/></svg></button>
       </div>
     </div>
-    <!-- The switcher: the Mac's open apps, out of the same edge. An app with several windows shows them to choose from.
-         Under them, on a Mac with more than one display, the displays as they are arranged: a tap puts the pointer there. -->
-    <div id="switcher" class="sheet" role="group" data-label="apps.sheet">
-      <div class="grip" aria-hidden="true"></div>
-      <div class="head">
-        <button class="key" data-act="apps-back" data-label="apps.back" hidden><svg viewBox="0 0 24 24"><path d="M14.5 5.5L8 12l6.5 6.5"/></svg></button>
+    <div class="zone col" id="zoneMouse"></div>
+    <div class="zone col" id="zoneTools"></div>
+  </div>
+
+  <!-- The gesture tour: a card over the picture, above the mouse keys. Each step is done when its gesture is recognised. -->
+  <div id="tour" role="status" aria-live="polite" hidden>
+    <span id="tourCount"></span>
+    <strong id="tourTitle"></strong>
+    <span id="tourText"></span>
+    <div class="foot"><span id="tourDots" aria-hidden="true"></span><button class="link" data-act="tour-skip" data-text="tour.skip"></button></div>
+  </div>
+
+  <!-- Menus: one at a time, over the picture, next to the button that opened them. -->
+  <div id="macMenu" class="menu" role="menu" data-label="mac.menu" hidden>
+    <div class="menuhead">
+      <strong id="menuName"></strong>
+      <span id="menuState"></span>
+      <span id="menuMeter"></span>
+    </div>
+    <button role="menuitemcheckbox" data-act="view" aria-checked="false"><svg class="tick" viewBox="0 0 24 24"><use href="#i-check"/></svg><span data-text="view"></span><svg viewBox="0 0 24 24"><use href="#i-eye"/></svg></button>
+    <button role="menuitem" data-act="lock" data-label="lock.lock" aria-pressed="false"><svg class="tick" viewBox="0 0 24 24"></svg><span class="lockword" data-text="lock.lock"></span>
+      <svg class="open" viewBox="0 0 24 24"><use href="#i-unlock"/></svg><svg class="shut" viewBox="0 0 24 24"><use href="#i-lock"/></svg></button>
+    <hr>
+    <button role="menuitem" data-act="tour"><svg class="tick" viewBox="0 0 24 24"></svg><span data-text="menu.gestures"></span><svg viewBox="0 0 24 24"><use href="#i-hand"/></svg></button>
+    <button role="menuitem" data-act="settings"><svg class="tick" viewBox="0 0 24 24"></svg><span data-text="menu.settings"></span><svg viewBox="0 0 24 24"><use href="#i-gear"/></svg></button>
+  </div>
+  <div id="viewMenu" class="menu" role="menu" data-label="view.menu" hidden>
+    <button role="menuitemcheckbox" data-act="fit" aria-checked="false"><svg class="tick" viewBox="0 0 24 24"><use href="#i-check"/></svg><span data-text="view.fit"></span><svg viewBox="0 0 24 24"><use href="#i-window"/></svg></button>
+    <button role="menuitemcheckbox" data-act="shape" aria-checked="false"><svg class="tick" viewBox="0 0 24 24"><use href="#i-check"/></svg><span data-text="view.shape"></span><svg viewBox="0 0 24 24"><use href="#i-phone"/></svg></button>
+    <hr>
+    <button role="menuitem" data-act="zoom-actual"><svg class="tick" viewBox="0 0 24 24"></svg><span data-text="view.actual"></span><svg viewBox="0 0 24 24"><use href="#i-actual"/></svg></button>
+    <button role="menuitem" data-act="zoom-all"><svg class="tick" viewBox="0 0 24 24"></svg><span data-text="view.all"></span><svg viewBox="0 0 24 24"><use href="#i-desktop"/></svg></button>
+    <!-- From two displays on: the Mac's displays as they are arranged. A tap puts the pointer, and the view with it, there. -->
+    <div class="displays" hidden>
+      <hr>
+      <span class="label" data-text="view.displays"></span>
+      <div id="displays" role="group" data-label="displays"></div>
+    </div>
+  </div>
+
+  <!-- Sheets: over the picture from its lower edge, one at a time. None changes the picture's size, so the stream runs on. -->
+  <div id="switcher" class="sheet" role="dialog" data-label="apps.sheet">
+    <div class="grip" aria-hidden="true"></div>
+    <div class="head">
+      <button class="round plain" data-act="close" data-label="sheet.close"><svg viewBox="0 0 24 24"><use href="#i-close"/></svg></button>
+      <button class="round plain" data-act="apps-back" data-label="apps.back" hidden><svg viewBox="0 0 24 24"><use href="#i-back"/></svg></button>
+      <div class="title">
         <span class="icon" hidden><img id="appsIcon" alt=""><span class="letter"></span></span>
         <span id="appsTitle" class="heading" data-text="apps.title"></span>
         <span id="appsNote"></span>
-        <!-- With "Fenster einpassen": the window in front takes the phone's shape on the Mac, and its old frame back afterwards. -->
-        <button class="key" data-act="shape" aria-pressed="false" data-label="apps.shapeLabel" data-text="apps.shape"></button>
       </div>
-      <div class="well"><div id="apps" role="group" data-label="apps.title" aria-live="polite"></div></div>
-      <div id="displays" role="group" data-label="displays" hidden></div>
+    </div>
+    <div class="well"><div id="apps" role="group" data-label="apps.title" aria-live="polite"></div></div>
+  </div>
+  <div id="drawer" class="sheet" role="dialog" data-label="deck.title">
+    <div class="grip" aria-hidden="true"></div>
+    <div class="head">
+      <button class="round plain" data-act="close" data-label="sheet.close"><svg viewBox="0 0 24 24"><use href="#i-close"/></svg></button>
+      <div id="pages" class="segments" role="group" data-label="pages">
+        <i></i>
+        <button data-act="page" data-page="media" data-text="page.media"></button>
+        <button data-act="page" data-page="keys" data-text="page.keys"></button>
+      </div>
+    </div>
+    <div id="deck">
+      <div class="page media" data-page="media" role="group" data-label="page.media">
+        <div class="transport">
+          <button data-media="prev" data-label="media.prev"><svg viewBox="0 0 24 24"><use href="#i-prev"/></svg></button>
+          <button class="play" data-media="play" data-label="media.play"><svg viewBox="0 0 24 24"><use href="#i-play"/></svg></button>
+          <button data-media="next" data-label="media.next"><svg viewBox="0 0 24 24"><use href="#i-next"/></svg></button>
+        </div>
+        <div class="tiles">
+          <button class="tile" data-media="mute" data-label="media.mute"><svg viewBox="0 0 24 24"><use href="#i-mute"/></svg><span data-text="tile.mute"></span></button>
+          <div class="tile rocker" role="group" data-label="media.volume">
+            <button data-media="voldown" data-repeat data-label="media.down"><svg viewBox="0 0 24 24"><use href="#i-quieter"/></svg></button>
+            <button data-media="volup" data-repeat data-label="media.up"><svg viewBox="0 0 24 24"><use href="#i-louder"/></svg></button>
+          </div>
+          <!-- The Mac's lock: open or shut as the Mac is. A tap locks it, as Control-Command-Q on its keyboard does;
+               on a locked Mac it unlocks, as the bar's key does then. -->
+          <button class="tile" data-act="lock" data-label="lock.lock" aria-pressed="false">
+            <svg class="open" viewBox="0 0 24 24"><use href="#i-unlock"/></svg><svg class="shut" viewBox="0 0 24 24"><use href="#i-lock"/></svg>
+            <span class="lockword" data-text="tile.lock"></span>
+          </button>
+        </div>
+      </div>
+      <div class="page keys" data-page="keys" role="group" data-label="page.keys">
+        <button class="cap word" data-key="escape" data-text="key.escape"></button>
+        <button class="cap word" data-key="tab" data-text="key.tab"></button>
+        <button class="cap" data-key="space" data-label="key.space">␣</button>
+        <button class="cap" data-key="backspace" data-repeat data-label="key.backspace">⌫</button>
+        <button class="cap" data-key="return" data-label="key.return">↵</button>
+        <button class="cap mod" data-mod="cmd" data-label="key.cmd">⌘<small data-text="key.cmdName"></small></button>
+        <button class="cap mod" data-mod="alt" data-label="key.alt">⌥<small data-text="key.altName"></small></button>
+        <button class="cap arrow up" data-key="up" data-repeat data-label="key.up">↑</button>
+        <button class="cap mod" data-mod="ctrl" data-label="key.ctrl">⌃<small data-text="key.ctrlName"></small></button>
+        <button class="cap mod" data-mod="shift" data-label="key.shift">⇧<small data-text="key.shiftName"></small></button>
+        <button class="cap arrow" data-key="left" data-repeat data-label="key.left">←</button>
+        <button class="cap arrow" data-key="down" data-repeat data-label="key.down">↓</button>
+        <button class="cap arrow" data-key="right" data-repeat data-label="key.right">→</button>
+        <!-- The zoom of the app in front: browsers, editors and terminals scale their content on these. -->
+        <div class="appzoom" role="group" data-label="key.appZoom">
+          <button class="cap" data-key="-" data-with="cmd" data-label="key.zoomOut">A<span class="sign">−</span></button>
+          <button class="cap" data-key="0" data-with="cmd" data-label="key.zoomReset"><small data-text="key.appZoom"></small><span data-text="key.actual"></span></button>
+          <button class="cap" data-key="+" data-with="cmd" data-label="key.zoomIn">A<span class="sign">+</span></button>
+        </div>
+      </div>
     </div>
   </div>
-  <!-- Under the thumb: mouse keys with the side buttons for back and forward, then the keys that open things:
-       the keyboard, the Mac's apps, the tray. -->
-  <div id="dock">
-    <div class="mouse">
-      <!-- A mouse's side buttons, on the side where the thumb finds them on a mouse. -->
-      <div class="side" role="group" data-label="mouse.side">
-        <button data-click="back" data-label="mouse.back"><svg viewBox="0 0 24 24"><path d="M14.5 5.5L8 12l6.5 6.5"/></svg></button>
-        <button data-click="forward" data-label="mouse.forward"><svg viewBox="0 0 24 24"><path d="M9.5 5.5L16 12l-6.5 6.5"/></svg></button>
-      </div>
-      <button data-hold="left" data-label="mouse.leftLabel" data-text="mouse.left"></button>
-      <button data-click="right" data-text="mouse.right"></button>
+  <!-- Settings, in one place. Not modal: the pad above takes moves and scrolls, so a pointer speed is tried at once. -->
+  <div id="prefs" class="sheet" role="dialog" data-label="settings.title">
+    <div class="grip" aria-hidden="true"></div>
+    <div class="head">
+      <button class="round plain" data-act="close" data-label="sheet.close"><svg viewBox="0 0 24 24"><use href="#i-close"/></svg></button>
+      <div class="title"><span class="heading" data-text="settings.title"></span></div>
     </div>
-    <div class="tools">
-      <!-- While the Mac is locked, the key opens the same field for its password: a padlock instead of a keyboard.
-           Its words come long and short; the short ones stand where the long ones do not fit. -->
-      <button class="slot" data-act="type" data-label="type.label">
-        <svg class="open" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M7 10h.01M12 10h.01M17 10h.01M8 14h8"/></svg>
-        <svg class="shut" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-        <span id="typeLabel" class="long" data-text="type"></span><span id="typeShort" class="short" data-text="type.short"></span>
-      </button>
-      <button class="key" data-act="apps" data-label="apps.key" aria-expanded="false" data-text="apps"></button>
-      <button class="key" data-act="deck" data-label="deck.key" aria-expanded="false">
-        <svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg>
-      </button>
-      <!-- The live view, on or off: a display with a picture in it, or one struck through. -->
-      <button class="key" id="viewBtn" data-act="view" data-label="view" aria-pressed="false">
-        <svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path class="on" d="M6 13.5l3.5-4 3 3 2-2 3.5 3"/><path class="off" d="M3.5 3.5l17 17"/></svg>
-      </button>
+    <div class="well scroll">
+      <h3 data-text="settings.pointer"></h3>
+      <div class="group">
+        <div class="setting" data-setting="speed">
+          <span class="name"><span data-text="setting.speed"></span><output></output></span>
+          <div class="slider" role="slider" tabindex="0" data-label="setting.speed"><b></b></div>
+        </div>
+        <div class="setting" data-setting="acceleration">
+          <span class="name"><span data-text="setting.acceleration"></span><output></output></span>
+          <div class="slider" role="slider" tabindex="0" data-label="setting.accelerationLabel"><b></b></div>
+        </div>
+        <div class="setting" data-setting="scroll">
+          <span class="name"><span data-text="setting.scroll"></span><output></output></span>
+          <div class="slider" role="slider" tabindex="0" data-label="setting.scroll"><b></b></div>
+        </div>
+        <button class="row" data-act="settings-reset" data-label="setting.resetLabel"><span class="action" data-text="setting.reset"></span></button>
+      </div>
+      <p class="note" data-text="settings.pointerNote"></p>
+      <h3 data-text="settings.view"></h3>
+      <div class="group">
+        <button class="row" role="switch" data-act="fit" aria-checked="false"><span data-text="view.fit"></span><span class="switch" aria-hidden="true"></span></button>
+        <button class="row" role="switch" data-act="shape" aria-checked="false"><span data-text="view.shape"></span><span class="switch" aria-hidden="true"></span></button>
+        <button class="row" role="switch" data-act="meter" aria-checked="false"><span data-text="settings.meter"></span><span class="switch" aria-hidden="true"></span></button>
+      </div>
+      <p class="note" data-text="settings.viewNote"></p>
+      <h3 data-text="settings.layout"></h3>
+      <div class="group">
+        <button class="row" role="switch" data-act="swap" aria-checked="false"><span data-text="settings.swap"></span><span class="switch" aria-hidden="true"></span></button>
+        <button class="row" role="switch" data-act="glass" aria-checked="true"><span data-text="settings.glass"></span><span class="switch" aria-hidden="true"></span></button>
+      </div>
+      <p class="note" data-text="settings.layoutNote"></p>
+      <h3 data-text="settings.help"></h3>
+      <div class="group">
+        <button class="row" data-act="tour"><span data-text="settings.tour"></span><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-forward"/></svg></button>
+      </div>
+      <p class="note" id="deviceNote"></p>
     </div>
   </div>
-  <!-- While typing: the keys the iOS keyboard lacks sit right above it, next to the field. -->
+
+  <!-- While typing: the keys the iOS keyboard lacks in one capsule of three groups, right above it, then the field. -->
   <div id="typebar">
-    <div id="accessory" role="group" data-label="typebar">
-      <button class="cap word" data-key="escape" data-text="key.escape"></button>
-      <button class="cap word" data-key="tab" data-text="key.tab"></button>
-      <button class="cap" data-mod="cmd" data-label="key.cmd">⌘</button>
-      <button class="cap" data-mod="alt" data-label="key.alt">⌥</button>
-      <button class="cap" data-mod="ctrl" data-label="key.ctrl">⌃</button>
-      <button class="cap" data-mod="shift" data-label="key.shift">⇧</button>
-      <button class="cap" data-key="left" data-repeat data-label="key.left">←</button>
-      <button class="cap" data-key="down" data-repeat data-label="key.down">↓</button>
-      <button class="cap" data-key="up" data-repeat data-label="key.up">↑</button>
-      <button class="cap" data-key="right" data-repeat data-label="key.right">→</button>
+    <div id="accessory" class="glass capsule" role="group" data-label="typebar">
+      <div class="set">
+        <button data-key="escape" class="word" data-text="key.escape"></button>
+        <button data-key="tab" class="word" data-text="key.tab"></button>
+      </div>
+      <div class="set">
+        <button data-mod="cmd" data-label="key.cmd">⌘</button>
+        <button data-mod="alt" data-label="key.alt">⌥</button>
+        <button data-mod="ctrl" data-label="key.ctrl">⌃</button>
+        <button data-mod="shift" data-label="key.shift">⇧</button>
+      </div>
+      <div class="set">
+        <button data-key="left" data-repeat data-label="key.left">←</button>
+        <button data-key="down" data-repeat data-label="key.down">↓</button>
+        <button data-key="up" data-repeat data-label="key.up">↑</button>
+        <button data-key="right" data-repeat data-label="key.right">→</button>
+      </div>
     </div>
-    <div id="slot">
+    <div id="slot" class="glass capsule">
       <input id="field" type="text" inputmode="text" enterkeyhint="send"
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-label="field">
     </div>
-    <button id="done" class="cap accent" data-act="done" data-text="done"></button>
+    <button id="done" class="round accent" data-act="done" data-label="done"><svg viewBox="0 0 24 24"><use href="#i-check"/></svg></button>
   </div>
-  <!-- The first start, without a key: what to do at the Mac, step by step. Also reached from a pairing the Mac
-       no longer takes. The steps come from strings.js, so another way to pair adds steps there. -->
+
+  <!-- The first start, without a pairing: what to do at the Mac, and a field for the six digits it shows beside
+       its QR code. Also the way back in for a Home Screen app that came up without its key, and for a pairing the
+       Mac no longer takes. -->
   <div id="welcome" hidden>
     <div class="card">
-      <svg class="devices" viewBox="0 0 48 48" aria-hidden="true"><rect x="5" y="10" width="28" height="19" rx="2.5"/><path d="M2 34h34"/><rect x="32" y="16" width="13" height="23" rx="3"/></svg>
+      <svg class="devices" viewBox="0 0 48 48" aria-hidden="true"><use href="#i-devices"/></svg>
       <h1 data-text="welcome.title"></h1>
       <p data-text="welcome.text"></p>
       <ol id="steps"></ol>
-      <p class="note" data-text="welcome.note"></p>
+      <label class="or" for="code" data-text="pair.or"></label>
+      <div class="code">
+        <div class="cells" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="12"
+               enterkeyhint="go" autocorrect="off" autocapitalize="off" spellcheck="false" data-label="pair.field">
+      </div>
+      <p id="pairSays" role="status" aria-live="polite"></p>
+      <p class="note" id="welcomeNote" data-text="welcome.note"></p>
       <button class="pill" data-act="welcome-back" data-text="welcome.back" hidden></button>
     </div>
   </div>
