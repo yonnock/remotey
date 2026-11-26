@@ -6,6 +6,8 @@
 // the pointer, even after one of them lifts. Three fingers drag: the left button is held while they move,
 // as with three-finger drag on a Mac trackpad, and released when one of them lifts.
 
+import { number, t } from './strings.js';
+
 /** A tap is shorter than this and travels less than TAP_SLOP pixels. */
 export const TAP_MS = 250, TAP_SLOP = 8;
 /**
@@ -16,7 +18,7 @@ export const SCROLL_SLOP = 6, PINCH_SLOP = 16;
 /** Scroll pixels on the Mac per CSS pixel of finger travel, before the user's scroll speed. */
 export const SCROLL_GAIN = 1.6;
 
-/** What the user can set on the Regler page, with the defaults "Std." restores: [min, max, step]. */
+/** What the user can set on the settings page, with the defaults "Zurücksetzen" restores: [min, max, step]. */
 export const SETTINGS = {
   speed: { initial: 1, range: [0.5, 2, 0.25] },
   acceleration: { initial: 1, range: [0, 2, 0.25] },
@@ -44,9 +46,9 @@ export function stepSetting(name, value, direction) {
   const here = all.reduce((best, v, i) => (Math.abs(v - value) < Math.abs(all[best] - value) ? i : best), 0);
   return all[Math.min(all.length - 1, Math.max(0, here + Math.sign(direction)))];
 }
-/** The readout: "1,25×", or "aus" for an acceleration of 0 (a linear pointer). */
+/** The readout: "1,25×", or "aus" for an acceleration of 0 (a linear pointer), in the phone's language. */
 export function settingText(name, value) {
-  return name === 'acceleration' && value === 0 ? 'aus' : `${String(value).replace('.', ',')}×`;
+  return name === 'acceleration' && value === 0 ? t('setting.off') : `${number(value)}×`;
 }
 
 // Finger speed in CSS pixels per millisecond: below SLOW the pointer follows 1:1 (times the speed setting),
