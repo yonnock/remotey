@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    # A hosted Mac has a logged-in GUI session (windows, displays, the Finder), but no Accessibility and no
+    # Screen Recording permission, and it runs in a virtual machine. The tests that need more say so: see
+    # docs/decisions.md, round 18.
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      # chrome-headless-shell 1248, the build the page's measurements in docs/decisions.md were taken with.
+      # Only the browser is downloaded; the repository keeps no package.json and no dependencies.
+      PLAYWRIGHT_VERSION: 1.64.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Tool versions
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          node --version
+
+      - name: Build agent and tests
+        run: swift build --build-tests
+
+      - name: Swift tests
+        id: swift
+        run: |
+          set -o pipefail
+          swift test --skip-build 2>&1 | tee swift-test.log
+
+      - name: Failed Swift tests
+        if: failure() && steps.swift.outcome == 'failure'
+        run: |
+          echo "Failures and skips, from swift-test.log:"
+          grep -E "error: |failed \(|skipped" swift-test.log || echo "(no test failed: the build or the runner did)"
+
+      - name: Node tests
+        if: success() || steps.swift.outcome == 'failure'
+        # Named, not the folder: `node --test scripts/` finds no tests on Node 24.
+        run: node --test scripts/*.test.mjs
+
+      - name: Cache chrome-headless-shell
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: headless-shell-${{ runner.os }}-${{ runner.arch }}-${{ env.PLAYWRIGHT_VERSION }}
+
+      - name: Install chrome-headless-shell
+        if: success() || steps.swift.outcome == 'failure'
+        run: npx --yes "playwright@${PLAYWRIGHT_VERSION}" install --only-shell chromium
+
+      - name: Page in headless Chromium
+        id: ui
+        if: success() || steps.swift.outcome == 'failure'
+        run: |
+          node scripts/ui-verify.mjs --json=ui-verify.json --shots=ui-shots > /dev/null
+          node .github/check-ui-verify.mjs ui-verify.json
+
+      - name: Keep logs and pictures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: |
+            swift-test.log
+            ui-verify.json
+            ui-shots/
+          if-no-files-found: ignore

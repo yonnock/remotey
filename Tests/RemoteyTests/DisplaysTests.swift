@@ -33,7 +33,7 @@ final class DisplaysTests: XCTestCase {
     func testTheListNamesEveryDisplayOfThisMac() {
         let list = Displays.list()
         XCTAssertEqual(list.count, NSScreen.screens.count)
-        XCTAssertEqual(list.filter(\.pointer).count, 1)
+        XCTAssertEqual(list.filter(\.pointer).count, list.isEmpty ? 0 : 1, "a machine without a display has no pointer on one")
         for display in list {
             XCTAssertFalse(display.name.isEmpty)
             XCTAssertEqual(display.bounds, CGDisplayBounds(display.id))
