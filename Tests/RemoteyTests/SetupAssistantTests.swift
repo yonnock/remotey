@@ -57,7 +57,7 @@ final class SetupAssistantTests: XCTestCase {
                           screenRecording: { .init(granted: true, preflight: true) },
                           loginItem: { [unowned self] in loginItem },
                           paired: { [unowned self] in paired }, moved: { false }),
-            effects: .init(open: { [unowned self] in opened.append($0) }, copy: { _ in }, showPairing: {}, restart: {},
+            effects: .init(open: { [unowned self] in opened.append($0) }, copy: { _ in }, showPairing: {},
                            askForAccessibility: { [unowned self] in asked += 1 }, askForScreenRecording: {},
                            setLoginItem: { [unowned self] in loginItem = $0 ? .on : .off }, openLoginItems: {}),
             tailscale: tailscale, background: { $0() }, main: { $0() },
@@ -83,6 +83,15 @@ final class SetupAssistantTests: XCTestCase {
         assistant.unwatch()
         assistant.unwatch()
         XCTAssertEqual(stopped, 1)
+    }
+
+    /// The menu bar symbol follows the permissions while nothing watches, without starting Tailscale's tool.
+    func testALocalLookReadsThePermissionsAndNotTailscale() {
+        accessibility = true
+        assistant.refreshLocal()
+        XCTAssertEqual(assistant.row(.accessibility).state, .ok)
+        XCTAssertEqual(tailscale.snapshots, 0)
+        XCTAssertEqual(changes, 1)
     }
 
     func testAChangeIsToldOnceNotEverySecond() {

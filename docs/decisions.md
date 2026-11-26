@@ -930,6 +930,111 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
       `pairing-e2e.mjs` grün. Je Sicherheitsregel ein Test; vierzehn Abwandlungen (Origin, JSON, Login über HTTP
       und im Handshake, Ticket einmal, Versuche, Verbrauch, Entfernen, Pause, HttpOnly, Token-Schalter, Hash statt
       Schlüssel, Ablauf, Erlaubnis), je eine Regel zurückgenommen, ließen je ihren Test scheitern.
+20. Die Oberfläche am Mac: Menü, Assistent, Einstellungen (Analyse mit Mockups, Mockups 20 bis 22). Vorher zeigte der
+    Mac ein NSMenu mit Textzeilen, ein Fenster mit QR-Code und sonst nichts; wer verbunden ist, ob Bildschirmaufnahme
+    und Tailscale gehen, sah man nicht, und eingerichtet wurde im Terminal. Die Modelle (Runden 18 und 19) waren
+    fertig, diese Runde setzt die Oberfläche darauf.
+    - Entscheidung Darstellung des Menüs: ein Panel (`MenuPanel`, `NSPanel` mit `.nonactivatingPanel`, Ebene
+      `.popUpMenu`, Material `.menu`, Ecken 14, Haarlinie) mit SwiftUI darin, kein NSMenu. Ein NSMenu hält einen
+      Schalter und eine Taste „Trennen“ in einer Zeile nur als eigene Ansicht, und solche Zeilen bekommen von ihm
+      weder Return noch die Markierung; vor allem zeichnet ein NSMenu nur, solange es auf dem Bildschirm offen ist,
+      es gäbe also kein Bild zum Prüfen. Was ein Menü tut, macht das Panel nach: es öffnet beim Drücken auf das Symbol
+      (nicht beim Loslassen), die linke Kante unter dem Symbol, oben 5 pt unter der Menüleiste, ganz auf dem Display
+      des Symbols (`MenuPanel.origin`, getestet mit rechtem Rand und einem zweiten Display links unten); es schließt
+      bei einem Klick in ein anderes Programm (globaler Monitor), in ein anderes Fenster von Remotey (lokaler Monitor),
+      bei Escape, wenn es die Tastatur verliert und beim Wechsel des Space; es nimmt die Tastatur, ohne Remotey zum
+      aktiven Programm zu machen; ↑ und ↓ markieren die Zeilen, Return und Leertaste lösen aus, ⌘, und ⌘Q gehen wie
+      angeschrieben. Es steht auf allen Spaces und über Vollbildprogrammen. Jedes Öffnen baut die Ansicht neu, damit
+      keine Zeile von vorher markiert bleibt. Das Symbol ist hervorgehoben, solange das Panel offen ist.
+    - Entscheidung SwiftUI in AppKit: `main.swift` und `AppDelegate` bleiben AppKit; Menüinhalt, Assistent und
+      Einstellungen sind SwiftUI in `NSHostingView`/`NSHostingController`. Ein `Form` mit `.grouped` ist die
+      Darstellung der Systemeinstellungen mit den Systemfarben, Schaltern und Abständen, ohne sie nachzubauen; das
+      Fenster der Einstellungen ist ein `NSTabViewController` mit `.toolbar` und `toolbarStyle = .preference`, wie
+      Mac-Apps es haben. So entsteht das native Bild mit dem wenigsten Code (Ansichten, Modelle, Wörter und
+      Verdrahtung zusammen rund 2400 Zeilen).
+      Vorher geprüft: `cacheDisplay` zeichnet `NSHostingView` samt Form, Schaltern und Tasten außerhalb des
+      Bildschirms; ohne das hätte es keine Bilder gegeben.
+    - Ein Wert für alle drei: `MacState` (Zustand des Servers und Fakten der Checkliste, rein, getestet: Symbol,
+      Statuszeilen, Untertitel der Geräte mit heute/gestern/Datum, Adresse, ob gekoppelt werden kann), `MacModel`
+      (der Wert, die Uhr und die Tasten als Closures; eine Taste, die eine Datei nicht schreiben kann, setzt
+      `problem`, das `AppDelegate` als Alert zeigt, als Blatt am Fenster, aus dem sie kam), `AssistantFlow` (Schritte
+      und Code, getestet). Die Ansichten lesen nur diese, darum zeichnen die Bilder ohne Server und ohne Tailscale.
+      Alle Wörter stehen in `Texts.swift` (auch die des Face-ID-Fensters), die der Checkliste weiter in `Setup.swift`.
+    - Menü: Kopf „Remotey“ mit dem Schalter (an = Fernsteuerung, aus = Pause, mit einem Satz darunter); wer
+      verbunden ist (Name, „Verbunden · Live-Bild an“, mit dem alten Token „Web-Zugang“, „Trennen“); Status für
+      Bedienungshilfen, Bildschirmaufnahme und Tailscale. Tailscale, HTTPS und Freigabe sind eine Zeile: die erste, die
+      nicht grün ist, spricht für alle („HTTPS im Tailnet aus“, „Nicht im Tailnet freigegeben“, „Funnel ist an“); grün
+      steht der Name des Macs im Tailnet darunter. Eine Zeile, die nicht grün ist, führt zu ihrer Abhilfe: die
+      Erlaubnisse zu ihrer Taste (fragen, dann die Einstellungen), Tailscale zum Assistenten. Grüne Zeilen sind nicht
+      klickbar. Belegte Ports und ein nicht gespeicherter Token stehen als rote Zeilen oben. Dann „iPhone
+      hinzufügen …“, „Mit Face ID entsperren …“ (mit „Eingerichtet“ oder „Aus“), „Einstellungen …“ ⌘, und „Remotey
+      beenden“ ⌘Q. VoiceOver: jede Zeile ein Element, klickbare als Taste mit Aktion, der Zustand als Wert.
+    - Symbol in der Menüleiste (`StatusSymbol`, Vorlagebild, also in der Farbe der Leiste, auch bei erhöhtem
+      Kontrast): Zeiger; mit Strahlen, solange ein Telefon verbunden ist; durchgestrichen bei Pause; mit einem kleinen
+      Ausrufezeichen, ausgestanzt, wenn die Ports zu sind oder eine Pflichtzeile der Checkliste (Bedienungshilfen,
+      Tailscale, HTTPS, Freigabe) nicht grün ist. Eine Zeile, die noch prüft, warnt nicht. VoiceOver und Tooltip sagen
+      den Zustand. Damit das Symbol der Bedienungshilfe folgt, während nichts zusieht, liest `refreshLocal()` (neu im
+      Assistenten, getestet) die billigen Proben alle 5 s, und Tailscale wird alle 60 s im Hintergrund gefragt.
+    - Assistent: vier Schritte, Punkte unten. „Remotey einrichten“ mit den fünf Zeilen der Checkliste (Zustand, Satz,
+      eine Taste) und „Beim Anmelden starten“; „Weiter“ erst, wenn Freigabe und Ports stehen. „iPhone hinzufügen“ mit
+      QR-Code, den sechs Ziffern darunter, und der Checkliste daneben mit „Der Code gilt noch 4:38 Minuten“, jede
+      Sekunde neu; abgelaufen oder zu oft falsch geraten: „Neuer Code“. Ist ein Telefon gekoppelt, geht es von selbst
+      zu „Bewege den Finger“; die erste Bewegung dieses Telefons macht den Schritt grün („Es funktioniert“). Dafür sagt
+      der Server jetzt die erste Bewegung jeder Sitzung mit ihrem Gerät (`firstMove`, getestet; `hasMoved` gilt nur
+      einmal je Mac). „Zum Home-Bildschirm“: drei Schritte mit den Symbolen von iOS im Satz, dazu wieder sechs
+      Ziffern, weil eine App vom Home-Bildschirm Safaris Cookie vielleicht nicht hat; der Schritt wird grün, sobald
+      eine Sitzung eines Geräts mit `standalone` kommt. Der Assistent öffnet sich beim ersten Start und wenn eine
+      Pflichtzeile nicht grün ist (`launchCheck`), sonst über „iPhone hinzufügen …“ (dann gleich beim Code, wenn
+      nichts fehlt) und „Einrichtung öffnen …“. Ein Angebot lebt nur, solange sein Schritt zu sehen ist; Zurück,
+      Fertig und das Schließen des Fensters schließen es.
+    - Anmeldeobjekt beim ersten Start: der Assistent schaltet es ein, das Kästchen steht also angehakt da, und wer es
+      nicht will, nimmt den Haken weg. Danach zeigt das Kästchen, was ist, und schaltet sofort; „braucht Erlaubnis“
+      erklärt sich, ohne Bundle ist es aus und sagt warum.
+    - Einstellungen: Allgemein (Anmeldeobjekt, Fernsteuerung, Adresse im Tailnet, Zustand der Ports, Einrichtung
+      öffnen), iPhones (Geräte mit „Verbunden seit 14:31 · Live-Bild an“ oder „Zuletzt gestern, 21:07“, ⓘ für Name,
+      Kopplung, zuletzt verbunden und Login, dort umbenennen; „Widerrufen …“; „Web-Zugang ohne Gerätebindung“ mit
+      einem Satz, was er ist und wann er aus soll; „Alle iPhones trennen …“), Sicherheit (Face ID einrichten oder
+      entfernen, Tailscale, HTTPS und Freigabe mit Zustand und Taste, wer zugelassen ist, „Freigabe entfernen …“),
+      Berechtigungen (beide mit Zustand und Abhilfe). Fragen vorher, mit dem, was geschieht: Widerrufen, Alle trennen,
+      Web-Zugang aus (nur wenn ein Gerät ihn gerade nutzt, mit der Zahl), Face ID entfernen, Freigabe entfernen.
+    - Aufgeräumt: `AppDelegate.tailscaleStatus()` lief im Hauptthread und ist weg; den Namen gibt `MacState.hostname`
+      aus dem Assistenten, den Besitzer setzt jeder Blick des Assistenten auf Tailscale. Das alte Menü, das
+      Kopplungsfenster und die Alerts für Token und Anmeldeobjekt sind weg; „Link kopieren“ gibt es nicht mehr (der
+      Code und die Ziffern reichen). Die Abfrage der Bedienungshilfen beim Start ist weg: gefragt wird nur über die
+      Taste. Der Weg „Neustart nötig“ der Bildschirmaufnahme ist weg (`needsRestart`, `Action.restart`): seit Runde 19
+      liest der Server die Erlaubnis wie die Checkliste und startet das Live-Bild ohne Neustart, die Zeile sagt also
+      grün, sobald die Fenstertitel die Erlaubnis zeigen. Ein Hauptmenü ohne Menüleiste gibt ⌘C/⌘V/⌘A (auch im
+      Passwortfeld des Face-ID-Fensters), ⌘W und ⌘, in den Fenstern. Das Logo aus docs/logo.svg ist als Zeichnung
+      im Code das Symbol des Programms (in Alerts) und das Zeichen des Assistenten. `REMOTEY_HEADLESS` läuft wie
+      vorher: `pairing-e2e.mjs` grün.
+    - Ein Fehler, den ein Test fand: öffnet der Assistent einen Code, meldet der Server das Angebot, der Mac sagt es
+      dem Assistenten, und der öffnete, wenn der Code gerade auf Tailscale wartete, einen zweiten. Gezeigt hätte er
+      dann den Code, den der Server schon ersetzt hatte. Ohne die Korrektur scheitert der Test, mit ihr nicht.
+    - Bilder: `scripts/mac-pictures.sh DIR` zeichnet Menü (verbunden, Probleme, Pause), die Symbole, die vier Schritte
+      des Assistenten, die vier Bereiche der Einstellungen und das Face-ID-Fenster in hell und dunkel, mit erfundenen
+      Daten („iPhone 17 Pro“, „iPad Air“, `macbook.example-tailnet.ts.net`, `jane@example.com`), außerhalb des
+      Bildschirms (`InterfacePicturesTests`; ohne `REMOTEY_PICTURES` zeichnen sie nur, das prüft das Layout jedes
+      Zustands). `--before 23b8eae DIR` zeichnet den alten Stand in einem Worktree, der danach wieder geht: das
+      Kopplungsfenster mit dem Code von `showPairing`, Zeile für Zeile nachgebaut, weil die Methode es auf den
+      Bildschirm stellte; das echte Face-ID-Fenster (nur `content` wird dafür sichtbar gemacht); das alte NSMenu
+      nachgezeichnet, mit seinen Einträgen für einen Mac, der lauscht und die Bedienungshilfen hat, in Menüschrift und
+      22 pt je Zeile, weil ein NSMenu außerhalb des Bildschirms nicht zeichnet. Grenzen beider Bilder: ein Fenster,
+      das nie auf dem Bildschirm war, ist nie das aktive, Ampeln und Schalter sind darum grau; das Material des Panels
+      hat nichts hinter sich und ist als Farbe gemalt, über einem Verlauf wie in den Mockups; gezeichnet auf macOS 27,
+      also mit dessen Ecken und Toolbar.
+    - Abweichungen von den Mockups: Akzent ist die Systemfarbe des Nutzers statt Orange (Markierung, Kreis des
+      Geräts, Standardtaste), wie Apples Programme es halten; Orange bleibt dem Telefon. Das Panel ist 320 statt 300 pt
+      breit: „Mit Face ID entsperren …“ und „Eingerichtet“ passen in 13 pt sonst nicht in eine Zeile. Tailscale hat
+      das Netz-Symbol statt WLAN, das an WLAN denken ließe. Das Symbol zeigt einen Zeiger mit Strahlen statt eines
+      grünen Punkts: Symbole in der Menüleiste sind einfarbig. Der Assistent hat vier Punkte statt fünf (vier Schritte) und
+      die Ziffern unter dem Code; „Zurück“ fehlt im ersten Schritt. In den Einstellungen fehlt „Face ID eingerichtet“
+      beim Gerät: Face ID gilt für den Mac, der Server weiß nicht, welches Telefon den Passkey hat. Sicherheit und
+      Berechtigungen hat das Mockup nicht, sie folgen dem Muster der iPhones. Die Toolbar zeichnet macOS 27 mit Rahmen.
+    - Prüfungen: `swift test` 285 Tests (vorher 257; einer zum Neustart entfiel, neu: `MacStateTests`,
+      `AssistantFlowTests`, `InterfacePicturesTests`, `refreshLocal`, `firstMove`), alle grün;
+      `node scripts/pairing-e2e.mjs` grün (19 Bewegungen, 129 Punkte). Die Bilder liegen neben den Mockups und
+      wurden mit ihnen verglichen; nach dem ersten Vergleich korrigiert: eine umgebrochene Zeile im Menü, die Strahlen
+      des Logos, ein Hinweis, der die Punkte überdeckte, Höhe der Schritte.
 
 ## Not verified
 
@@ -1033,3 +1138,27 @@ the same verifier version. Keyboard heights: 336 px upright, 208 px sideways; "i
   `Setup` empfiehlt in diesem Fall weiter einen Neustart (`needsRestart`, nicht geändert). Das Menü mit Fenster,
   Ziffern und Owner-Abfrage lief nie (die App durfte nicht starten), nur der Server dahinter in Tests und ohne
   Oberfläche. Ob der Agent ohne Oberfläche auf einem gehosteten Mac startet, zeigt der erste CI-Lauf.
+- Runde 20: die App lief nicht mit Oberfläche (sie durfte nicht starten), kein Fenster, kein Panel und kein Alert war
+  je auf dem Bildschirm. Geprüft sind die Werte darunter und Bilder außerhalb des Bildschirms. Offen und beim ersten
+  Start zu prüfen: dass das Panel beim Klick aufgeht, unter dem Symbol auf jedem Display steht, bei ausgeblendeter
+  Menüleiste (die Leiste kann sich hinter dem offenen Panel wieder verstecken, ein System-Menü hält sie), über einem
+  Vollbildprogramm und auf jedem Space; dass es bei einem Klick daneben, Escape, ⌘Tab und Space-Wechsel schließt und
+  ein zweiter Klick aufs Symbol es schließt statt neu öffnet; dass ↑/↓/Return ohne vorherigen Klick gehen (die
+  Tastatur geht an die `NSHostingView`, gefolgert, nicht gesehen) und ⌘, und ⌘Q im Panel; der erste Klick auf eine
+  Zeile; VoiceOver im Panel, im Assistenten und in den Einstellungen; das echte Material, der Schatten mit runden
+  Ecken, erhöhter Kontrast und reduzierte Transparenz; Schalter und Standardtasten in ihrer aktiven Farbe (die Bilder
+  zeigen sie grau); das Symbol in der echten Menüleiste und sein Tooltip.
+- Runde 20: am echten Mac nicht gelaufen sind das selbstständige Öffnen des Assistenten beim ersten Start und bei
+  einer roten Pflichtzeile, das Anmeldeobjekt, das der erste Start einschaltet (und die Mitteilung von macOS dazu),
+  das Wechseln der Bereiche der Einstellungen mit ihrer Höhe, das Blatt zum Umbenennen, die Rückfragen als Blätter,
+  ⌘C/⌘V im Passwortfeld über das neue Hauptmenü, und die Alerts bei einer Datei, die sich nicht schreiben lässt.
+- Runde 20: Koppeln aus dem Assistenten mit einem echten iPhone ist offen, und es hängt an der Seite: sie koppelt
+  nach Runde 19 noch nicht aus `#p=<code>` und schickt `standalone` noch nicht. Bis sie es tut, führt der QR-Code
+  zu einer Seite, die nicht koppelt, und „Zum Home-Bildschirm“ wird nie von selbst grün. Die erste Bewegung je
+  Sitzung ist am Server getestet, nicht mit einem Telefon. „Trennen“ im Menü schließt die Verbindung, die Seite
+  verbindet sich aber sofort wieder (Runde 18): es trennt nur für einen Augenblick.
+- Runde 20: dass ScreenCaptureKit nach einer frischen Erlaubnis ohne Neustart aufnimmt, ist weiter nicht gemessen;
+  die Zeile ist jetzt in diesem Fall grün. Was das Telefon zeigt, wenn es dann doch nicht aufnimmt, ist nicht
+  geprüft. Die Bilder sind auf macOS 27 gezeichnet; wie Panel, Formulare und Toolbar auf macOS 14 bis 26 aussehen, ist
+  nicht gesehen (gebaut ist gegen macOS 14 als Ziel). Was die Blicke alle 5 s und 60 s an Energie kosten, ist nicht
+  gemessen.

@@ -426,6 +426,8 @@ final class PairingServerTests: XCTestCase {
         try await start()
         var heard: [[Server.Session]] = []
         server.sessionsChanged = { heard.append($0) }
+        var firstMoves: [Device.ID?] = []
+        server.firstMove = { firstMoves.append($0) }
         let key = try await paired()
         let name = server.devices[0].name
         XCTAssertFalse(server.hasMoved)
@@ -442,6 +444,11 @@ final class PairingServerTests: XCTestCase {
         phone.send(#"{"t":"m","dx":3,"dy":0}"#)
         let moved = await eventually { server.hasMoved }
         XCTAssertTrue(moved)
+        phone.send(#"{"t":"m","dx":3,"dy":0}"#)
+        old.send(#"{"t":"m","dx":3,"dy":0}"#)
+        let both = await eventually { firstMoves.count == 2 }
+        XCTAssertTrue(both)
+        XCTAssertEqual(firstMoves, [server.devices[0].id, nil], "once per session, with its device")
 
         try server.rename(server.devices[0].id, to: "Arbeit")
         XCTAssertEqual(heard.last?.first?.name, "Arbeit")

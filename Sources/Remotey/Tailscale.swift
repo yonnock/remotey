@@ -3,7 +3,7 @@ import Foundation
 /// What Tailscale says about this Mac, read through its command line tool: its only documented interface for
 /// other apps. Everything here is a value; `TailscaleCLI` gets the values.
 enum Tailscale {
-    /// Port `tailscale serve` exposes inside the tailnet. Same as `AppDelegate.tailnetPort`.
+    /// Port `tailscale serve` exposes inside the tailnet. The pairing link and the self-test use it.
     static let port = 8443
     /// `serve --bg` with `--set-path` came with this version.
     static let oldestSupported = (major: 1, minor: 52)
