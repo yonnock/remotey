@@ -40,12 +40,26 @@ import { extname, join, resolve } from 'node:path';
 //     states with a fake Mac that is out of reach, not running, refuses the key or lacks a permission; T17 checks
 //     type sizes, capitals, the longer words at 320 px in both languages and 44 pt touch targets; T18 checks
 //     the protocol fixes: heartbeat, long text in pieces, icons kept across a reconnect, the readout as a setting.
-export const VERIFIER_VERSION = 17;
+// 18: the page is "Glas über dem Mac". The picture element covers the phone and the controls float over it; the
+//     page tells the Mac what they cover (`inset`), and T1 measures the share of the phone the picture shows
+//     unobscured, from that inset (before: the share of the display element). The readout opens the view's menu, which
+//     holds "Fenster einpassen", "An iPhone anpassen", actual size, the whole desktop and the displays (T11 to T13 reach
+//     them there; T12 measures the map in the menu). The settings are a sheet of their own, reached from the Mac's
+//     button (T1, T6, T18). Sheets lie over the bar, so T7 no longer counts what covers the dock. The lock key is a
+//     tile beside the mute key (T10). The fake Mac pairs per device: `/pair`, `/session` and tickets (T19), and says
+//     `mac` (T20). New: T19 pairing, T20 glass, insets and the Mac's state, T21 the gesture tour, T22 sideways sides.
+//     --gallery=DIR saves every screen, dark and light, with a drawn Mac desktop as the picture.
+export const VERIFIER_VERSION = 18;
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const webDir = resolve(arg('web', new URL('../Web', import.meta.url).pathname));
 const only = arg('only', '')?.split(',').filter(Boolean);
 const shots = arg('shots', '');
 if (shots) mkdirSync(shots, { recursive: true });
+const gallery = arg('gallery', '');
+if (gallery) mkdirSync(gallery, { recursive: true });
+// --docs=DIR: the README's pictures (remote.png, apps.png, keys.png) at 390 × 844, twice the pixels.
+const docs = arg('docs', '');
+if (docs) mkdirSync(docs, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function chromePath() {
@@ -56,8 +70,37 @@ function chromePath() {
 }
 
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
+// The fake Mac's pairing, as the agent's contract has it: `/pair` takes a one-time code or the old token and sets a
+// cookie the page cannot read; `/session` gives a ticket to a phone with that cookie. `mode: 'old'` plays an agent
+// from before pairing per device, which knows neither route. Tasks set what they need and read `log`.
+const fakeMac = { mode: 'devices', code: '482913', closed: false, tries: 0, most: 5, tickets: 0, log: [] };
+const resetMac = () => Object.assign(fakeMac, { mode: 'devices', code: '482913', closed: false, tries: 0, log: [] });
+const answer = (res, status, json, cookie) => {
+  res.writeHead(status, { 'Content-Type': 'application/json', ...(cookie && { 'Set-Cookie': 'remotey-device=d1; Path=/; HttpOnly; SameSite=Strict' }) });
+  res.end(json === undefined ? '' : JSON.stringify(json));
+};
 const server = createServer((req, res) => {
-  const name = req.url.split('?')[0] === '/' ? 'index.html' : req.url.split('?')[0].slice(1);
+  const path = req.url.split('?')[0];
+  if (req.method === 'POST') {
+    let text = '';
+    req.on('data', (d) => { text += d; });
+    req.on('end', () => {
+      let body = {};
+      try { body = JSON.parse(text || '{}'); } catch {}
+      const paired = /(^|;\s*)remotey-device=d1/.test(req.headers.cookie ?? '');
+      fakeMac.log.push({ path, body, paired });
+      if (fakeMac.mode === 'old' || !['/pair', '/session'].includes(path)) { res.writeHead(404); res.end(); return; }
+      if (path === '/session') return paired ? answer(res, 200, { ticket: `t${++fakeMac.tickets}` }) : answer(res, 401, { why: 'unpaired' });
+      if (body.token !== undefined) return body.token === 'test-token' ? answer(res, 200, { ok: true, device: { id: 'd1', name: 'iPhone Test' } }, true) : answer(res, 403, { ok: false, why: 'code' });
+      if (fakeMac.closed) return answer(res, 403, { ok: false, why: 'closed' });
+      if (fakeMac.tries >= fakeMac.most) return answer(res, 429);
+      if (body.code === fakeMac.code) return answer(res, 200, { ok: true, device: { id: 'd1', name: 'iPhone Test' } }, true);
+      fakeMac.tries++;
+      return answer(res, 403, { ok: false, why: 'code' });
+    });
+    return;
+  }
+  const name = path === '/' ? 'index.html' : path.slice(1);
   try {
     const body = readFileSync(join(webDir, name));
     res.writeHead(200, { 'Content-Type': types[extname(name)] ?? 'application/octet-stream' });
@@ -84,7 +127,10 @@ const waiting = new Map();
 socket.onmessage = (e) => {
   const m = JSON.parse(e.data);
   if (m.id && waiting.has(m.id)) { const { r, j } = waiting.get(m.id); waiting.delete(m.id); m.error ? j(new Error(m.error.message)) : r(m.result); }
+  if (m.method === 'Runtime.exceptionThrown') pageErrors.get(m.sessionId)?.push(m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text);
 };
+// Exceptions the page threw, by session: a task can say what broke instead of only that something did.
+const pageErrors = new Map();
 const cdp = (method, params = {}, sessionId) => new Promise((r, j) => {
   const id = ++nextId;
   waiting.set(id, { r, j });
@@ -127,12 +173,25 @@ const harness = `(() => {
       const m = JSON.parse(data);
       sent.push({ ...m, at: performance.now() });
       if (m.t === 'view') window.__view = m; // outlives a task's clearing of the list
-      if (m.t === 'auth') setTimeout(() => this.onmessage?.({ data: JSON.stringify(window.__mac === 'deny' ? { t: 'denied' }
-        : { t: 'ok', ax: window.__mac !== 'noax', page: 'test' }) }), 0);
+      // A ticket from \`/session\` or the old token; \`revoked\`: the Mac removed this phone.
+      const good = (m.ticket && /^t\\d+$/.test(m.ticket)) || m.token === 'test-token';
+      if (m.t === 'auth') setTimeout(() => this.onmessage?.({ data: JSON.stringify(window.__mac === 'deny' || !good ? { t: 'denied', why: m.ticket ? 'ticket' : 'token' }
+        : window.__mac === 'revoked' ? { t: 'denied', why: 'revoked' }
+        : { t: 'ok', ax: window.__mac !== 'noax', page: 'test', name: window.__macName ?? 'MacBook Pro', device: 'iPhone Test' }) }), 0);
       if (m.t === 'ping' && !window.__silent) setTimeout(() => this.onmessage?.({ data: JSON.stringify({ t: 'pong' }) }), 0);
       if (m.t === 'apps') setTimeout(() => {
         this.onmessage?.({ data: JSON.stringify({ t: 'apps', list: ${JSON.stringify(APPS)} }) });
         this.onmessage?.({ data: JSON.stringify({ t: 'icon', id: 'safari', png: '${ICON}' }) });
+        // For pictures (--gallery, --docs): a drawn icon for every app, a coloured tile with a letter.
+        if (window.__icons) ${JSON.stringify(APPS.map((a) => a.icon))}.forEach((id, i) => {
+          const c = Object.assign(document.createElement('canvas'), { width: 120, height: 120 }), x = c.getContext('2d');
+          const hues = [212, 200, 330, 4, 140, 220, 0, 48, 262, 24, 160, 210];
+          const g = x.createLinearGradient(0, 0, 0, 120); g.addColorStop(0, 'hsl(' + hues[i] + ' 80% 62%)'); g.addColorStop(1, 'hsl(' + hues[i] + ' 75% 46%)');
+          x.fillStyle = g; x.beginPath(); x.roundRect(6, 6, 108, 108, 26); x.fill();
+          x.fillStyle = 'rgba(255,255,255,0.95)'; x.font = '600 56px -apple-system, system-ui, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+          x.fillText(id[0].toUpperCase(), 60, 64);
+          this.onmessage?.({ data: JSON.stringify({ t: 'icon', id, png: c.toDataURL('image/png').split(',')[1] }) });
+        });
       }, window.__appsDelay ?? 0); // T9 makes the Mac slow to answer
       // One display unless a task plugs in more: then the picker shows.
       if (m.t === 'displays') setTimeout(() => this.onmessage?.({ data: JSON.stringify({ t: 'displays', list: window.__displays ?? [${JSON.stringify(DISPLAYS[0])}] }) }),
@@ -187,22 +246,117 @@ const harness = `(() => {
     window.__socket.onmessage?.({ data: packet.buffer });
     await new Promise((r) => setTimeout(r, 50));
   };
-  try { const lang = localStorage.getItem('test-lang'); localStorage.clear(); if (lang) localStorage.setItem('test-lang', lang);
-    localStorage.setItem('remotey-view', '1'); localStorage.setItem('remotey-zoom', '0.5'); } catch {}
+  try { const lang = localStorage.getItem('test-lang'), tour = localStorage.getItem('test-tour'); localStorage.clear();
+    if (lang) localStorage.setItem('test-lang', lang); if (tour) localStorage.setItem('test-tour', tour);
+    localStorage.setItem('remotey-view', '1'); localStorage.setItem('remotey-zoom', '0.5');
+    // The tour starts by itself on a phone that never saw it; tasks other than T21 are that phone's later days.
+    if (!tour) localStorage.setItem('remotey-toured', 'true'); } catch {}
+  // A made-up Mac desktop as the picture, for the pictures --gallery saves: what \`kind\` shows, \`points\` across.
+  window.__scene = async (kind, points, flags = 2) => {
+    const fitted = (flags & 2) === 2;
+    const request = window.__view, socket = window.__socket, [top, right, bottom, left] = request.inset ?? [0, 0, 0, 0];
+    const k = 2, W = Math.round(request.w * k), H = Math.round(request.h * k);
+    const canvas = Object.assign(document.createElement('canvas'), { width: W, height: H }), c = canvas.getContext('2d');
+    c.scale(k, k);
+    const w = request.w, h = request.h, inner = { x: left, y: top, w: w - left - right, h: h - top - bottom };
+    const round = (x, y, rw, rh, r) => { c.beginPath(); c.roundRect(x, y, rw, rh, r); };
+    // The wallpaper: dusk over hills.
+    const sky = c.createLinearGradient(0, 0, w * 0.4, h);
+    sky.addColorStop(0, '#2b2d6e'); sky.addColorStop(0.45, '#6b3f7d'); sky.addColorStop(0.8, '#c9645a'); sky.addColorStop(1, '#e9925a');
+    c.fillStyle = sky; c.fillRect(0, 0, w, h);
+    c.fillStyle = 'rgba(255,255,255,0.06)'; c.beginPath(); c.ellipse(w * 0.85, h * 0.18, w * 0.5, h * 0.16, -0.3, 0, 7); c.fill();
+    c.fillStyle = 'rgba(40,20,60,0.35)'; c.beginPath(); c.ellipse(w * 0.1, h * 0.95, w * 0.8, h * 0.22, 0.2, 0, 7); c.fill();
+    const bar = Math.max(0, inner.y - 22);
+    const text = (t, x, y, size, color, weight = 400, align = 'left') => { c.font = weight + ' ' + size + 'px -apple-system, system-ui, sans-serif'; c.fillStyle = color; c.textAlign = align; c.fillText(t, x, y); };
+    if (kind === 'lock') {
+      text('Donnerstag, 26. November', w / 2, inner.y + inner.h * 0.16, 14, 'rgba(255,255,255,0.8)', 500, 'center');
+      text('14:42', w / 2, inner.y + inner.h * 0.16 + 62, 64, 'rgba(255,255,255,0.92)', 700, 'center');
+      c.fillStyle = 'rgba(255,255,255,0.28)'; c.beginPath(); c.arc(w / 2, inner.y + inner.h * 0.58, 30, 0, 7); c.fill();
+      c.fillStyle = 'rgba(255,255,255,0.85)'; c.beginPath(); c.arc(w / 2, inner.y + inner.h * 0.58 - 6, 11, 0, 7); c.fill();
+      c.beginPath(); c.ellipse(w / 2, inner.y + inner.h * 0.58 + 18, 18, 11, 0, Math.PI, 0); c.fill();
+      text('Erika', w / 2, inner.y + inner.h * 0.58 + 52, 13, '#fff', 600, 'center');
+      round(w / 2 - 62, inner.y + inner.h * 0.58 + 64, 124, 22, 11); c.fillStyle = 'rgba(255,255,255,0.22)'; c.fill();
+      text('Passwort eingeben', w / 2, inner.y + inner.h * 0.58 + 79, 10, 'rgba(255,255,255,0.75)', 400, 'center');
+    } else {
+      // The menu bar, at the top of what the Mac fits; under the glass above it, more wallpaper.
+      c.fillStyle = 'rgba(20,14,40,0.38)'; c.fillRect(0, bar, w, 22);
+      c.fillStyle = 'rgba(255,255,255,0.9)'; c.beginPath(); c.arc(14, bar + 11, 4, 0, 7); c.fill();
+      text('Safari   Ablage   Bearbeiten   Darstellung', 24, bar + 15, 10.5, 'rgba(255,255,255,0.92)', 500);
+      text('Do. 26. Nov.  14:42', w - 10, bar + 15, 10.5, 'rgba(255,255,255,0.92)', 500, 'right');
+      // The window in front, fitted to the part the glass leaves free.
+      const m = 6, x = inner.x + m, y = inner.y + m, ww = inner.w - 2 * m, wh = inner.h - 2 * m - (kind === 'desktop' ? 44 : 0);
+      c.save(); c.shadowColor = 'rgba(0,0,0,0.45)'; c.shadowBlur = 24; c.shadowOffsetY = 8; round(x, y, ww, wh, 10); c.fillStyle = '#fbfbfd'; c.fill(); c.restore();
+      c.save(); round(x, y, ww, wh, 10); c.clip();
+      c.fillStyle = '#ececf0'; c.fillRect(x, y, ww, 30);
+      [['#ff5f57', 14], ['#febc2e', 28], ['#28c840', 42]].forEach(([col, dx]) => { c.fillStyle = col; c.beginPath(); c.arc(x + dx, y + 15, 4.5, 0, 7); c.fill(); });
+      round(x + ww * 0.22, y + 7, ww * 0.56, 16, 8); c.fillStyle = '#dcdce2'; c.fill();
+      text('kuestenblatt.example', x + ww / 2, y + 19, 9.5, '#6e6e73', 400, 'center');
+      const heroH = Math.min(wh * 0.3, ww * 0.55), hy = y + 30;
+      const g = c.createLinearGradient(0, hy, 0, hy + heroH); g.addColorStop(0, '#8fb8da'); g.addColorStop(0.7, '#e9c9a7'); g.addColorStop(1, '#f2d2b0');
+      c.fillStyle = g; c.fillRect(x, hy, ww, heroH);
+      c.fillStyle = '#f8ecd0'; c.beginPath(); c.arc(x + ww * 0.68, hy + heroH * 0.42, heroH * 0.13, 0, 7); c.fill();
+      c.fillStyle = '#7d8ea3'; c.beginPath(); c.moveTo(x, hy + heroH * 0.75); c.lineTo(x + ww * 0.22, hy + heroH * 0.4); c.lineTo(x + ww * 0.42, hy + heroH * 0.66);
+      c.lineTo(x + ww * 0.6, hy + heroH * 0.48); c.lineTo(x + ww, hy + heroH * 0.72); c.lineTo(x + ww, hy + heroH); c.lineTo(x, hy + heroH); c.fill();
+      c.fillStyle = '#34536d'; c.beginPath(); c.moveTo(x, hy + heroH * 0.86); c.lineTo(x + ww * 0.3, hy + heroH * 0.62); c.lineTo(x + ww * 0.55, hy + heroH * 0.8);
+      c.lineTo(x + ww * 0.8, hy + heroH * 0.66); c.lineTo(x + ww, hy + heroH * 0.8); c.lineTo(x + ww, hy + heroH); c.lineTo(x, hy + heroH); c.fill();
+      c.fillStyle = '#2c4c66'; c.fillRect(x, hy + heroH * 0.93, ww, heroH * 0.07);
+      let ty = hy + heroH + 24;
+      text('REISE · NORDSEE', x + 18, ty, 8, '#c2611f', 700); ty += 26;
+      text('Die Küste im Herbst', x + 18, ty, Math.min(22, ww / 15), '#1d1d1f', 700); ty += 18;
+      text('Vier Tage zwischen Deich, Watt und Leuchtturm', x + 18, ty, 9.5, '#6e6e73'); ty += 18;
+      const lines = (n, from) => { for (let i = 0; i < n; i++) { c.fillStyle = '#d1d1d6'; round(x + 18, from + i * 9, (ww - 36) * [1, 0.96, 0.98, 0.7, 0.93, 0.5][i % 6], 4, 2); c.fill(); } return from + n * 9; };
+      ty = lines(6, ty) + 10;
+      ty = lines(4, ty) + 12;
+      const cardW = (ww - 46) / 2, cardH = Math.min(70, wh - (ty - y) - 60);
+      if (cardH > 30) {
+        round(x + 18, ty, cardW, cardH, 6); c.fillStyle = '#d6e2ea'; c.fill();
+        c.fillStyle = '#93b2c6'; c.beginPath(); c.moveTo(x + 18, ty + cardH); c.lineTo(x + 18 + cardW * 0.3, ty + cardH * 0.45); c.lineTo(x + 18 + cardW * 0.55, ty + cardH * 0.75);
+        c.lineTo(x + 18 + cardW * 0.75, ty + cardH * 0.5); c.lineTo(x + 18 + cardW, ty + cardH * 0.8); c.lineTo(x + 18 + cardW, ty + cardH); c.fill();
+        round(x + 28 + cardW, ty, cardW, cardH, 6); c.fillStyle = '#ebdcc9'; c.fill();
+        c.fillStyle = '#d7a46f'; c.beginPath(); c.arc(x + 28 + cardW * 1.5, ty + cardH * 0.45, cardH * 0.2, 0, 7); c.fill();
+        ty += cardH + 14;
+      }
+      if (y + wh - ty > 60) { ty = lines(3, ty) + 12; round(x + 18, ty, 70, 18, 9); c.fillStyle = '#0a7cff'; c.fill(); text('Weiterlesen', x + 53, ty + 12.5, 8.5, '#fff', 600, 'center'); }
+      c.restore();
+      if (kind === 'desktop') {
+        round(w / 2 - 92, h - bottom + 8 > h - 40 ? inner.y + inner.h - 38 : inner.y + inner.h - 38, 184, 32, 10); c.fillStyle = 'rgba(255,255,255,0.22)'; c.fill();
+        ['#2f7cf6', '#1d1d1f', '#30c25b', '#ff9f0a', '#f2f2f7', '#ff375f', '#8e8e93'].forEach((col, i) => { round(w / 2 - 86 + i * 25.5, inner.y + inner.h - 34, 22, 22, 5); c.fillStyle = col; c.fill(); });
+      }
+    }
+    const jpeg = new Uint8Array(await (await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.92))).arrayBuffer());
+    const packet = new Uint8Array(47 + jpeg.length), head = new DataView(packet.buffer);
+    packet.set([1, 30, flags]);
+    const px = window.__aimAt?.[0] ?? 0.32, py = window.__aimAt?.[1] ?? 0.62;
+    [px, py, px, py, points, points * request.h / request.w, 0, 0].forEach((value, i) => head.setFloat32(3 + i * 4, value, true));
+    head.setUint32(39, request.v, true);
+    head.setUint32(43, window.__pictures = (window.__pictures ?? 0) + 1, true);
+    packet.set(jpeg, 47);
+    window.__shows = [points, points * request.h / request.w, fitted];
+    socket.onmessage?.({ data: packet.buffer });
+    await new Promise((r) => setTimeout(r, 250));
+  };
 })();`;
 
 // `lang`: the phone's language; `token`: false for a phone that was never paired.
-async function openPage(width, height, { lang = 'de-DE', token = true } = {}) {
+// `scheme`: the phone's light or dark appearance; `tour`: a phone that never saw the gesture tour; `hash`: another
+// fragment than the old token (a one-time code). Every page starts without the fake Mac's cookie.
+async function openPage(width, height, { lang = 'de-DE', token = true, scheme = 'dark', tour = false, hash = null, contrast = null, transparency = null, dpr = 3 } = {}) {
+  await cdp('Storage.clearCookies', {});
   const { targetId } = await cdp('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
   const s = (method, params) => cdp(method, params, sessionId);
   await s('Page.enable');
   await s('Runtime.enable');
-  await s('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 3, mobile: true });
+  const errors = [];
+  pageErrors.set(sessionId, errors);
+  await s('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: dpr, mobile: true });
   await s('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-  await s('Page.addScriptToEvaluateOnNewDocument', { source: `try { localStorage.setItem('test-lang', ${JSON.stringify(lang)}); } catch {}` });
+  await s('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme },
+    ...(contrast ? [{ name: 'prefers-contrast', value: contrast }] : []), ...(transparency ? [{ name: 'prefers-reduced-transparency', value: transparency }] : [])] });
+  await s('Page.addScriptToEvaluateOnNewDocument', { source: `try { localStorage.setItem('test-lang', ${JSON.stringify(lang)});
+    ${tour ? "localStorage.setItem('test-tour', '1');" : "localStorage.removeItem('test-tour');"} } catch {}` });
   await s('Page.addScriptToEvaluateOnNewDocument', { source: harness });
-  await s('Page.navigate', { url: token ? `${origin}/#test-token` : `${origin}/` });
+  await s('Page.navigate', { url: hash ? `${origin}/${hash}` : token ? `${origin}/#test-token` : `${origin}/` });
   await sleep(600);
   const evaluate = async (expression) => {
     const { result, exceptionDetails } = await s('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -210,13 +364,18 @@ async function openPage(width, height, { lang = 'de-DE', token = true } = {}) {
     return result.value;
   };
   const touch = (type, points) => s('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+  // Since version 18 a connection asks the fake Mac for a ticket (and may pair first) before its socket: wait until
+  // the page has settled, connected or not, so a task never draws a picture before the first view request.
+  for (let i = 0; i < 40 && await evaluate(`document.body.dataset.link === 'connecting' || (document.body.dataset.link === 'connected' && !window.__view)`); i++) await sleep(50);
   const page = {
-    evaluate, touch, cdp: s,
+    evaluate, touch, cdp: s, errors,
     close: () => cdp('Target.closeTarget', { targetId }),
     resize: async (w, h) => { await s('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 3, mobile: true }); await sleep(250); },
     sent: () => evaluate('window.__sent'),
     /** With --shots: a picture of the page as it is now. */
     shot: async (name) => { if (shots) writeFileSync(join(shots, `${name}.png`), Buffer.from((await s('Page.captureScreenshot', { format: 'png' })).data, 'base64')); },
+    /** With --gallery: a picture of the page as it is now, under the gallery's name. */
+    keep: async (name) => { if (gallery) writeFileSync(join(gallery, `${name}.png`), Buffer.from((await s('Page.captureScreenshot', { format: 'png' })).data, 'base64')); },
     clear: () => evaluate('window.__sent.length = 0'),
     rect: (selector) => evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null;
       const r = e.getBoundingClientRect(); const st = getComputedStyle(e);
@@ -248,6 +407,30 @@ async function openPage(width, height, { lang = 'de-DE', token = true } = {}) {
 const sum = (list, type, key) => list.filter((m) => m.t === type).reduce((a, m) => a + m[key], 0);
 const count = (list, type) => list.filter((m) => m.t === type).length;
 const round = (n) => Math.round(n * 10) / 10;
+// Since version 18: sheets lie over the bar, so each is put away with its own close key; menus open from their button.
+const SHEET_OF = { apps: '#switcher', deck: '#drawer', prefs: '#prefs' };
+async function closeSheet(page) {
+  const open = await page.evaluate(`['apps', 'drawer', 'prefs'].find((c) => document.body.classList.contains(c)) ?? ''`);
+  if (open) { await page.tap(`${{ apps: '#switcher', drawer: '#drawer', prefs: '#prefs' }[open]} [data-act=close]`); await sleep(320); }
+}
+/** Opens the menu behind `opener` ('#macBtn' or '#readout') and taps `item` in it. */
+async function fromMenu(page, opener, item) {
+  const menu = opener === '#macBtn' ? '#macMenu' : '#viewMenu';
+  if (await page.evaluate(`document.querySelector('${menu}').hidden`)) { await page.tap(opener); await sleep(300); }
+  const ok = await page.tap(`${menu} ${item}`);
+  await sleep(250);
+  return ok;
+}
+/** Taps a row of the settings sheet, scrolled into sight first as a finger would. */
+const tapSetting = async (page, act) => {
+  // Only the sheet's list scrolls: scrollIntoView would scroll the page's own frame too.
+  await page.evaluate(`(() => { const w = document.querySelector('#prefs .well'), r = document.querySelector('#prefs [data-act=${act}]').getBoundingClientRect();
+    w.scrollTop += r.top + r.height / 2 - w.getBoundingClientRect().top - w.clientHeight / 2; })()`); await sleep(100);
+  return page.tap(`#prefs [data-act=${act}]`);
+};
+const openSettings = async (page) => { await fromMenu(page, '#macBtn', '[data-act=settings]'); await sleep(250); };
+const toggleFit = (page) => fromMenu(page, '#readout', '[data-act=fit]');
+const toggleShape = (page) => fromMenu(page, '#readout', '[data-act=shape]');
 
 // Whether a control is usable: shown, inside the visible area, large enough, and not covered by something else.
 async function reachable(page, selector, visible) {
@@ -267,7 +450,7 @@ async function reachable(page, selector, visible) {
 
 const CONTROLS = {
   'Klick (Ziehen)': '[data-hold=left]', 'Rechtsklick': '[data-click=right]', 'Zurück': '[data-click=back]',
-  'Vorwärts': '[data-click=forward]', 'Live-Bild': '[data-act=view]', 'Apps': '[data-act=apps]',
+  'Vorwärts': '[data-click=forward]', 'Live-Bild': '[data-act=view]', 'Apps': '[data-act=apps]', 'Steuerung': '[data-act=deck]',
   'Zoom': '#zoom, [data-act=zoom-in]', 'Auf dem Mac schreiben': '#field, [data-act=type]', 'Play': '[data-media=play]',
   'Lauter': '[data-media=volup]', 'esc': '[data-key=escape]', 'Einstellungen': '[data-setting], [data-page=settings]',
 };
@@ -275,7 +458,10 @@ const CONTROLS = {
 async function reach(page, name, selector, visible) {
   let direct = await reachable(page, selector, visible), taps = 1;
   if (direct.ok) return { ...direct, taps };
-  for (const opener of ['[data-act=deck]', `[data-act=page][data-page=${['Play', 'Lauter'].includes(name) ? 'media' : name === 'esc' ? 'keys' : 'settings'}]`]) {
+  // The live view's key is in the Mac's menu while it runs; the settings are a sheet from the same menu.
+  const openers = name === 'Live-Bild' ? ['[data-act=mac]'] : name === 'Einstellungen' ? ['[data-act=mac]', '#macMenu [data-act=settings]']
+    : ['[data-act=deck]', `[data-act=page][data-page=${['Play', 'Lauter'].includes(name) ? 'media' : 'keys'}]`];
+  for (const opener of openers) {
     if (!(await page.tap(opener))) continue;
     taps++;
     await sleep(350);
@@ -285,13 +471,18 @@ async function reach(page, name, selector, visible) {
   return { ...direct, state: await page.evaluate(`document.body.className + ' page=' + document.body.dataset.page`) };
 }
 
+// Since version 18 the picture element covers the phone, and the page tells the Mac what its controls cover. The share
+// is of the phone's area that the picture shows unobscured, from that inset; `height` is the same upright.
 const screenArea = (page) => page.evaluate(`(() => { const r = document.querySelector('#screen').getBoundingClientRect();
-  return { w: Math.round(r.width), h: Math.round(r.height), share: Math.round(100 * r.width * r.height / (innerWidth * innerHeight)) }; })()`);
+  const [top, right, bottom, left] = window.__view?.inset ?? [0, 0, 0, 0], w = r.width - left - right, h = r.height - top - bottom;
+  return { w: Math.round(w), h: Math.round(h), inset: [top, right, bottom, left], share: Math.round(100 * w * h / (innerWidth * innerHeight)),
+    height: Math.round(1000 * h / innerHeight) / 10 }; })()`);
 
 const results = {};
 const task = async (name, fn) => {
   if (only.length && !only.includes(name)) return;
-  try { results[name] = await fn(); } catch (error) { results[name] = { error: String(error.stack || error) }; }
+  // A task that throws fails: with an `ok` of false, so the check in CI counts it instead of skipping it.
+  try { results[name] = await fn(); } catch (error) { results[name] = { error: String(error.stack || error), ok: false }; }
 };
 
 const PHONES = { narrow: [320, 568], small: [375, 667], large: [440, 956] };
@@ -309,7 +500,8 @@ await task('T1', async () => {
       const wanted = CONTROLS;
       for (const [name, selector] of Object.entries(wanted)) {
         controls[name] = await reach(page, name, selector, visible);
-        await page.evaluate(`document.querySelector('[data-act=deck].on, body.drawer [data-act=deck]')?.dispatchEvent(new MouseEvent('click'))`);
+        for (let i = 0; i < 2; i++) await page.evaluate(`dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+        await sleep(200);
       }
       out[`${phone} ${orientation}`] = { screen: await screenArea(page), reachable: Object.values(controls).filter((c) => c.ok).length,
         of: Object.keys(controls).length, missing: Object.entries(controls).filter(([, c]) => !c.ok).map(([n, c]) => `${n}: ${c.why}${c.state ? ` (${c.state})` : ""}`) };
@@ -432,10 +624,12 @@ await task('T3', async () => {
         return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; };
       const inView = (b) => b && b.top >= v.top - 0.5 && b.bottom <= v.top + v.height + 0.5;
       const field = box('#field'), done = box('[data-act=done]'), screen = box('#screen');
-      const screenVisible = screen ? Math.max(0, Math.min(screen.bottom, v.top + v.height) - Math.max(screen.top, v.top)) : 0;
-      const overlap = (a, b) => a && b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      // Since version 18: the picture that shows unobscured, between what the glass covers at its top and bottom.
+      const [top, , bottom] = window.__view?.inset ?? [0, 0, 0, 0];
+      const screenVisible = screen ? Math.max(0, Math.min(screen.bottom - bottom, v.top + v.height) - Math.max(screen.top + top, v.top)) : 0;
+      const under = (b) => b && b.top >= screen.bottom - bottom - 0.5;
       return { field: inView(field), done: inView(done), screenVisible: Math.round(screenVisible),
-        overlap: overlap(field, screen) || overlap(done, screen), focused: document.activeElement?.id === 'field' };
+        covered: !(under(field) && under(done)), focused: document.activeElement?.id === 'field' };
     })()`);
     await page.clear();
     await page.evaluate(`(() => { const f = document.querySelector('#field');
@@ -531,8 +725,7 @@ await task('T6', async () => {
     return round(sum(await page.sent(), 'm', 'dx'));
   };
   const before = await slowMove();
-  await page.tap('[data-act=deck]'); await sleep(350);
-  await page.tap('[data-act=page][data-page=settings]'); await sleep(250);
+  await openSettings(page);
   const value = () => page.evaluate(`document.querySelector('[data-setting=speed] output')?.textContent`);
   let touches = 0;
   const slider = await page.rect('[data-setting=speed] [role=slider]');
@@ -552,8 +745,7 @@ await task('T6', async () => {
   }
   await sleep(100);
   const shown = await value();
-  await page.evaluate(`document.querySelector('[data-act=deck]').dispatchEvent(new MouseEvent('click'))`);
-  await sleep(350);
+  // The sheet is not modal: the next move counts with the sheet still open.
   const after = await slowMove();
   await page.close();
   return { touches, shown, before, after, ratio: round(after / before), ok: shown === '2×' && Math.abs(after / before - 2) < 0.1 };
@@ -567,7 +759,7 @@ await task('T7', async () => {
   const isOpen = () => page.evaluate(`document.body.classList.contains('drawer')`);
   // Every frame: the part of the tray that can be seen, after clipping by its ancestors.
   const record = () => page.evaluate(`(() => {
-    const frames = window.__frames = [], tray = document.querySelector('#drawer'), dock = document.querySelector('#dock').getBoundingClientRect();
+    const frames = window.__frames = [], tray = document.querySelector('#drawer'), dock = document.querySelector('#bar').getBoundingClientRect();
     let t0 = null;
     addEventListener('touchstart', () => { t0 ??= performance.now(); }, { capture: true, once: true });
     const seen = () => {
@@ -590,12 +782,12 @@ await task('T7', async () => {
   })()`);
   await open();
   await record();
-  await page.tap('[data-act=deck]');
+  await page.tap('#drawer [data-act=close]');
   await sleep(700);
   const frames = (await page.evaluate('window.__frames')).filter((f) => f.at !== null);
   const lastSeen = frames.filter((f) => f.h > 0).at(-1);
-  const close = { inSightMs: lastSeen ? Math.round(lastSeen.at) : 0, overDockPx: Math.max(0, ...frames.map((f) => f.overDock)),
-    frames: frames.filter((f) => f.h > 0).length };
+  // Since version 18 a sheet lies over the bar by design: what covers it is no fault, only how long the sheet stays.
+  const close = { inSightMs: lastSeen ? Math.round(lastSeen.at) : 0, frames: frames.filter((f) => f.h > 0).length };
   // A tap on the display above the tray.
   await open();
   await page.clear();
@@ -611,7 +803,7 @@ await task('T7', async () => {
   await page.touch('touchEnd', []); await sleep(300);
   const swipe = { closed: !(await isOpen()) };
   await page.close();
-  return { close, tap, swipe };
+  return { close, tap, swipe, ok: close.inSightMs < 200 && tap.closed && tap.clicks === 0 && swipe.closed };
 });
 
 // T8: the side buttons. A tap is one click of that button; an armed modifier goes with the next click only.
@@ -623,9 +815,11 @@ await task('T8', async () => {
   await page.tap('[data-act=deck]'); await sleep(450);
   await page.tap('[data-act=page][data-page=keys]'); await sleep(250);
   await page.tap('[data-mod=cmd]');
+  await closeSheet(page);
   await page.tap('[data-click=back]');
   await page.tap('[data-click=back]');
   const sent = await page.sent();
+  await page.tap('[data-act=deck]'); await sleep(450);
   const clicks = sent.filter((m) => m.t === 'c').map((m) => [m.b, ...m.mods].join(' '));
   // The keys for an app's zoom bring their Command along; an armed modifier joins it, for one key.
   await page.clear();
@@ -659,7 +853,7 @@ await task('T9', async () => {
         const perRow = tiles.filter((t) => Math.abs(t.top - tiles[0].top) < 1).length;
         return { apps: tiles.length, perRow, smallest: Math.round(Math.min(...tiles.map((t) => Math.min(t.width, t.height)))),
           inside: tiles.every((t) => t.left >= well.left - 0.5 && t.right <= well.right + 0.5),
-          belowZoom: sheet.top >= zoom.bottom - 0.5, inSight: tiles.filter((t) => t.bottom <= well.bottom + 0.5).length,
+          belowZoom: sheet.top >= zoom.bottom - 0.5 || sheet.right <= zoom.left + 0.5 || sheet.left >= zoom.right - 0.5, inSight: tiles.filter((t) => t.bottom <= well.bottom + 0.5).length,
           truncated: [...document.querySelectorAll('.app .name')].filter((n) => n.scrollWidth > n.clientWidth).map((n) => n.textContent) };
       })()`);
       await page.close();
@@ -686,7 +880,8 @@ await task('T9', async () => {
   const choice = await page.evaluate(`(() => ({ open: document.body.classList.contains('apps'),
     rows: [...document.querySelectorAll('.window .title')].map((e) => e.textContent), front: document.querySelector('.window[aria-current]')?.dataset.win,
     head: document.querySelector('#appsTitle').textContent + ' / ' + document.querySelector('#appsNote').textContent,
-    back: !document.querySelector('[data-act=apps-back]').hidden, markup: !!document.querySelector('#apps img[src="x"]') || !!window.__xss }))()`);
+    back: !document.querySelector('[data-act=apps-back]').hidden, markup: !!document.querySelector('#apps img[src="x"]') || !!window.__xss,
+    foot: document.querySelector('#apps .foot')?.textContent ?? null }))()`);
   choice.sentBefore = (await focuses()).length;
   await page.tap('[data-act=apps-back]'); await sleep(250);
   const back = await page.evaluate(`document.querySelectorAll('.app').length`);
@@ -736,9 +931,10 @@ await task('T9', async () => {
   for (let i = 1; i <= 8; i++) { await sleep(16); await page.touch('touchMove', [[icon.x + icon.w / 2, icon.y + icon.h / 2 + i * 14]]); }
   await page.touch('touchEnd', []); await sleep(300);
   swipe.fromIcon = { closed: !(await isOpen(page)), sent: (await focuses()).length };
-  // One sheet at a time, and typing puts the switcher away for good.
+  // One sheet at a time, and typing puts the switcher away for good. The bar's keys lie under the sheet: the
+  // controls' key is pressed the way a keyboard or switch control does.
   await open(page);
-  await page.tap('[data-act=deck]'); await sleep(450);
+  await page.evaluate(`document.querySelector('[data-act=deck]').click()`); await sleep(450);
   const sheets = await page.evaluate(`document.body.className.split(' ').filter((c) => c === 'drawer' || c === 'apps').join()`);
   await open(page);
   await page.evaluate(`document.querySelector('#field').focus()`); await sleep(200);
@@ -754,6 +950,7 @@ await task('T9', async () => {
       && JSON.stringify(none.sent) === '[{"t":"focus","pid":503}]' && none.closed
       && choice.open && choice.sentBefore === 0 && choice.rows.length === 2 && choice.rows[1].startsWith('<img') && !choice.markup
       && choice.front === '11' && choice.head === 'Safari / 2 Fenster' && choice.back && back === 12
+      && choice.foot === 'Ein Tipp holt das Fenster nach vorn. Vorher bewegt sich am Mac nichts.'
       && JSON.stringify(window.sent) === '[{"t":"focus","pid":501,"win":12}]' && window.closed
       && stale.places === 12 && stale.tappable === 0 && stale.sent === 0 && stale.open
       && again === 12 && tap.closed && tap.clicks === 0 && swipe.closed && swipe.fromIcon.closed && swipe.fromIcon.sent === 0
@@ -773,8 +970,9 @@ await task('T10', async () => {
       await page.tap('[data-act=deck]'); await sleep(450);
       lockKey.layout[`${phone} ${orientation}`] = await page.evaluate(`(() => {
         const box = (s) => document.querySelector(s).getBoundingClientRect(), side = (r) => Math.round(Math.min(r.width, r.height));
-        const page = box('.page.media'), lock = box('[data-act=lock]'), mute = box('[data-media=mute]');
-        return { lock: side(lock), mute: side(mute), apart: Math.round(lock.top - mute.bottom),
+        // Since version 18 the lock is a tile of its own in the row with the mute key, the volume between them.
+        const page = box('.page.media'), lock = box('.tile[data-act=lock]'), mute = box('[data-media=mute]'), rocker = box('.rocker');
+        return { lock: side(lock), mute: side(mute), apart: Math.round(Math.min(lock.left - rocker.right, rocker.left - mute.right)),
           inside: [lock, mute].every((k) => k.left >= page.left - 0.5 && k.right <= page.right + 0.5 && k.top >= page.top - 0.5 && k.bottom <= page.bottom + 0.5) };
       })()`);
       if (phone === 'small' && orientation === 'portrait') {
@@ -783,7 +981,7 @@ await task('T10', async () => {
         await page.tap('[data-mod=shift]');
         await page.tap('[data-act=page][data-page=media]'); await sleep(250);
         await page.clear();
-        await page.tap('[data-act=lock]');
+        await page.tap('.tile[data-act=lock]');
         lockKey.sent = (await page.sent()).map(({ at, ...m }) => m);
         lockKey.armed = await page.evaluate(`document.querySelector('[data-mod=shift]').classList.contains('on')`);
       }
@@ -802,7 +1000,7 @@ await task('T10', async () => {
   const input = async () => (await page.sent()).filter((m) => m.t !== 'view').map(({ at, ...m }) => m);
   const open = await state();
   // The lock key shows which way the Mac is, and on a locked Mac it opens the field as the type key does.
-  const lockKeyState = () => page.evaluate(`(() => { const k = document.querySelector('[data-act=lock]'), shown = (s) => getComputedStyle(k.querySelector(s)).display !== 'none';
+  const lockKeyState = () => page.evaluate(`(() => { const k = document.querySelector('.tile[data-act=lock]'), shown = (s) => getComputedStyle(k.querySelector(s)).display !== 'none';
     return { shut: shown('.shut'), open: shown('.open'), on: k.classList.contains('on'), pressed: k.getAttribute('aria-pressed'), name: k.getAttribute('aria-label') }; })()`);
   lockKey.open = await lockKeyState();
   await say({ t: 'lock', on: true });
@@ -810,10 +1008,10 @@ await task('T10', async () => {
   lockKey.locked = await lockKeyState();
   await page.tap('[data-act=deck]'); await sleep(450);
   await page.clear();
-  await page.tap('[data-act=lock]'); await sleep(200);
+  await page.tap('.tile[data-act=lock]'); await sleep(200);
   lockKey.unlocks = { ...(await state()), sent: (await input()).length };
-  await page.evaluate(`document.querySelector('#field').blur()`);
-  await page.tap('[data-act=deck]'); await sleep(450);
+  await page.evaluate(`document.querySelector('#field').blur()`); await sleep(200);
+  await closeSheet(page);
   await page.clear();
   await type('ge'); await type('heim');
   const typed = { ...(await state()), sent: await input() };
@@ -865,8 +1063,11 @@ await task('T11', async () => {
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
   const views = async () => (await page.sent()).filter((m) => m.t === 'view').map(({ at, v, ...m }) => m);
   // Since version 17 the lamp is a symbol over the zoom: a window while the view is fitted, none while it is not.
-  const state = () => page.evaluate(`(() => { const key = document.querySelector('[data-act=fit]'), lamp = document.querySelector('#fitLamp');
-    return { readout: document.querySelector('#zoomValue').textContent, on: key.classList.contains('on'), pressed: key.getAttribute('aria-pressed'),
+  // Since version 18 the readout opens the view's menu; "Fenster einpassen" is a checked item there, and the readout's
+  // segment is tinted while it is on.
+  const state = () => page.evaluate(`(() => { const key = document.querySelector('#readout'), lamp = document.querySelector('#fitLamp');
+    return { readout: document.querySelector('#zoomValue').textContent, on: key.classList.contains('on'),
+      pressed: document.querySelector('#viewMenu [data-act=fit]').getAttribute('aria-checked'),
       lamp: getComputedStyle(lamp).display === 'none' ? '' : key.dataset.lamp, label: key.getAttribute('aria-label'), preview: document.querySelector('#picture').style.transform,
       stored: localStorage.getItem('remotey-fit'), w: Math.round(key.getBoundingClientRect().width), h: Math.round(key.getBoundingClientRect().height),
       clipped: document.querySelector('#zoomValue').scrollWidth > key.clientWidth
@@ -876,7 +1077,7 @@ await task('T11', async () => {
   await page.evaluate(`window.__picture(${r.w / 0.5})`); // the first JPEG only switches the page from H.264 to JPEG
   await sleep(200);
   await page.clear();
-  await page.tap('[data-act=fit]');
+  await toggleFit(page);
   const asked = { ...(await state()), views: await views() };
   // The window in front is 1512 points wide, then another one of 900 comes forward.
   await page.clear();
@@ -900,7 +1101,7 @@ await task('T11', async () => {
   const stepped = { ...(await state()), views: await views() };
   await page.evaluate(`window.__picture(${r.w / 0.5})`);
   // On again, then a pinch: the picture is scaled from the zoom it has, and the request is for that.
-  await page.tap('[data-act=fit]');
+  await toggleFit(page);
   await page.evaluate(`window.__picture(1512, true)`);
   await page.clear();
   await page.touch('touchStart', [[cx - 40, cy], [cx + 40, cy]]); await sleep(16);
@@ -910,8 +1111,9 @@ await task('T11', async () => {
   const sent = await page.sent();
   const pinched = { during, ...(await state()), views: await views(), misactions: count(sent, 'm') + count(sent, 's') + count(sent, 'c') };
   // "Auto" with no window in front (the Finder's desktop): the Mac answers at the zoom set by hand.
-  await page.tap('[data-act=zoom][data-step="-1"]'); // a known step: 0.35
-  await page.tap('[data-act=fit]');
+  // Down to a known step: 0.35.
+  for (let i = 0; i < 4 && ((await page.sent()).filter((m) => m.t === 'view').at(-1)?.zoom ?? 1) > 0.351; i++) await page.tap('[data-act=zoom][data-step="-1"]');
+  await toggleFit(page);
   await page.clear();
   await page.evaluate(`window.__picture(${r.w / 0.35})`);
   const none = { ...(await state()), views: (await views()).length };
@@ -938,17 +1140,21 @@ await task('T11', async () => {
 // unplugged, and one display shows no map at all.
 await task('T12', async () => {
   const out = { layout: {} };
-  const isOpen = (page) => page.evaluate(`document.body.classList.contains('apps')`);
-  const open = async (page) => { if (!(await isOpen(page))) await page.tap('[data-act=apps]'); await sleep(450); };
+  // Since version 18 the displays are in the view's menu, under its items.
+  const isOpen = (page) => page.evaluate(`!document.querySelector('#viewMenu').hidden`);
+  const open = async (page) => { if (!(await isOpen(page))) await page.tap('#readout'); await sleep(450); };
   const tiles = (page) => page.evaluate(`(() => { const box = (e) => e.getBoundingClientRect();
-    const map = document.querySelector('#displays'), sheet = box(document.querySelector('#switcher')), well = box(document.querySelector('.well'));
+    const map = document.querySelector('#displays'), sheet = box(document.querySelector('#viewMenu')), well = box(document.querySelector('#viewMenu [data-act=zoom-all]'));
     const list = [...map.querySelectorAll('.display')].map((e) => { const r = box(e); return { id: e.dataset.display, x: r.x, y: r.y, w: r.width, h: r.height,
       here: e.classList.contains('here'), name: e.textContent, label: e.getAttribute('aria-label'), off: e.disabled,
       cut: e.firstElementChild.firstElementChild.getBoundingClientRect().height > e.firstElementChild.clientHeight + 0.5 }; });
     const apps = [...document.querySelectorAll('.app')].map(box);
     return { hidden: map.hidden, list, smallest: list.length ? Math.round(Math.min(...list.map((t) => Math.min(t.w, t.h)))) : 0,
-      inside: list.every((t) => t.x >= sheet.left - 0.5 && t.x + t.w <= sheet.right + 0.5 && t.y >= well.bottom - 0.5 && t.y + t.h <= sheet.bottom + 0.5),
-      belowZoom: sheet.top >= box(document.querySelector('#zoom')).bottom - 0.5, appsInSight: apps.filter((t) => t.bottom <= well.bottom + 0.5).length }; })()`);
+      // Under the view's items, or sideways beside them.
+      inside: list.every((t) => t.x >= sheet.left - 0.5 && t.x + t.w <= sheet.right + 0.5 && (t.y >= well.bottom - 0.5 || t.x >= well.right - 0.5)
+        && t.y >= sheet.top - 0.5 && t.y + t.h <= sheet.bottom + 0.5),
+      belowZoom: (() => { const z = box(document.querySelector('#zoom')); return sheet.top >= z.bottom - 0.5 || sheet.right <= z.left + 0.5 || sheet.left >= z.right - 0.5; })(),
+      inView: sheet.top >= -0.5 && sheet.bottom <= innerHeight + 0.5 && sheet.left >= -0.5 && sheet.right <= innerWidth + 0.5 }; })()`);
   // As arranged: the laptop above, the two large ones under it, side by side and of one size.
   const arranged = (list) => { const [laptop, left, right] = list;
     return list.length === 3 && laptop.y + laptop.h <= left.y + 0.5 && Math.abs(left.y - right.y) < 0.5 && Math.abs(left.x + left.w - right.x) < 0.5
@@ -960,7 +1166,7 @@ await task('T12', async () => {
       await open(page);
       const seen = await tiles(page);
       out.layout[`${phone} ${orientation}`] = { tiles: seen.list.length, smallest: seen.smallest, inside: seen.inside, belowZoom: seen.belowZoom,
-        appsInSight: seen.appsInSight, arranged: arranged(seen.list), cut: seen.list.filter((t) => t.cut).map((t) => t.name) };
+        inView: seen.inView, arranged: arranged(seen.list), cut: seen.list.filter((t) => t.cut).map((t) => t.name) };
       if (phone === 'small') await page.shot(`displays-${orientation}`);
       await page.close();
     }
@@ -972,7 +1178,7 @@ await task('T12', async () => {
   const connecting = await askedFor();
   await open(page);
   const one = { ...(await tiles(page)), asked: await askedFor() - connecting, connecting };
-  await page.tap('[data-act=apps]'); await sleep(300);
+  await page.tap('#readout'); await sleep(300);
   // Three: plugged in while the sheet was shut.
   await page.evaluate(`window.__displays = ${JSON.stringify(DISPLAYS)}`);
   await open(page);
@@ -986,9 +1192,9 @@ await task('T12', async () => {
   await page.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify({ t: 'displays', list: [DISPLAYS[0], { ...DISPLAYS[1], pointer: true }].map((d, i) => ({ ...d, pointer: i === 1 })) }))} })`);
   const two = await tiles(page);
   // Opened again while the Mac is slow to answer: the map of last time takes no tap.
-  await page.tap('[data-act=apps]'); await sleep(300);
+  await page.tap('#readout'); await sleep(300);
   await page.evaluate(`window.__appsDelay = 400`);
-  await page.tap('[data-act=apps]'); await sleep(150);
+  await page.tap('#readout'); await sleep(150);
   await page.clear();
   const old = (await tiles(page)).list[0];
   await page.touch('touchStart', [[old.x + old.w / 2, old.y + old.h / 2]]); await sleep(40); await page.touch('touchEnd', []); await sleep(60);
@@ -996,10 +1202,10 @@ await task('T12', async () => {
   await sleep(500);
   stale.after = (await tiles(page)).list.filter((t) => !t.off).length;
   await page.close();
-  return { ...out, one: { hidden: one.hidden, asked: one.asked, connecting: one.connecting, appsInSight: one.appsInSight }, three, tap, two: { tiles: two.list.length, here: two.list.filter((t) => t.here).map((t) => t.id) }, stale,
+  return { ...out, one: { hidden: one.hidden, asked: one.asked, connecting: one.connecting }, three, tap, two: { tiles: two.list.length, here: two.list.filter((t) => t.here).map((t) => t.id) }, stale,
     // Sideways the display is short: the map is lower there, so a row of apps stays in sight on the smallest phone.
-    ok: Object.entries(out.layout).every(([name, l]) => l.tiles === 3 && l.smallest >= (name.endsWith('portrait') ? 44 : 30) && l.inside && l.belowZoom
-        && l.arranged && l.appsInSight >= 5 && l.cut.length === 0)
+    ok: Object.entries(out.layout).every(([name, l]) => l.tiles === 3 && l.smallest >= 44 && l.inside && l.belowZoom && l.inView
+        && l.arranged && l.cut.length === 0)
       && one.hidden && one.asked === 1 && one.connecting === 1 && !three.hidden && arranged(three.list) && !three.markup
       && three.list.filter((t) => t.here).map((t) => t.id).join() === '1' && three.list[0].label === 'Display Built-in Retina Display, mit dem Zeiger'
       && three.list[2].name.startsWith('<img')
@@ -1014,17 +1220,15 @@ await task('T12', async () => {
 // goes out of sight says so, so the window gets its frame back.
 await task('T13', async () => {
   const out = { layout: {} };
-  const isOpen = (page) => page.evaluate(`document.body.classList.contains('apps')`);
-  const open = async (page) => { if (!(await isOpen(page))) await page.tap('[data-act=apps]'); await sleep(450); };
-  const shut = async (page) => { if (await isOpen(page)) await page.tap('[data-act=apps]'); await sleep(300); };
+  // Since version 18 "An iPhone anpassen" is a checked item in the view's menu, beside "Fenster einpassen".
   for (const [phone, [w, h]] of Object.entries(PHONES)) {
     for (const orientation of ['portrait', 'landscape']) {
       const page = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]));
-      await open(page);
-      out.layout[`${phone} ${orientation}`] = await page.evaluate(`(() => { const box = (s) => document.querySelector(s).getBoundingClientRect();
-        const key = box('[data-act=shape]'), title = box('#appsTitle'), head = box('.head'), label = document.querySelector('[data-act=shape]');
-        return { w: Math.round(key.width), h: Math.round(key.height), inside: key.left >= head.left - 0.5 && key.right <= head.right + 0.5,
-          clear: title.right <= key.left + 0.5, whole: (() => { const range = document.createRange(); range.selectNodeContents(label); return range.getBoundingClientRect().width <= key.width - 8; })(), title: document.querySelector('#appsTitle').scrollWidth <= document.querySelector('#appsTitle').clientWidth }; })()`);
+      await page.tap('#readout'); await sleep(400);
+      out.layout[`${phone} ${orientation}`] = await page.evaluate(`(() => { const key = document.querySelector('#viewMenu [data-act=shape]'), r = key.getBoundingClientRect(),
+        m = document.querySelector('#viewMenu').getBoundingClientRect(), label = key.querySelector('span');
+        return { w: Math.round(r.width), h: Math.round(r.height), inside: r.left >= m.left - 0.5 && r.right <= m.right + 0.5 && m.right <= innerWidth + 0.5 && m.bottom <= innerHeight + 0.5,
+          whole: label.scrollWidth <= label.clientWidth + 1 }; })()`);
       await page.close();
     }
   }
@@ -1033,25 +1237,22 @@ await task('T13', async () => {
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
   const views = async () => (await page.sent()).filter((m) => m.t === 'view').map(({ at, v, ...m }) => m);
   const asked = (list) => list.map((m) => (m.on ? `${m.fit ?? '-'} ${m.shape ?? '-'}` : 'off')).join();
-  const state = () => page.evaluate(`(() => { const key = document.querySelector('[data-act=shape]'), lamp = document.querySelector('#zoomValue');
-    return { readout: document.querySelector('#zoomValue').textContent, lamp: { phone: 'Form', window: 'Auto', '': '' }[document.querySelector('[data-act=fit]').dataset.lamp],
-      lit: document.querySelector('[data-act=fit]').classList.contains('on'),
-      latch: key.classList.contains('on'), pressed: key.getAttribute('aria-pressed'), shown: getComputedStyle(key).display !== 'none',
-      stored: [localStorage.getItem('remotey-shape'), localStorage.getItem('remotey-fit')].join(), open: document.body.classList.contains('apps'),
-      clipped: lamp.scrollWidth > lamp.parentElement.clientWidth }; })()`);
+  const state = () => page.evaluate(`(() => { const key = document.querySelector('#viewMenu [data-act=shape]'), lamp = document.querySelector('#zoomValue'),
+      readout = document.querySelector('#readout');
+    return { readout: lamp.textContent, lamp: { phone: 'Form', window: 'Auto', '': '' }[readout.dataset.lamp], lit: readout.classList.contains('on'),
+      latch: key.getAttribute('aria-checked') === 'true', pressed: key.getAttribute('aria-checked'),
+      stored: [localStorage.getItem('remotey-shape'), localStorage.getItem('remotey-fit')].join(), open: !document.querySelector('#viewMenu').hidden,
+      clipped: lamp.scrollWidth > readout.clientWidth }; })()`);
   const text = (z) => `${String(Math.round(z * 100) / 100).replace('.', ',')}×`;
   await page.evaluate(`window.__picture(${r.w / 0.5})`); // the first JPEG only switches the page from H.264 to JPEG
   await sleep(200);
-  await open(page);
   const before = await state();
   await page.clear();
-  await page.tap('[data-act=shape]');
+  await toggleShape(page);
   const on = { ...(await state()), views: await views() };
+  await page.tap('#readout'); await sleep(400);
   await page.shot('form-sheet');
-  // The windows of one app: the latch makes way for their number.
-  await page.tap('[data-pid="501"]'); await sleep(300);
-  const listed = await state();
-  await shut(page);
+  await page.tap('#readout'); await sleep(300);
   // The Mac gave the window the phone's shape: it shows at the zoom asked for and fills the display.
   await page.clear();
   await page.evaluate(`window.__picture(${r.w / 0.5}, true)`);
@@ -1080,10 +1281,10 @@ await task('T13', async () => {
   await page.resize(390, 844); await sleep(200);
   // The readout's key ends "Auto" and with it the shape; the latch stays for the next time.
   await page.clear();
-  await page.tap('[data-act=fit]');
+  await toggleFit(page);
   const off = { ...(await state()), views: await views() };
   await page.clear();
-  await page.tap('[data-act=fit]');
+  await toggleFit(page);
   const again = { ...(await state()), views: await views() };
   // Out of sight: the page switches the view off, whatever iOS does with the socket.
   await page.clear();
@@ -1093,23 +1294,21 @@ await task('T13', async () => {
   await page.evaluate(`(Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true }), document.dispatchEvent(new Event('visibilitychange')))`);
   await sleep(400);
   const back = await views();
-  // The latch off: plain "Auto", the windows on the Mac as they are.
-  await open(page);
+  // The latch off: plain fitting, the windows on the Mac as they are.
   await page.clear();
-  await page.tap('[data-act=shape]');
+  await toggleShape(page);
   const plain = { ...(await state()), views: await views() };
   await page.close();
-  return { ...out, before, on, listed, shaped, stepped, held, pinched, turned, off, again, hidden: asked(hidden), back: asked(back), plain,
-    ok: Object.values(out.layout).every((l) => l.h >= 36 && l.w >= 44 && l.inside && l.clear && l.whole && l.title)
-      && !before.latch && before.pressed === 'false' && before.shown && before.lamp === ''
-      && on.latch && on.pressed === 'true' && on.stored === 'true,true' && on.open && asked(on.views) === 'window 0.5'
-      && !listed.shown
+  return { ...out, before, on, shaped, stepped, held, pinched, turned, off, again, hidden: asked(hidden), back: asked(back), plain,
+    ok: Object.values(out.layout).every((l) => l.h >= 44 && l.w >= 200 && l.inside && l.whole)
+      && !before.latch && before.pressed === 'false' && before.lamp === ''
+      && on.latch && on.pressed === 'true' && on.stored === 'true,true' && !on.open && asked(on.views) === 'window 0.5'
       && shaped.readout === '0,5×' && shaped.lamp === 'Form' && shaped.lit && !shaped.clipped && shaped.views === 0
       && asked(stepped.views) === 'window 0.7' && stepped.lit && stepped.lamp === 'Form'
       && held.readout === '0,6×' && held.views.length === 0
       && pinched.misactions === 0 && pinched.views.length === 1 && pinched.views[0].fit === 'window' && Math.abs(pinched.views[0].shape - 1.2) < 0.01 && pinched.lit
       && turned.views.length >= 1 && turned.views.every((m) => m.fit === 'window' && m.shape === 0.5)
-      && asked(off.views) === '- -' && !off.lit && off.lamp === '' && off.latch && off.stored === 'true,false'
+      && asked(off.views) === '- -' && !off.lit && off.lamp === '' && !off.latch && off.stored === 'true,false'
       && asked(again.views).startsWith('window ') && again.lit
       && asked(hidden) === 'off' && asked(back) === 'off,window 1.2'
       && !plain.latch && plain.stored === 'false,true' && asked(plain.views) === 'window -' && plain.lamp === 'Auto' && plain.lit };
@@ -1215,7 +1414,7 @@ await task('T14', async () => {
   await decline('get', false);
   await page.tap('[data-act=deck]'); await sleep(450);
   await page.clear();
-  await page.tap('[data-act=lock]'); await sleep(300);
+  await page.tap('.tile[data-act=lock]'); await sleep(300);
   const byLockKey = { ...(await state()), unlocks: await sent('unlock') };
   await page.shot('locked');
   await say({ t: 'lock', on: false });
@@ -1267,9 +1466,7 @@ await task('T15', async () => {
   const waited = { moves: (await drag()).length, aim: await aim() };
   await page.touch('touchEnd', []); await sleep(80);
   // "Telefonform": the Mac fits the picture to the window, and the picture stands still.
-  await page.tap('[data-act=apps]'); await sleep(450);
-  await page.tap('[data-act=shape]'); await sleep(150);
-  await page.tap('[data-act=apps]'); await sleep(300);
+  await toggleShape(page);
   await page.evaluate(`window.__picture(${wide}, true)`);
   const moves = await drag();
   const points = Math.trunc(sum(moves, 'm', 'dx')), ahead = await aim();
@@ -1299,12 +1496,13 @@ await task('T15', async () => {
 // notice with its likely cause and one button. A failed try is repeated at a growing interval, at once on a tap.
 // Baseline: one red dot and "Keine Verbindung zum Mac." for every failure, a try every second.
 await task('T16', async () => {
-  const look = (page) => page.evaluate(`(() => { const n = document.querySelector('#notice'), s = document.querySelector('#status');
-    const sym = [...s.querySelectorAll('svg')].find((e) => getComputedStyle(e).display !== 'none');
+  // Since version 18 the state's symbol is in the Mac's button: ok, wait, bad, shut (locked) or held (paused).
+  const look = (page) => page.evaluate(`(() => { const n = document.querySelector('#notice'), s = document.querySelector('#macBtn');
+    const sym = [...s.querySelectorAll('.state svg')].find((e) => getComputedStyle(e).display !== 'none');
     const nsym = [...n.querySelectorAll('.sym')].filter((e) => getComputedStyle(e).display !== 'none').map((e) => e.dataset.for);
     return { link: document.body.dataset.link, status: document.querySelector('#statusText').textContent, symbol: sym?.getAttribute('class') ?? null,
       notice: n.hidden ? null : { kind: n.dataset.kind, title: n.querySelector('h2').textContent, text: n.querySelector('p').textContent,
-        button: n.querySelector('button').textContent, symbols: nsym },
+        button: n.querySelector('button').hidden ? null : n.querySelector('button').textContent, symbols: nsym }, mac: s.textContent.trim(),
       welcome: !document.querySelector('#welcome').hidden }; })()`);
   const sockets = (page) => page.evaluate('window.__sockets.slice()');
   const out = {};
@@ -1378,7 +1576,7 @@ await task('T16', async () => {
   page = await openPage(...PHONES.small);
   const say = (m) => page.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify(m))} })`);
   await say({ t: 'view', ok: false }); await sleep(100);
-  out.permission = { ...(await look(page)), view: await page.evaluate(`document.querySelector('[data-act=view]').getAttribute('aria-pressed')`) };
+  out.permission = { ...(await look(page)), view: await page.evaluate(`document.querySelector('#macMenu [data-act=view]').getAttribute('aria-checked')`) };
   await say({ t: 'view', ok: false, why: 'taken' }); await sleep(100);
   out.taken = await look(page);
   await page.shot('taken');
@@ -1422,21 +1620,22 @@ await task('T17', async () => {
     const caps = texts.filter((e) => { const st = getComputedStyle(e); return st.textTransform === 'uppercase' || (parseFloat(st.letterSpacing) > 0.5 && /[A-ZÄÖÜ]{3}/.test(e.textContent)); })
       .map((e) => e.textContent.trim().slice(0, 20));
     // The page's own words: an element that names a key, the type key's words, the chip, the setting names.
-    const own = [...document.querySelectorAll('[data-text], #typeLabel, #typeShort, #statusText, #noticeAct')].filter(shown);
+    const own = [...document.querySelectorAll('[data-text], #typeLabel, #typeShort, #macName, #noticeAct')].filter(shown).filter((e) => !e.closest('.sr'));
     // Measured on the words themselves: a key's wider touch target (::after) is no overflow.
     const cut = own.filter((e) => { const range = document.createRange(); range.selectNodeContents(e); const w = range.getBoundingClientRect(), box = e.getBoundingClientRect();
       const clip = e.closest('.slot, .key, .cap, button') ?? e, c = clip.getBoundingClientRect();
       return w.width > box.width + 1 || w.left < c.left - 0.5 || w.right > c.right + 0.5 || (getComputedStyle(e).textOverflow === 'ellipsis' && e.scrollWidth > e.clientWidth + 1); })
-      .map((e) => e.textContent.trim() + ' ' + Math.round(e.getBoundingClientRect().width) + (e.closest('#typebar') ? ' typebar' : ''));
+      .map((e) => e.textContent.trim() + ' ' + Math.round(e.getBoundingClientRect().width) + (e.closest('#typebar') ? ' typebar' : '') + ' ' + innerWidth + '×' + innerHeight);
     return { smallest: Math.min(...sizes.map((x) => x.size)), small, caps, cut };
   })()`);
   // A 44 × 44 box around each control's centre: its edges and corners must reach the control.
   const targets = (page) => page.evaluate(`(() => {
-    const list = ['[data-act=zoom][data-step="-1"]', '[data-act=fit]', '[data-act=zoom][data-step="1"]', '[data-click=back]', '[data-click=forward]',
-      '[data-hold=left]', '[data-click=right]', '[data-act=type]', '[data-act=apps]', '[data-act=deck]', '[data-act=view]'];
+    const list = ['[data-act=zoom][data-step="-1"]', '#readout', '[data-act=zoom][data-step="1"]', '[data-click=back]', '[data-click=forward]',
+      '[data-hold=left]', '[data-click=right]', '[data-act=type]', '[data-act=apps]', '[data-act=deck]', '#macBtn'];
     const small = [];
     for (const sel of list) {
       const e = document.querySelector(sel), r = e.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+      if (!r.width) { small.push(sel + ' not shown'); continue; }
       // A round finger of 44 pt: the circle's edge in eight directions.
       const misses = [[-21, 0], [21, 0], [0, -21], [0, 21], [-15, -15], [15, 15], [-15, 15], [15, -15]].filter(([dx, dy]) => {
         const hit = document.elementFromPoint(x + dx, y + dy); return !hit || !(hit === e || e.contains(hit)); });
@@ -1451,16 +1650,31 @@ await task('T17', async () => {
         await page.evaluate(`window.__picture(${w})`); await sleep(150);
         const views = { main: await survey(page), targets: await targets(page) };
         await page.tap('[data-act=deck]'); await sleep(450);
-        for (const p of ['media', 'keys', 'settings']) {
+        for (const p of ['media', 'keys']) {
           await page.tap(`[data-act=page][data-page=${p}]`); await sleep(250);
           views[p] = await survey(page);
           if (phone === 'narrow' && orientation === 'portrait') await page.shot(`tray-${p}-${lang.slice(0, 2)}`);
         }
-        await page.tap('[data-act=deck]'); await sleep(350);
+        await closeSheet(page);
+        await openSettings(page);
+        views.settings = await survey(page);
+        await page.evaluate(`document.querySelector('#prefs .well').scrollTop = 9999`); await sleep(100);
+        views.settingsEnd = await survey(page);
+        if (phone === 'narrow' && orientation === 'portrait') await page.shot(`tray-settings-${lang.slice(0, 2)}`);
+        await closeSheet(page);
+        await page.tap('#macBtn'); await sleep(400);
+        views.macMenu = await survey(page);
+        await page.tap('#macBtn'); await sleep(300);
+        await page.tap('#readout'); await sleep(400);
+        views.viewMenu = await survey(page);
+        await page.tap('#readout'); await sleep(300);
         await page.tap('[data-act=apps]'); await sleep(450);
         views.apps = await survey(page);
         if (phone === 'narrow' && orientation === 'portrait') await page.shot(`apps-${lang.slice(0, 2)}`);
-        await page.tap('[data-act=apps]'); await sleep(350);
+        await closeSheet(page);
+        await page.tap('[data-act=type]'); await sleep(300);
+        views.typing = await survey(page);
+        await page.evaluate(`document.querySelector('#field').blur()`); await sleep(300);
         // A locked Mac with Face ID: the longest words the type key has.
         await page.evaluate(`window.__socket.onmessage({ data: JSON.stringify({ t: 'lock', on: true, key: { id: 'AA', salt: 'AA', challenge: 'AA' } }) })`);
         await sleep(100);
@@ -1498,27 +1712,413 @@ await task('T18', async () => {
   await page.evaluate(`document.querySelector('#field').blur()`); await sleep(200);
   // Icons: the first opening gets Safari's; after a reconnect the request names it.
   await page.tap('[data-act=apps]'); await sleep(450);
-  await page.tap('[data-act=apps]'); await sleep(300);
-  await page.evaluate(`window.__socket.onclose()`); await sleep(300);
+  await closeSheet(page);
+  await page.evaluate(`window.__socket.onclose()`); await sleep(400);
   await page.clear();
   await page.tap('[data-act=apps]'); await sleep(450);
   const asked = (await page.sent()).filter((m) => m.t === 'apps').map(({ at, ...m }) => m);
   const icon = await page.evaluate(`!!document.querySelector('[data-pid="501"] img[src^="data:image/png"]')`);
-  await page.tap('[data-act=apps]'); await sleep(300);
-  // The readout: hidden at first, shown by the setting, kept.
+  await closeSheet(page);
+  // The readout (since version 18 in the Mac's button instead of the Mac's name): hidden at first, shown by the setting, kept.
   await page.evaluate(`window.__picture(375)`); await sleep(100);
-  const meter = () => page.evaluate(`getComputedStyle(document.querySelector('#meter')).display !== 'none'`);
+  // A move, so there is something to measure.
+  const r = await page.rect('#screen');
+  await page.gesture({ steps: 10, at: (i) => [[r.x + 100 + i * 4, r.y + 300]] });
+  await page.evaluate(`window.__picture(375)`); await sleep(700);
+  const meter = () => page.evaluate(`document.querySelector('#macBtn').classList.contains('meter') && /fps/.test(document.querySelector('#macName').textContent)`);
   const hidden = await meter();
-  await page.tap('[data-act=deck]'); await sleep(450);
-  await page.tap('[data-act=page][data-page=settings]'); await sleep(250);
-  await page.tap('[data-act=meter]'); await sleep(100);
-  const shown = { meter: await meter(), pressed: await page.evaluate(`document.querySelector('[data-act=meter]').getAttribute('aria-pressed')`),
+  await openSettings(page);
+  await tapSetting(page, 'meter'); await sleep(700);
+  const shown = { meter: await meter(), pressed: await page.evaluate(`document.querySelector('#prefs [data-act=meter]').getAttribute('aria-checked')`),
     stored: await page.evaluate(`localStorage.getItem('remotey-meter')`) };
   await page.close();
   return { pings, long, asked, icon, meter: { hidden, ...shown },
     ok: pings === 1 && long.pieces >= 3 && long.largest <= 1000 && long.whole && long.flag
       && JSON.stringify(asked) === '[{"t":"apps","have":["safari"]}]' && icon
       && !hidden && shown.meter && shown.pressed === 'true' && shown.stored === 'true' };
+});
+
+// T19: pairing per device. A one-time code in the link pairs and leaves the address; the old token is posted once
+// to become a device; an agent without pairing gets the token as before; a phone the Mac does not know shows the
+// first start, whose field takes six digits typed or pasted and says in words what went wrong.
+await task('T19', async () => {
+  const look = (page) => page.evaluate(`({ link: document.body.dataset.link, hash: location.hash, welcome: !document.querySelector('#welcome').hidden,
+    says: document.querySelector('#pairSays').textContent, failed: document.querySelector('.code').classList.contains('failed'),
+    field: document.querySelector('#code').value, token: localStorage.getItem('remotey-token'),
+    auth: window.__sent.filter((m) => m.t === 'auth').map(({ at, ...m }) => m) })`);
+  const paths = () => fakeMac.log.map((l) => `${l.path}${l.body.code ? ' code' : l.body.token ? ' token' : ''}`).join();
+  const type = (page, text) => page.evaluate(`(() => { const f = document.querySelector('#code'); f.focus(); f.value = ${JSON.stringify(text)};
+    f.dispatchEvent(new InputEvent('input', { inputType: 'insertFromPaste' })); })()`);
+  const out = {};
+  // The QR code's link: pairs, asks for a ticket, connects with it, and the code is out of the address.
+  resetMac();
+  let page = await openPage(393, 852, { hash: '#p=482913' });
+  await sleep(300);
+  out.link = { ...(await look(page)), paths: paths() };
+  await page.close();
+  // Paired the old way: the token becomes a device once, then tickets only; it leaves the address and the phone.
+  resetMac();
+  page = await openPage(393, 852);
+  out.upgrade = { ...(await look(page)), paths: paths() };
+  await page.evaluate(`window.__socket.onclose()`); await sleep(400);
+  out.upgrade.again = paths();
+  await page.close();
+  // An agent from before pairing per device: the old token, as before, and the address keeps it.
+  resetMac();
+  fakeMac.mode = 'old';
+  page = await openPage(393, 852);
+  out.old = { ...(await look(page)), paths: paths() };
+  await page.close();
+  resetMac();
+  // A link with a code that is no longer good: the first start says so, and the field is ready.
+  page = await openPage(393, 852, { hash: '#p=000000' });
+  await sleep(300);
+  out.spent = await look(page);
+  await page.close();
+  // Never paired: the first start. Pasted with a space, the six digits pair this phone.
+  resetMac();
+  page = await openPage(393, 852, { token: false });
+  out.fresh = await look(page);
+  out.fresh.field = await page.evaluate(`(() => { const f = document.querySelector('#code'); return { mode: f.inputMode, auto: f.autocomplete,
+    label: f.getAttribute('aria-label'), cells: document.querySelectorAll('.cells span').length }; })()`);
+  await type(page, '111 111'); await sleep(300);
+  out.wrong = await look(page);
+  await page.shot('welcome-wrong');
+  fakeMac.closed = true;
+  await type(page, '482913'); await sleep(300);
+  out.closed = await look(page);
+  fakeMac.closed = false;
+  fakeMac.tries = fakeMac.most;
+  await type(page, '482913'); await sleep(300);
+  out.tries = await look(page);
+  fakeMac.tries = 0;
+  await type(page, '482 913'); await sleep(500);
+  out.paired = { ...(await look(page)), paths: paths() };
+  await page.close();
+  // The Mac removed this phone: a notice of its own, and its button leads to the field for a new code.
+  resetMac();
+  page = await openPage(393, 852);
+  await page.evaluate(`(window.__mac = 'revoked', window.__socket.onclose())`); await sleep(500);
+  out.revoked = await page.evaluate(`({ kind: document.querySelector('#notice').dataset.kind, title: document.querySelector('#noticeTitle').textContent,
+    button: document.querySelector('#noticeAct').textContent, link: document.body.dataset.link })`);
+  await page.shot('revoked');
+  await page.tap('#noticeAct'); await sleep(200);
+  out.revoked.welcome = (await look(page)).welcome;
+  await page.close();
+  resetMac();
+  const ticket = (a) => a.length >= 1 && a.every((m) => /^t\d+$/.test(m.ticket) && m.standalone === false && !('token' in m));
+  return { ...out,
+    ok: out.link.link === 'connected' && out.link.hash === '' && out.link.paths === '/pair code,/session' && ticket(out.link.auth)
+      && out.upgrade.link === 'connected' && out.upgrade.hash === '' && out.upgrade.token === null && out.upgrade.paths === '/pair token,/session'
+      && ticket(out.upgrade.auth) && out.upgrade.again === '/pair token,/session,/session'
+      && out.old.link === 'connected' && out.old.hash === '#test-token' && out.old.paths === '/pair token' && JSON.stringify(out.old.auth) === '[{"t":"auth","token":"test-token"}]'
+      && out.spent.welcome && out.spent.hash === '' && out.spent.says.startsWith('Dieser Code stimmt nicht')
+      && out.fresh.welcome && out.fresh.link === 'unpaired' && out.fresh.auth.length === 0
+      && out.fresh.field.mode === 'numeric' && out.fresh.field.auto === 'one-time-code' && out.fresh.field.cells === 6 && !!out.fresh.field.label
+      && out.wrong.says.startsWith('Dieser Code stimmt nicht') && out.wrong.failed && out.wrong.field === '' && out.wrong.welcome
+      && out.closed.says.startsWith('Am Mac ist gerade keine Kopplung offen') && out.tries.says.startsWith('Zu viele Versuche')
+      && out.paired.link === 'connected' && !out.paired.welcome && ticket(out.paired.auth) && out.paired.paths.endsWith('/pair code,/session')
+      && out.revoked.kind === 'revoked' && out.revoked.button === 'Neu koppeln' && out.revoked.welcome };
+});
+
+// T20: glass over the picture. The page tells the Mac what its controls cover; opening a sheet or a menu changes
+// neither the picture's size nor that, so the stream runs on. The blur is kept to the capsules, nothing that
+// moves is blurred, and solid surfaces replace it when asked for or when the phone reduces transparency. The
+// Mac's own state comes as `mac`: a permission granted there shows at once, a pause has words of its own.
+await task('T20', async () => {
+  const out = {};
+  const glassy = (page) => page.evaluate(`(() => {
+    const blurred = [...document.querySelectorAll('body *')].filter((e) => { const st = getComputedStyle(e), r = e.getBoundingClientRect();
+      return r.width > 0 && st.display !== 'none' && st.visibility !== 'hidden' && (st.backdropFilter || st.webkitBackdropFilter || 'none') !== 'none'; });
+    const area = blurred.reduce((a, e) => { const r = e.getBoundingClientRect(); return a + r.width * r.height; }, 0);
+    const moving = blurred.filter((e) => { const st = getComputedStyle(e); return st.animationName !== 'none' || /transform|all/.test(st.transitionProperty) && parseFloat(st.transitionDuration) > 0; });
+    return { count: blurred.length, share: Math.round(1000 * area / (innerWidth * innerHeight)) / 10, moving: moving.map((e) => e.id || e.className),
+      ink: getComputedStyle(document.querySelector('#macBtn')).color, page: getComputedStyle(document.querySelector('#screen')).backgroundColor }; })()`);
+  for (const [phone, [w, h]] of Object.entries(PHONES)) {
+    for (const orientation of ['portrait', 'landscape']) {
+      const page = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]));
+      const views = () => page.evaluate(`window.__sent.filter((m) => m.t === 'view').length`);
+      const size = () => page.evaluate(`(() => { const r = document.querySelector('#screen').getBoundingClientRect(); return [r.width, r.height].join('×'); })()`);
+      const before = { views: await views(), size: await size(), inset: await page.evaluate('window.__view.inset') };
+      for (const opener of ['[data-act=apps]', '[data-act=deck]']) { await page.tap(opener); await sleep(400); await closeSheet(page); }
+      await openSettings(page); await closeSheet(page);
+      for (const opener of ['#macBtn', '#readout']) { await page.tap(opener); await sleep(350); await page.tap(opener); await sleep(250); }
+      out[`${phone} ${orientation}`] = { inset: before.inset, steady: (await views()) === before.views && (await size()) === before.size,
+        glass: await glassy(page), whole: before.size === `${orientation === 'portrait' ? w : h}×${orientation === 'portrait' ? h : w}` };
+      await page.close();
+    }
+  }
+  // Each sheet is gone in under 200 ms after its close key.
+  let page = await openPage(...PHONES.small);
+  out.gone = {};
+  for (const [name, opener] of [['apps', '[data-act=apps]'], ['deck', '[data-act=deck]'], ['prefs', null]]) {
+    if (opener) await page.tap(opener); else await openSettings(page);
+    await sleep(450);
+    await page.tap(`${SHEET_OF[name]} [data-act=close]`);
+    await sleep(200);
+    out.gone[name] = await page.evaluate(`getComputedStyle(document.querySelector('${SHEET_OF[name]}')).visibility`);
+  }
+  // Solid surfaces: the setting, kept.
+  await openSettings(page);
+  await tapSetting(page, 'glass'); await sleep(150);
+  await closeSheet(page);
+  out.solid = { ...(await glassy(page)), stored: await page.evaluate(`localStorage.getItem('remotey-glass')`) };
+  // What the Mac says about itself.
+  const say = (m) => page.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify(m))} })`);
+  const state = () => page.evaluate(`({ link: document.body.dataset.link, mac: document.querySelector('#macBtn').dataset.state, words: document.querySelector('#macName').textContent,
+    notice: document.querySelector('#notice').hidden ? null : document.querySelector('#notice').dataset.kind, button: !document.querySelector('#noticeAct').hidden })`);
+  await say({ t: 'mac', ax: true, screen: true, paused: true }); await sleep(100);
+  out.paused = await state();
+  await say({ t: 'mac', ax: false, screen: true, paused: false }); await sleep(100);
+  out.noAccess = await state();
+  await say({ t: 'mac', ax: true, screen: false, paused: false }); await sleep(100);
+  out.noScreen = await state();
+  await page.clear();
+  await say({ t: 'mac', ax: true, screen: true, paused: false }); await sleep(200);
+  out.granted = { ...(await state()), asked: (await page.sent()).filter((m) => m.t === 'view').map((m) => m.on) };
+  await page.close();
+  // The phone's own wishes: reduced transparency and more contrast take the blur away; light is light.
+  page = await openPage(...PHONES.small, { transparency: 'reduce' });
+  out.reduced = await glassy(page);
+  await page.close();
+  page = await openPage(...PHONES.small, { contrast: 'more' });
+  out.contrast = await glassy(page);
+  await page.close();
+  page = await openPage(...PHONES.small, { scheme: 'light' });
+  out.light = await glassy(page);
+  await page.close();
+  const layouts = Object.entries(out).filter(([k]) => / (portrait|landscape)$/.test(k));
+  return { ...out,
+    ok: layouts.every(([k, l]) => l.steady && l.whole && l.glass.moving.length === 0 && l.glass.share < 25
+        && (k.endsWith('portrait') ? l.inset[0] > 0 && l.inset[2] > 0 && !l.inset[1] && !l.inset[3] : l.inset[1] > 0 && l.inset[3] > 0 && !l.inset[0] && !l.inset[2]))
+      && Object.values(out.gone).every((v) => v === 'hidden')
+      && out.solid.count === 0 && out.solid.stored === 'false' && out.reduced.count === 0 && out.contrast.count === 0
+      && out.light.ink !== layouts[0][1].glass.ink && out.light.page === 'rgb(0, 0, 0)'
+      && out.paused.link === 'paused' && out.paused.mac === 'held' && out.paused.notice === 'paused' && !out.paused.button && out.paused.words === 'Pausiert'
+      && out.noAccess.link === 'noAccess' && out.noAccess.notice === 'noAccess'
+      && out.noScreen.link === 'connected' && out.noScreen.notice === 'permission'
+      && out.granted.notice === null && out.granted.asked.at(-1) === true };
+});
+
+// T21: the gesture tour. On a phone that never saw it, it starts by itself; each step is done when its gesture is
+// recognised on the real pad (the gestures still reach the Mac); it can be skipped, and started again from the settings.
+await task('T21', async () => {
+  const page = await openPage(390, 844, { tour: true });
+  const r = await page.rect('#screen');
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  const step = () => page.evaluate(`({ shown: !document.querySelector('#tour').hidden, count: document.querySelector('#tourCount').textContent,
+    title: document.querySelector('#tourTitle').textContent, done: document.querySelector('#tour').dataset.done !== undefined })`);
+  const steps = [await step()];
+  await page.gesture({ steps: 12, at: (i) => [[cx - 60 + i * 6, cy]] });
+  steps.push(await step());
+  await page.touch('touchStart', [[cx, cy]]); await sleep(40); await page.touch('touchEnd', []); await sleep(100);
+  steps.push(await step());
+  await page.gesture({ steps: 15, at: (i) => [[cx - 25, cy + i * 5], [cx + 25, cy + i * 5]] });
+  steps.push(await step());
+  await page.touch('touchStart', [[cx - 25, cy], [cx + 25, cy]]); await sleep(40); await page.touch('touchEnd', []); await sleep(100);
+  steps.push(await step());
+  await page.gesture({ steps: 12, at: (i) => [[cx - 40 + i * 5, cy], [cx + i * 5, cy], [cx + 40 + i * 5, cy]] });
+  steps.push(await step());
+  await page.shot('tour');
+  await page.gesture({ steps: 20, at: (i) => [[cx - 30 - i * 4, cy], [cx + 30 + i * 4, cy]] });
+  steps.push(await step());
+  const sent = await page.sent();
+  await sleep(2500);
+  const after = { ...(await step()), stored: await page.evaluate(`localStorage.getItem('remotey-toured')`) };
+  // From the settings, and skipped: it ends, and the tap on "Überspringen" clicks nothing on the Mac.
+  await openSettings(page);
+  await tapSetting(page, 'tour'); await sleep(200);
+  const again = await step();
+  await page.clear();
+  await page.tap('[data-act=tour-skip]'); await sleep(200);
+  const skipped = { ...(await step()), clicks: count(await page.sent(), 'c') };
+  await page.close();
+  // A phone that saw it once does not get it again; without the live view there is nothing to zoom: five steps.
+  const later = await openPage(390, 844);
+  const quiet = (await later.evaluate(`document.querySelector('#tour').hidden`));
+  await later.close();
+  const off = await openPage(390, 844, { tour: true });
+  await off.evaluate(`document.querySelector('#macMenu [data-act=view]').click()`); await sleep(100);
+  await openSettings(off);
+  await tapSetting(off, 'tour'); await sleep(200);
+  const five = await off.evaluate(`document.querySelector('#tourCount').textContent`);
+  await off.close();
+  const titles = steps.map((s) => s.title);
+  return { titles, after, again, skipped, quiet, five, clicks: count(sent, 'c'), drags: sent.filter((m) => m.t === 'b').length,
+    ok: steps[0].shown && steps[0].count === 'Schritt 1 von 6'
+      && titles.join('|') === 'Mit einem Finger bewegen|Tippen zum Klicken|Mit zwei Fingern scrollen|Mit zwei Fingern tippen für Rechtsklick|Mit drei Fingern ziehen|Zwei Finger spreizen zum Zoomen|Geschafft'
+      && steps[6].done && !after.shown && after.stored === 'true' && count(sent, 'c') === 2
+      && again.shown && again.count === 'Schritt 1 von 6' && !skipped.shown && skipped.clicks === 0 && quiet && five === 'Schritt 1 von 5' };
+});
+
+// T22: sideways, the controls stand in the side margins: mouse keys on one side, tools on the other, swapped by a
+// setting. The picture's free part is what lies between them, and the Mac is told so again after a swap.
+await task('T22', async () => {
+  const out = {};
+  for (const [phone, [w, h]] of Object.entries(PHONES)) {
+    const page = await openPage(h, w);
+    const sides = () => page.evaluate(`(() => { const box = (s) => document.querySelector(s).getBoundingClientRect();
+      const click = box('[data-hold=left]'), tools = box('[data-act=apps]'), zoom = box('#zoom');
+      const outside = [...document.querySelectorAll('#zoneMouse > *, #zoneTools > *')].filter((e) => e.getBoundingClientRect().height > 0)
+        .filter((e) => { const r = e.getBoundingClientRect(); return !(r.top >= -0.5 && r.bottom <= innerHeight + 0.5 && r.left >= -0.5 && r.right <= innerWidth + 0.5); })
+        .map((e) => (e.id || e.className) + ' ' + Math.round(e.getBoundingClientRect().left)), inside = !outside.length;
+      return { mouse: click.left < innerWidth / 2 ? 'left' : 'right', tools: tools.left < innerWidth / 2 ? 'left' : 'right', zoom: zoom.left < innerWidth / 2 ? 'left' : 'right',
+        inside, outside, inset: window.__view.inset, clickH: Math.round(click.height) }; })()`);
+    const before = await sides();
+    await openSettings(page);
+    await tapSetting(page, 'swap'); await sleep(200);
+    await closeSheet(page);
+    const swapped = { ...(await sides()), stored: await page.evaluate(`localStorage.getItem('remotey-swap')`) };
+    await page.shot(`sideways-swapped-${phone}`);
+    out[phone] = { before, swapped };
+    await page.close();
+  }
+  return { ...out,
+    ok: Object.values(out).every(({ before, swapped }) => before.mouse === 'left' && before.tools === 'right' && before.zoom === 'right' && before.inside
+      && swapped.mouse === 'right' && swapped.tools === 'left' && swapped.inside && swapped.stored === 'true' && before.clickH >= 56
+      && swapped.inset.join() === before.inset.join()) };
+});
+
+// The gallery (--gallery=DIR): every screen at 393 × 852, dark and light, and the main view on every phone, upright and
+// sideways, in German and English. The picture is a made-up Mac desktop. Not a check: pictures to look at.
+const DISPLAYS_TWO = [DISPLAYS[0], { ...DISPLAYS[1], name: 'Studio Display' }];
+async function picture(page, kind = 'window', zoom = 0.5, flags = 2) {
+  await page.evaluate('window.__icons = true');
+  if (!(await page.evaluate(`window.__sent.some((m) => m.t === 'view' && m.codec === 'jpeg')`))) {
+    await page.evaluate(`window.__picture(800)`); // the first JPEG only switches the page from H.264 to JPEG
+    await sleep(250);
+  }
+  const w = (await page.rect('#screen')).w;
+  await page.evaluate(`window.__scene(${JSON.stringify(kind)}, ${w / zoom}, ${flags})`);
+}
+if (gallery) await task('gallery', async () => {
+  const say = (page, m) => page.evaluate(`window.__socket.onmessage({ data: ${JSON.stringify(JSON.stringify(m))} })`);
+  const made = [];
+  const keep = async (page, name) => { await sleep(380); await page.keep(name); made.push(name); };
+  for (const scheme of ['dark', 'light']) {
+    const open = async (options = {}) => openPage(393, 852, { scheme, ...options });
+    // 1 · the main view, fitted to the phone, with the window in front.
+    let page = await open();
+    await toggleShape(page);
+    await picture(page, 'desktop');
+    await keep(page, `main-${scheme}`);
+    // The Mac's menu and the view's menu.
+    await page.tap('#macBtn'); await keep(page, `mac-menu-${scheme}`);
+    await page.tap('#macBtn'); await sleep(200);
+    await page.evaluate(`window.__displays = ${JSON.stringify(DISPLAYS_TWO)}`);
+    await page.tap('#readout'); await keep(page, `view-menu-${scheme}`);
+    await page.tap('#readout'); await sleep(200);
+    // 3 · writing: the special keys above the keyboard, the view following the text.
+    await page.tap('[data-act=type]');
+    await page.evaluate(`(window.__kb = true, __vv.set({ height: ${852 - 336} }))`); await sleep(300);
+    await page.tap('#accessory [data-mod=cmd]');
+    await page.evaluate(`(() => { const f = document.querySelector('#field'); f.value = '​Angebot geht heute raus'; })()`);
+    await picture(page, 'window', 0.5, 3);
+    await keep(page, `typing-${scheme}`);
+    await page.tap('[data-act=done]');
+    await page.evaluate(`(window.__kb = false, __vv.reset())`); await sleep(300);
+    await page.tap('#accessory [data-mod=cmd]');
+    await picture(page, 'desktop');
+    // 4 · apps, 4b · the windows of one app.
+    await page.tap('[data-act=apps]'); await keep(page, `apps-${scheme}`);
+    await page.tap('[data-pid="501"]'); await keep(page, `windows-${scheme}`);
+    await page.tap('[data-act=apps-back]'); await sleep(200);
+    await page.tap('[data-act=close]'); await sleep(300);
+    // 5 and 6 · the controls: media and keys.
+    await page.tap('[data-act=deck]');
+    await page.tap('[data-act=page][data-page=media]'); await keep(page, `tray-media-${scheme}`);
+    await page.tap('[data-act=page][data-page=keys]'); await page.tap('.keys [data-mod=cmd]'); await keep(page, `tray-keys-${scheme}`);
+    await page.tap('.keys [data-mod=cmd]');
+    await page.tap('[data-act=page][data-page=media]');
+    await page.tap('#drawer [data-act=close]'); await sleep(300);
+    // 7 · settings.
+    await page.tap('#macBtn'); await page.tap('#macMenu [data-act=settings]'); await keep(page, `tray-settings-${scheme}`);
+    await page.tap('#prefs [data-act=close]'); await sleep(300);
+    // 8 · locked, with Face ID.
+    await say(page, { t: 'lock', on: true, key: { id: 'AA', salt: 'AA', challenge: 'AA' } });
+    await picture(page, 'lock');
+    await keep(page, `locked-${scheme}`);
+    await say(page, { t: 'lock', on: false });
+    // The offer to enrol for Face ID.
+    await say(page, { t: 'enrol', challenge: 'AA', salt: 'AA', name: 'MacBook Pro' });
+    await keep(page, `enrol-${scheme}`);
+    await page.tap('[data-act=enrol-later]');
+    await page.close();
+    // 2 · without the live view: the trackpad, a ring where a click landed.
+    page = await open();
+    await page.evaluate(`document.querySelector('#macMenu [data-act=view]').click()`);
+    await keep(page, `trackpad-${scheme}`);
+    await page.touch('touchStart', [[260, 300]]); await sleep(40); await page.touch('touchEnd', []); await sleep(120);
+    await page.keep(`trackpad-ring-${scheme}`);
+    await page.close();
+    // 9 · the first start, and with a wrong code.
+    page = await open({ token: false });
+    await keep(page, `welcome-${scheme}`);
+    await page.evaluate(`(() => { const f = document.querySelector('#code'); f.focus(); f.value = '11111'; f.dispatchEvent(new Event('input')); })()`);
+    await keep(page, `welcome-typing-${scheme}`);
+    await page.evaluate(`(() => { const f = document.querySelector('#code'); f.value = '111111'; f.dispatchEvent(new Event('input')); })()`);
+    await keep(page, `welcome-wrong-${scheme}`);
+    await page.close();
+    // 9b · the gesture tour, at step 3.
+    page = await open({ tour: true });
+    await picture(page, 'window');
+    const r = await page.rect('#screen');
+    await page.gesture({ steps: 12, at: (i) => [[r.x + 120 + i * 6, r.y + 300]] });
+    await page.touch('touchStart', [[r.x + 200, r.y + 300]]); await sleep(40); await page.touch('touchEnd', []); await sleep(200);
+    await keep(page, `tour-${scheme}`);
+    await page.close();
+    // 10 · failures.
+    for (const [name, script] of [['unreachable', `window.__mac = 'down', window.__probe = null`], ['stopped', `window.__mac = 'down', window.__probe = 502`],
+      ['no-access', `window.__mac = 'noax'`], ['denied', `window.__mac = 'deny'`], ['revoked', `window.__mac = 'revoked'`]]) {
+      page = await open();
+      await page.evaluate(`(${script}, window.__socket.onclose())`); await sleep(700);
+      await keep(page, `${name}-${scheme}`);
+      await page.close();
+    }
+    page = await open();
+    await picture(page, 'window');
+    await say(page, { t: 'mac', ax: true, screen: true, paused: true });
+    await keep(page, `paused-${scheme}`);
+    await say(page, { t: 'mac', ax: true, screen: true, paused: false });
+    await say(page, { t: 'view', ok: false, why: 'taken' });
+    await keep(page, `taken-${scheme}`);
+    await page.close();
+    // 11 · sideways.
+    page = await openPage(852, 393, { scheme });
+    await picture(page, 'desktop');
+    await keep(page, `main-landscape-${scheme}`);
+    await page.tap('[data-act=apps]'); await keep(page, `apps-landscape-${scheme}`);
+    await page.close();
+  }
+  // The main view on every phone, upright and sideways, in both languages.
+  for (const lang of ['de-DE', 'en-US']) {
+    for (const [phone, [w, h]] of Object.entries(PHONES)) {
+      for (const orientation of ['portrait', 'landscape']) {
+        const page = await openPage(...(orientation === 'portrait' ? [w, h] : [h, w]), { lang });
+        await picture(page, 'desktop');
+        await keep(page, `main-${phone}${orientation === 'landscape' ? '-landscape' : ''}-${lang.slice(0, 2)}`);
+        await page.close();
+      }
+    }
+  }
+  return { made: made.length };
+});
+
+if (docs) await task('docs', async () => {
+  const save = async (page, name) => { await sleep(400); writeFileSync(join(docs, `${name}.png`), Buffer.from((await page.cdp('Page.captureScreenshot', { format: 'png' })).data, 'base64')); };
+  const page = await openPage(390, 844, { lang: 'en-US', dpr: 2 });
+  await toggleShape(page);
+  await picture(page, 'desktop');
+  await save(page, 'remote');
+  await page.tap('[data-act=apps]');
+  await save(page, 'apps');
+  await closeSheet(page);
+  await page.tap('[data-act=deck]'); await sleep(300);
+  await page.tap('[data-act=page][data-page=keys]');
+  await page.tap('.keys [data-mod=cmd]');
+  await save(page, 'keys');
+  await page.close();
+  return { saved: 3 };
 });
 
 socket.close();
