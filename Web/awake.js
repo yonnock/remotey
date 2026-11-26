@@ -7,7 +7,9 @@ export const IDLE_MS = 3 * 60_000;
 
 export class Awake {
   /** `lock` is navigator.wakeLock (or null where there is none); `schedule` and `cancel` are the timers. */
-  constructor(lock = globalThis.navigator?.wakeLock ?? null, { schedule = setTimeout, cancel = clearTimeout } = {}) {
+  constructor(lock = globalThis.navigator?.wakeLock ?? null,
+    // Wrapped: a browser's timers throw "Illegal invocation" when called as a method of another object.
+    { schedule = (fn, ms) => setTimeout(fn, ms), cancel = (id) => clearTimeout(id) } = {}) {
     this.lock = lock;
     this.schedule = schedule;
     this.cancel = cancel;

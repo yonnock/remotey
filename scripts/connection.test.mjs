@@ -259,3 +259,16 @@ test('a paused Mac that drops the connection is tried again at once, as a connec
   assert.equal(r.link.state, 'connecting');
   assert.equal(r.opens(), 2);
 });
+
+test('the wake lock with the timers of a browser, which refuse to run as methods of another object', async () => {
+  const real = globalThis.setTimeout;
+  const strict = function (fn, ms) { if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation'); return real(fn, ms); };
+  globalThis.setTimeout = strict;
+  try {
+    let asked = 0;
+    const awake = new Awake({ request: async () => { asked++; return { released: false, release: async () => {} }; } });
+    await awake.touched();
+    assert.equal(asked, 1, 'the lock was asked for');
+    await awake.release();
+  } finally { globalThis.setTimeout = real; }
+});
